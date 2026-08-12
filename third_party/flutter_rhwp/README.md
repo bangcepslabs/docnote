@@ -1,0 +1,668 @@
+# flutter_rhwp
+
+Flutter plugin for reading, viewing, editing, saving, and exporting HWP/HWPX
+documents.
+
+- Repository: [JAICHANGPARK/flutter_rhwp](https://github.com/JAICHANGPARK/flutter_rhwp)
+- Rust core: [edwardkim/rhwp](https://github.com/edwardkim/rhwp), vendored at
+  `rust/vendor/rhwp`
+- Bridge: `flutter_rust_bridge` v2
+- Version: `2026.6.6`
+
+## Features
+
+- Open HWP/HWPX bytes.
+- Render pages as SVG.
+- Extract text and Markdown.
+- Export HWP, HWPX, PDF, DOCX, text, Markdown, and page SVG.
+- Use `RhwpViewer` for Flutter-native viewing.
+- Use `RhwpFullEditor` for the upstream Web editor UI.
+- Use `RhwpNativeEditor` for the Flutter widget editor track.
+- Evaluate table formulas from the Flutter-native table ribbon or the Dart API.
+- Format selected table-cell numbers with thousands separators and decimal
+  place increase/decrease actions.
+- Create, configure, and remove table captions from the Flutter-native table
+  properties dialog or Dart table-properties API.
+- Create, configure, and remove picture captions from the Flutter-native object
+  properties dialog or Dart object-properties API.
+- Rotate and flip selected shape/picture objects from the Flutter-native object
+  properties dialog or Dart object-properties API.
+- Manage bookmarks from the Flutter-native input ribbon or the Dart API.
+- Insert hyperlinks and hidden comments in body text or active table-cell text
+  from the Flutter-native input ribbon or the Dart API.
+- Read, edit, and delete hidden comments in body text or active table-cell text
+  from the Flutter-native input ribbon or the Dart API.
+- Edit hyperlink URLs and display text from the Flutter-native tools ribbon or
+  the Dart API.
+- Manage HWP fields/누름틀 values from the Flutter-native tools ribbon or the
+  Dart API.
+- Inspect and remove field markers, including ClickHere and hyperlink fields,
+  while preserving their visible text.
+- Inspect, edit ClickHere field properties, and remove field markers at the
+  Flutter-native caret through the tools ribbon or Dart API.
+- Convert distribution/read-only documents to editable mode when
+  `RhwpNativeEditor` loads, matching the upstream Web editor path.
+- Apply HWP page hide flags from the Flutter-native page ribbon or Dart API.
+- List and delete HWP header/footer controls from the Flutter-native page
+  ribbon or Dart API.
+- Split and merge paragraphs inside active table cells from the Flutter-native
+  editor with Enter, Backspace, and Delete.
+- Keep native-editor typing, IME composing, caret, and selection overlays
+  separate from the rendered SVG page surface to reduce refresh churn on large
+  documents.
+- `holdTextRefreshWhileFocused` is enabled by default so Space/text input stays
+  in the Flutter overlay through transient desktop focus/IME churn until focus
+  moves outside the editor.
+- Use `RhwpCommandEditor` for the earlier command-editor compatibility name.
+
+## Installation
+
+Until this package is published, add it from GitHub:
+
+```yaml
+dependencies:
+  flutter_rhwp:
+    git:
+      url: https://github.com/JAICHANGPARK/flutter_rhwp.git
+      ref: main
+```
+
+Then run:
+
+```sh
+flutter pub get
+```
+
+Requirements:
+
+- Flutter `>=3.35.0`
+- Windows full editor: Microsoft WebView2 runtime
+- Linux full editor: WebKitGTK 4.1
+- Sandboxed macOS full editor with remote `@rhwp/editor`: outgoing network
+  client entitlement
+
+## Documentation
+
+- [API spec](docs/API_SPEC.md): editor callbacks, toolbar command mapping, and
+  save/export contracts.
+- [Native editor parity](docs/NATIVE_EDITOR_PARITY.md): upstream Web editor
+  menu coverage versus the Flutter-native editor.
+- [Roadmap](docs/ROADMAP.md) and [TODO](docs/TODO.md): remaining native editor,
+  export, platform, and release work.
+
+## Quick Start
+
+```dart
+import 'dart:io';
+
+import 'package:flutter_rhwp/flutter_rhwp.dart';
+
+final bytes = await File('sample.hwp').readAsBytes();
+final document = await Rhwp.open(bytes, fileName: 'sample.hwp');
+
+final pageCount = await document.pageCount;
+final firstPageSvg = await document.renderPageSvg(0);
+final text = await document.extractText();
+final exportedPdf = await document.exportDocument(RhwpExportFormat.pdf);
+
+await document.close();
+```
+
+## Usage
+
+Viewer:
+
+```dart
+RhwpViewer(document: document)
+```
+
+Full editor:
+
+```dart
+final controller = RhwpFullEditorController();
+
+RhwpFullEditor(
+  controller: controller,
+  initialBytes: bytes,
+  fileName: 'sample.hwp',
+);
+
+final editedHwp = await controller.exportHwp();
+```
+
+Flutter-native editor:
+
+```dart
+RhwpNativeEditor(
+  document: document,
+  convertToEditableOnLoad: true,
+  editRefreshDelay: const Duration(milliseconds: 1200),
+  onDirtyChanged: updateUnsavedIndicator,
+  onUnsavedChanges: confirmUnsavedChanges,
+  onNewRequested: createBlankDocument,
+  onOpenRequested: pickAndOpenDocument,
+  onCloseRequested: closeDocument,
+  onImageRequested: pickImageForEditor,
+  onExported: saveExportedDocument,
+  onPrintRequested: printPdfDocument,
+)
+```
+
+Edit with Rust bridge commands:
+
+```dart
+await document.insertText(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+  text: 'Hello',
+);
+
+await document.applyParaFormatRange(
+  section: 0,
+  startParagraph: 0,
+  endParagraph: 2,
+  alignment: 'center',
+);
+
+await document.insertTable(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+  rows: 2,
+  columns: 3,
+);
+
+await document.createTableEx(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+  rows: 2,
+  columns: 2,
+  treatAsChar: true,
+  columnWidths: const [2000, 2100],
+);
+
+await document.insertTableRow(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  row: 0,
+);
+
+await document.insertPicture(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+  imageData: imageBytes,
+  width: 15000,
+  height: 10000,
+  naturalWidthPx: 200,
+  naturalHeightPx: 133,
+  extension: 'png',
+);
+
+await document.insertShape(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+  shapeType: 'rectangle',
+);
+
+await document.addBookmark(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+  name: 'intro',
+);
+
+await document.insertHyperlink(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+  url: 'https://example.com',
+  text: 'Example',
+);
+
+await document.updateHyperlink(
+  fieldId: 1,
+  url: 'https://updated.example',
+  text: 'Updated link',
+);
+
+final cellLink = await document.fieldInfoAtInTableCell(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  cellIndex: 1,
+  cellParagraph: 0,
+  offset: 0,
+);
+if (cellLink.inField && cellLink.fieldType == 'hyperlink') {
+  await document.updateHyperlink(
+    fieldId: cellLink.fieldId!,
+    url: 'https://cell-updated.example',
+    text: 'Updated cell link',
+  );
+}
+
+await document.insertHiddenComment(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+  text: '검토 의견',
+);
+
+await document.insertHyperlinkInTableCell(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  cellIndex: 1,
+  cellParagraph: 0,
+  offset: 0,
+  url: 'https://example.com',
+  text: 'Cell link',
+);
+
+await document.insertHiddenCommentInTableCell(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  cellIndex: 1,
+  cellParagraph: 0,
+  offset: 0,
+  text: '셀 검토 의견',
+);
+
+final cellComment = await document.hiddenCommentAtInTableCell(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  cellIndex: 1,
+  cellParagraph: 0,
+  offset: 0,
+);
+if (cellComment.hit) {
+  await document.updateHiddenCommentAtInTableCell(
+    section: 0,
+    paragraph: 0,
+    controlIndex: 0,
+    cellIndex: 1,
+    cellParagraph: 0,
+    offset: 0,
+    text: '셀 수정 의견',
+  );
+}
+
+await document.deleteHiddenCommentAtInTableCell(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  cellIndex: 1,
+  cellParagraph: 0,
+  offset: 0,
+);
+
+final comment = await document.hiddenCommentAt(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+);
+if (comment.hit) {
+  await document.updateHiddenCommentAt(
+    section: 0,
+    paragraph: 0,
+    offset: 0,
+    text: '수정 의견',
+  );
+}
+
+await document.deleteHiddenCommentAt(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+);
+
+final bookmarks = await document.bookmarks();
+final bookmarkPage = await document.pageOfPosition(
+  section: bookmarks.first.section,
+  paragraph: bookmarks.first.paragraph,
+);
+
+final fields = await document.fields();
+await document.setFieldValue(fieldId: fields.first.fieldId, value: 'Updated');
+
+final fieldInfo = await document.fieldInfoAt(
+  section: 0,
+  paragraph: 0,
+  offset: 0,
+);
+if (fieldInfo.inField && fieldInfo.fieldId != null) {
+  final props = await document.clickHereProperties(fieldInfo.fieldId!);
+  await document.updateClickHereProperties(
+    fieldId: fieldInfo.fieldId!,
+    guide: props.guide,
+    memo: props.memo,
+    name: props.name,
+    editable: props.editable,
+  );
+}
+
+await document.createHeader(section: 0);
+await document.createFooter(section: 0);
+
+final snapshotId = await document.saveSnapshot();
+await document.restoreSnapshot(snapshotId);
+
+await document.mergeTableCells(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  startRow: 0,
+  startColumn: 0,
+  endRow: 1,
+  endColumn: 1,
+);
+
+await document.splitTableCellInto(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  row: 0,
+  column: 0,
+  rows: 2,
+  columns: 2,
+);
+
+await document.splitTableCellsInRange(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  startRow: 0,
+  startColumn: 0,
+  endRow: 1,
+  endColumn: 1,
+  rows: 2,
+  columns: 2,
+  equalRowHeight: true,
+);
+
+await document.resizeTableCells(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  updates: const [
+    RhwpTableCellResize(cellIndex: 0, widthDelta: 120),
+    RhwpTableCellResize(cellIndex: 1, heightDelta: -80),
+  ],
+);
+
+await document.evaluateTableFormula(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  row: 1,
+  column: 0,
+  formula: '=SUM(A1:B1)',
+);
+
+await document.splitParagraphInTableCell(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  cellIndex: 0,
+  cellParagraph: 0,
+  offset: 2,
+);
+
+await document.mergeParagraphInTableCell(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  cellIndex: 0,
+  cellParagraph: 1,
+);
+
+await document.moveTableOffset(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  deltaH: 120,
+  deltaV: -60,
+);
+
+await document.deleteTableControl(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+);
+
+await document.setTableProperties(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  cellSpacing: 10,
+  paddingLeft: 100,
+  paddingRight: 100,
+  paddingTop: 80,
+  paddingBottom: 80,
+  pageBreak: 1,
+  repeatHeader: true,
+);
+
+await document.setCellProperties(
+  section: 0,
+  paragraph: 0,
+  controlIndex: 0,
+  cellIndex: 0,
+  width: 6000,
+  height: 3200,
+  paddingLeft: 120,
+  paddingRight: 120,
+  paddingTop: 80,
+  paddingBottom: 80,
+  verticalAlign: 1,
+  isHeader: true,
+);
+
+final html = await document.exportSelectionHtml(
+  section: 0,
+  startParagraph: 0,
+  startOffset: 0,
+  endParagraph: 0,
+  endOffset: 5,
+);
+
+await document.pasteHtml(
+  section: 0,
+  paragraph: 0,
+  offset: 5,
+  html: html,
+);
+```
+
+Export with save metadata:
+
+```dart
+final exported = await document.exportDocument(
+  RhwpExportFormat.pdf,
+  sourceFileName: 'sample.hwp',
+);
+
+// exported.bytes
+// exported.fileName
+// exported.mimeType
+```
+
+## Example
+
+```sh
+cd example
+flutter run -d macos
+```
+
+The example can open the bundled HWP asset or a picked HWP/HWPX file, then
+export HWP/HWPX/PDF/DOCX/TXT/MD/SVG.
+
+## Notes
+
+- `RhwpFullEditor` uses upstream `@rhwp/editor`.
+- On Web it embeds the editor directly.
+- On Android, iOS, macOS, Windows, and Linux it uses `webview_all`.
+- Initial full-editor file loading uses `editor.loadFile(data, fileName)`.
+- `RhwpNativeEditor` is the 100% Flutter widget editor path and currently
+  includes an HWP-style Flutter ribbon toolbar, page viewport, page-layer caret
+  hit testing, blinking caret/drag-selection overlay, keyboard caret movement
+  including
+  double-click word selection, triple-click paragraph selection, Shift+click
+  selection extension, page-layer geometry based ArrowUp/ArrowDown,
+  PageUp/PageDown, and Home/End,
+  plus Ctrl/Cmd+Home/End, Ctrl/Option word navigation, and Ctrl/Option word
+  delete, IME
+  composing preview, context menus, HWP/HWPX/PDF quick export callbacks and a
+  DOCX/Text/Markdown/current-page SVG export menu from the file ribbon,
+  app-level Print callback with PDF artifacts, Ctrl/Cmd+S HWP save,
+  Ctrl/Cmd+Shift+S HWPX save, Ctrl/Cmd+P Print when `onPrintRequested` is
+  supplied or PDF export fallback otherwise, app-level file new/open/close
+  callbacks with Ctrl/Cmd+N/O/W shortcuts and document information from the file
+  ribbon, page navigation controls,
+  direct go-to-page from the view ribbon and
+  Ctrl/Cmd+G, scroll-tracked current page reporting and previous/next page
+  controls in the status bar, page setup from the page ribbon and F7,
+  transparent table border overlays,
+  synchronized view/status zoom controls with explicit fit-width and fit-page
+  commands and preset menus using the upstream web editor's 25%, 50%, 75%,
+  100%, 125%, 150%, 200%, and 300% steps, Ctrl/Cmd zoom shortcuts,
+  Ctrl/Cmd+mouse-wheel zoom, Escape state clearing, text commit, select-all,
+  copy/cut/paste with same-editor HTML clipboard import/export for body text
+  and single selected table cells, Enter paragraph splitting,
+  Shift+Enter soft line breaks,
+  Backspace/Delete paragraph-boundary merging,
+  Tab text insertion, multiline clipboard paste as paragraph insertion,
+  multi-paragraph selection
+  replacement, multi-paragraph selected-text bold/italic/underline/strike
+  formatting, inline font family, font size field and stepper with
+  Ctrl/Cmd+Shift+Period/Comma shortcuts, text color,
+  text background,
+  toggleable Bold/Italic/Underline/Strike, superscript, subscript, emboss, and
+  engrave controls with Ctrl/Cmd+Shift+X and Ctrl/Cmd+Period/Comma shortcuts,
+  inline paragraph alignment, indent with Ctrl/Cmd+BracketLeft/BracketRight
+  shortcuts, and line spacing with Ctrl/Cmd+1/2/5 shortcuts
+  controls, a character shape
+  dialog with `Alt+L` shortcut support for font family, font size, text color,
+  text background,
+  superscript, subscript, emboss, and engrave, preloaded from the current
+  caret character shape,
+  collapsed-selection pending character
+  formatting for the next inserted body text, caret character-shape sync for
+  the format ribbon, caret paragraph alignment/line-spacing sync for the
+  format ribbon, paragraph alignment commands and line-spacing presets,
+  Ctrl/Cmd+L/E/R/J alignment shortcuts, a paragraph
+  shape dialog that preloads the current caret paragraph's line spacing,
+  indent, and paragraph margins with `Alt+T` shortcut support, style picker
+  command with F6 shortcut support, header/footer
+  creation from the page ribbon,
+  header/footer list and deletion from the page ribbon,
+  page hide flags for header, footer, master page, border, fill, and page
+  number,
+  snapshot-backed undo/redo from the edit ribbon with continuous text-input
+  undo batching, layer-tree text search with
+  Ctrl/Cmd+F focus and search-text selection, Ctrl/Cmd+H replace-field focus,
+  F3/Shift+F3 and search-field
+  Enter/Shift+Enter result navigation, debounced live search field input,
+  search-field Escape clearing, result highlighting, active-match replace,
+  replace-all, table-cell find/replace, and a tools-ribbon compare dialog
+  backed by text extraction, field list/value/property/remove actions from the
+  tools ribbon and body/table-cell context menus, and basic
+  text/table/picture/shape
+  insert/delete from the ribbon and body context menu, with shape presets for
+  rectangle, ellipse, line, and text box,
+  footnote, equation, and bookmark insertion from the input ribbon and body
+  context menu, footnote/equation/bookmark insertion with
+  Ctrl/Cmd+Alt+F/E/B shortcuts,
+  table insertion with Ctrl/Cmd+Alt+T shortcut,
+  picture insertion with Ctrl/Cmd+Alt+I shortcut,
+  shape preset insertion with Ctrl/Cmd+Alt+R/O/L/X shortcuts,
+  bookmark list/add/delete/rename/go-to navigation through the input ribbon,
+  page/column break and new-number insertion, plus table
+  row above/below insertion and row deletion, column left/right insertion and
+  column deletion, and cell
+  merge/split/split-into-grid/range split command flow, selected-cell range
+  resize through rhwp table resize commands, inline extended table insertion
+  with optional column widths, table formula evaluation, table properties
+  editing, and
+  selected-cell properties, fill, border, and vertical alignment editing from
+  the ribbon and context menu with table-cell hit testing, selected-cell
+  highlighting, object/control hit testing, highlighting, pointer drag move and
+  resize handles for selected non-table objects, dedicated table-object
+  movement through rhwp table offset commands, Delete/Backspace table-control
+  deletion, Delete/Backspace object deletion, object size/position properties,
+  rotation/flip properties, picture caption settings, and object z-order
+  actions from the edit ribbon and context menu,
+  scroll-preserving page refresh after edits, and drag range
+  selection and Shift+click range extension for rendered table cells, plus
+  selected-cell
+  text insert/delete/clear/copy/cut/paste, tab/newline multi-cell paste,
+  active-cell paragraph split/merge with Enter, Backspace, and Delete,
+  cell text offset hit testing, Arrow/Tab/Enter keyboard handling for selected
+  table cells, F5 selected-cell edit entry, Esc return from active cell text
+  editing to cell selection and from cell selection to table-object selection,
+  Enter/F5 table-object re-entry to cell selection, Arrow/Shift+Arrow object
+  nudging, and Shift+drag
+  aspect-ratio preserving object resize. Insert/Overwrite input mode toggles
+  with the Insert key, and overwrite typing replaces body and active table cell
+  text through Rust delete/insert commands. Text input, paste, tab input, and
+  keyboard delete
+  defer page SVG refresh so normal typing does not reload the rendered page
+  after every keystroke. Text-input commits stay in a Flutter overlay while the
+  editor still has focus, even if `TextInputAction.done` or connection-close
+  events arrive; `editRefreshDelay` starts only after the active input session
+  is released. For large desktop documents, `holdTextRefreshWhileFocused` keeps
+  Space/text commits in the Flutter overlay through transient focus/IME churn
+  and delays external-focus release while desktop text input settles, then
+  releases the deferred page refresh when focus moves outside the editor. Rapid
+  input commits are queued while previous edit commands finish.
+  Committed text is shown through a
+  temporary Flutter overlay with a pending caret until the refreshed page render
+  completes, including table cell text input. Set
+  `holdTextRefreshWhileFocused: false` only when an app needs eager SVG sync
+  while the editor still has focus. Deleted body text is temporarily
+  masked until the refreshed page render completes. The example app uses a 5 s
+  refresh delay for a steadier typing feel on large HWP files and defers HWP
+  snapshot export until the user saves/exports or switches from the native
+  editor to the full editor.
+  `onDirtyChanged` reports when Rust-backed edit commands make the document
+  unsaved and when HWP/HWPX save callbacks complete. The same state is exposed
+  as `RhwpEditorController.dirty`, and apps can call
+  `RhwpEditorController.markClean()` after host-driven saves or discards.
+  The native editor status bar shows a modified indicator while this dirty
+  state is active. `onUnsavedChanges` lets the host app show a save/discard
+  guard before native-editor New/Open/Close file actions proceed.
+  Dirty means the in-memory document has changed since the last accepted
+  HWP/HWPX save or explicit discard.
+  File-ribbon New/Open/Close and Ctrl/Cmd+N/O/W call app-provided callbacks,
+  so platform-specific document creation, picking, and close/discard prompts
+  stay in the host app.
+  Pending text previews are updated through a scoped overlay notifier, so
+  normal typing updates the caret/text preview without rebuilding the whole
+  native editor surface. Viewer controller notifications are scoped so cursor
+  updates during typing do not rebuild the page viewport unless zoom changes.
+  The status bar reports dirty state, body cursor, active table cell,
+  and selected object context. The view ribbon also includes a paragraph mark toggle
+  that paints paragraph-end markers from page layer tree text runs. Documents
+  are converted to editable mode on load by default, matching upstream
+  `convertToEditable`; set `convertToEditableOnLoad: false` only when preserving
+  an original distribution/read-only state is required.
+- `rust/vendor/rhwp` should be committed. `rust/target` should stay ignored.
+
+## Documentation
+
+- [Roadmap](docs/ROADMAP.md)
+- [TODO](docs/TODO.md)
+- [API spec](docs/API_SPEC.md)
+- [Changelog](CHANGELOG.md)
+
+## License
+
+MIT. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled source and
+dependency notices.

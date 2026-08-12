@@ -1,0 +1,28 @@
+name: docnote
+description: DocNote - 한국형 통합 문서 노트 MVP
+publish_to: none
+version: 0.1.0+1
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_riverpod: ^2.6.1
+  go_router: ^16.2.0
+  shared_preferences: ^2.5.3
+  file_picker: ^10.3.3
+  pdfx: ^2.9.2
+  path_provider: ^2.1.5
+  uuid: ^4.5.1
+  pdf: ^3.11.3
+  share_plus: ^11.0.0
+  flutter_svg: ^2.2.3
+  flutter_rhwp:
+    path: third_party/flutter_rhwp
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true

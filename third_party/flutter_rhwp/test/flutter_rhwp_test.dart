@@ -1,0 +1,5033 @@
+import 'dart:convert';
+import 'dart:typed_data';
+import 'dart:ui' show Rect, Size;
+
+import 'package:flutter_rhwp/flutter_rhwp.dart';
+import 'package:flutter_rhwp/src/rust/api/rhwp.dart' as rust;
+import 'package:flutter_rhwp/src/rust/frb_generated.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  test('insert text command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.insertText(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      text: 'hello',
+    );
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'insertText',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'text': 'hello',
+    });
+  });
+
+  test('split paragraph command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.splitParagraph(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+    );
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'splitParagraph',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+  });
+
+  test('insert paragraph command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.insertParagraph(section: 0, paragraph: 2);
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'insertParagraph',
+      'section': 0,
+      'paragraph': 2,
+    });
+  });
+
+  test('delete paragraph command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.deleteParagraph(section: 0, paragraph: 2);
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'deleteParagraph',
+      'section': 0,
+      'paragraph': 2,
+    });
+  });
+
+  test('merge paragraph command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.mergeParagraph(section: 0, paragraph: 2);
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'mergeParagraph',
+      'section': 0,
+      'paragraph': 2,
+    });
+  });
+
+  test('paragraph metric commands serialize to the Rust command envelope', () {
+    expect(jsonDecode(jsonEncode(RhwpCommand.getSectionCount().toJson())), {
+      'type': 'getSectionCount',
+    });
+
+    expect(
+      jsonDecode(
+        jsonEncode(RhwpCommand.getParagraphCount(section: 1).toJson()),
+      ),
+      {'type': 'getParagraphCount', 'section': 1},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getParagraphLength(section: 1, paragraph: 2).toJson(),
+        ),
+      ),
+      {'type': 'getParagraphLength', 'section': 1, 'paragraph': 2},
+    );
+  });
+
+  test('insert page break command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.insertPageBreak(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+    );
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'insertPageBreak',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+  });
+
+  test(
+    'insert column break command serializes to the Rust command envelope',
+    () {
+      final command = RhwpCommand.insertColumnBreak(
+        section: 0,
+        paragraph: 1,
+        offset: 2,
+      );
+
+      expect(jsonDecode(jsonEncode(command.toJson())), {
+        'type': 'insertColumnBreak',
+        'section': 0,
+        'paragraph': 1,
+        'offset': 2,
+      });
+    },
+  );
+
+  test('insert footnote command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.insertFootnote(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+    );
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'insertFootnote',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getFootnoteAtCursor(
+            section: 0,
+            paragraph: 1,
+            offset: 3,
+            direction: 'backward',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getFootnoteAtCursor',
+        'section': 0,
+        'paragraph': 1,
+        'offset': 3,
+        'direction': 'backward',
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getFootnoteInfo(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 4,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getFootnoteInfo',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 4,
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteFootnote(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 4,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteFootnote',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 4,
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteTextInFootnote(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 4,
+            footnoteParagraph: 0,
+            offset: 0,
+            count: 5,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteTextInFootnote',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 4,
+        'footnoteParagraph': 0,
+        'offset': 0,
+        'count': 5,
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.insertTextInFootnote(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 4,
+            footnoteParagraph: 0,
+            offset: 0,
+            text: 'note',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'insertTextInFootnote',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 4,
+        'footnoteParagraph': 0,
+        'offset': 0,
+        'text': 'note',
+      },
+    );
+  });
+
+  test('insert equation command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.insertEquation(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      script: 'x^2 + y^2',
+      fontSize: 1200,
+      color: 0x2563eb,
+    );
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'insertEquation',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'script': 'x^2 + y^2',
+      'fontSize': 1200,
+      'color': 0x2563eb,
+    });
+  });
+
+  test('bookmark commands serialize to the Rust command envelope', () {
+    expect(jsonDecode(jsonEncode(RhwpCommand.getBookmarks().toJson())), {
+      'type': 'getBookmarks',
+    });
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getPageOfPosition(section: 0, paragraph: 1).toJson(),
+        ),
+      ),
+      {'type': 'getPageOfPosition', 'section': 0, 'paragraph': 1},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.addBookmark(
+            section: 0,
+            paragraph: 1,
+            offset: 2,
+            name: 'intro',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'addBookmark',
+        'section': 0,
+        'paragraph': 1,
+        'offset': 2,
+        'name': 'intro',
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteBookmark(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 3,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteBookmark',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 3,
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.renameBookmark(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 3,
+            name: 'intro-renamed',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'renameBookmark',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 3,
+        'name': 'intro-renamed',
+      },
+    );
+  });
+
+  test('field commands serialize to the Rust command envelope', () {
+    expect(jsonDecode(jsonEncode(RhwpCommand.getFieldList().toJson())), {
+      'type': 'getFieldList',
+    });
+
+    expect(jsonDecode(jsonEncode(RhwpCommand.getFieldValue(7).toJson())), {
+      'type': 'getFieldValue',
+      'fieldId': 7,
+    });
+
+    expect(
+      jsonDecode(jsonEncode(RhwpCommand.getFieldValueByName('name').toJson())),
+      {'type': 'getFieldValueByName', 'name': 'name'},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.setFieldValue(fieldId: 7, value: 'updated').toJson(),
+        ),
+      ),
+      {'type': 'setFieldValue', 'fieldId': 7, 'value': 'updated'},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.setFieldValueByName(
+            name: 'name',
+            value: 'updated',
+          ).toJson(),
+        ),
+      ),
+      {'type': 'setFieldValueByName', 'name': 'name', 'value': 'updated'},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getFieldInfoAt(
+            section: 0,
+            paragraph: 1,
+            offset: 2,
+          ).toJson(),
+        ),
+      ),
+      {'type': 'getFieldInfoAt', 'section': 0, 'paragraph': 1, 'offset': 2},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getFieldInfoAtInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 3,
+            cellIndex: 4,
+            cellParagraph: 5,
+            offset: 6,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getFieldInfoAtInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 3,
+        'cellIndex': 4,
+        'cellParagraph': 5,
+        'offset': 6,
+        'isTextBox': false,
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.setActiveField(
+            section: 0,
+            paragraph: 1,
+            offset: 2,
+          ).toJson(),
+        ),
+      ),
+      {'type': 'setActiveField', 'section': 0, 'paragraph': 1, 'offset': 2},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.setActiveFieldInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 3,
+            cellIndex: 4,
+            cellParagraph: 5,
+            offset: 6,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'setActiveFieldInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 3,
+        'cellIndex': 4,
+        'cellParagraph': 5,
+        'offset': 6,
+        'isTextBox': false,
+      },
+    );
+
+    expect(jsonDecode(jsonEncode(RhwpCommand.clearActiveField().toJson())), {
+      'type': 'clearActiveField',
+    });
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.removeFieldAt(
+            section: 0,
+            paragraph: 1,
+            offset: 2,
+          ).toJson(),
+        ),
+      ),
+      {'type': 'removeFieldAt', 'section': 0, 'paragraph': 1, 'offset': 2},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.removeFieldAtInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 3,
+            cellIndex: 4,
+            cellParagraph: 5,
+            offset: 6,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'removeFieldAtInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 3,
+        'cellIndex': 4,
+        'cellParagraph': 5,
+        'offset': 6,
+        'isTextBox': false,
+      },
+    );
+
+    expect(
+      jsonDecode(jsonEncode(RhwpCommand.getClickHereProperties(7).toJson())),
+      {'type': 'getClickHereProperties', 'fieldId': 7},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.updateHyperlink(
+            fieldId: 8,
+            url: 'https://example.com',
+            text: 'Example',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'updateHyperlink',
+        'fieldId': 8,
+        'url': 'https://example.com',
+        'text': 'Example',
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.hiddenCommentAt(
+            section: 0,
+            paragraph: 1,
+            offset: 2,
+          ).toJson(),
+        ),
+      ),
+      {'type': 'hiddenCommentAt', 'section': 0, 'paragraph': 1, 'offset': 2},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.updateHiddenCommentAt(
+            section: 0,
+            paragraph: 1,
+            offset: 2,
+            text: 'edited',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'updateHiddenCommentAt',
+        'section': 0,
+        'paragraph': 1,
+        'offset': 2,
+        'text': 'edited',
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteHiddenCommentAt(
+            section: 0,
+            paragraph: 1,
+            offset: 2,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteHiddenCommentAt',
+        'section': 0,
+        'paragraph': 1,
+        'offset': 2,
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.updateClickHereProperties(
+            fieldId: 7,
+            guide: 'guide',
+            memo: 'memo',
+            name: 'name',
+            editable: true,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'updateClickHereProperties',
+        'fieldId': 7,
+        'guide': 'guide',
+        'memo': 'memo',
+        'name': 'name',
+        'editable': true,
+      },
+    );
+  });
+
+  test('insert picture command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.insertPicture(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      imageData: Uint8List.fromList([1, 2, 3]),
+      width: 750,
+      height: 1500,
+      naturalWidthPx: 10,
+      naturalHeightPx: 20,
+      extension: 'png',
+      description: 'sample.png',
+    );
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'insertPicture',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'imageData': [1, 2, 3],
+      'width': 750,
+      'height': 1500,
+      'naturalWidthPx': 10,
+      'naturalHeightPx': 20,
+      'extension': 'png',
+      'description': 'sample.png',
+    });
+  });
+
+  test('insert table command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.insertTable(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      rows: 3,
+      columns: 4,
+    );
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'insertTable',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'rows': 3,
+      'columns': 4,
+    });
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.createTableEx(
+            section: 0,
+            paragraph: 1,
+            offset: 2,
+            rows: 3,
+            columns: 4,
+            treatAsChar: true,
+            columnWidths: const [1000, 1100, 1200, 1300],
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'createTableEx',
+        'section': 0,
+        'paragraph': 1,
+        'offset': 2,
+        'rows': 3,
+        'columns': 4,
+        'treatAsChar': true,
+        'columnWidths': [1000, 1100, 1200, 1300],
+      },
+    );
+  });
+
+  test('table row and column commands serialize to Rust envelopes', () {
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.insertTableRow(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            row: 3,
+            below: true,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'insertTableRow',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'row': 3,
+        'below': true,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.insertTableColumn(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            column: 4,
+            right: true,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'insertTableColumn',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'column': 4,
+        'right': true,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteTableRow(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            row: 3,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteTableRow',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'row': 3,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteTableColumn(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            column: 4,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteTableColumn',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'column': 4,
+      },
+    );
+  });
+
+  test('table cell commands serialize to Rust envelopes', () {
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.insertTextInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            offset: 4,
+            text: 'cell',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'insertTextInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'offset': 4,
+        'text': 'cell',
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.insertHyperlinkInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            offset: 4,
+            url: 'https://example.com',
+            text: 'Example',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'insertHyperlinkInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'offset': 4,
+        'url': 'https://example.com',
+        'text': 'Example',
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.insertHiddenCommentInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            offset: 4,
+            text: '검토',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'insertHiddenCommentInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'offset': 4,
+        'text': '검토',
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.hiddenCommentAtInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            offset: 4,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'hiddenCommentAtInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'offset': 4,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.updateHiddenCommentAtInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            offset: 4,
+            text: '수정',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'updateHiddenCommentAtInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'offset': 4,
+        'text': '수정',
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteHiddenCommentAtInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            offset: 4,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteHiddenCommentAtInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'offset': 4,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteTextInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            offset: 4,
+            count: 1,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteTextInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'offset': 4,
+        'count': 1,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getTextInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            offset: 1,
+            count: 4,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getTextInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'offset': 1,
+        'count': 4,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteRangeInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            startCellParagraph: 0,
+            startOffset: 2,
+            endCellParagraph: 1,
+            endOffset: 3,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteRangeInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'startCellParagraph': 0,
+        'startOffset': 2,
+        'endCellParagraph': 1,
+        'endOffset': 3,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.splitParagraphInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            offset: 2,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'splitParagraphInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'offset': 2,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.mergeParagraphInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 1,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'mergeParagraphInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 1,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getCellParagraphCount(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getCellParagraphCount',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getCellParagraphLength(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getCellParagraphLength',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.applyCharFormatInTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            startOffset: 1,
+            endOffset: 4,
+            bold: true,
+            fontSize: 1100,
+            superscript: true,
+            subscript: false,
+            emboss: true,
+            engrave: false,
+            fontFamily: '함초롬돋움',
+            textColor: '#2563eb',
+            shadeColor: '#fef08a',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'applyCharFormatInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'startOffset': 1,
+        'endOffset': 4,
+        'properties': {
+          'bold': true,
+          'fontSize': 1100,
+          'superscript': true,
+          'subscript': false,
+          'emboss': true,
+          'engrave': false,
+          'fontFamily': '함초롬돋움',
+          'textColor': '#2563eb',
+          'shadeColor': '#fef08a',
+        },
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.applyTableCellStyle(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            fillColor: '#fef08a',
+            borderColor: '#475569',
+            verticalAlign: 1,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'applyTableCellStyle',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'properties': {
+          'fillType': 'solid',
+          'fillColor': '#fef08a',
+          'borderLeft': {'type': 1, 'width': 1, 'color': '#475569'},
+          'borderRight': {'type': 1, 'width': 1, 'color': '#475569'},
+          'borderTop': {'type': 1, 'width': 1, 'color': '#475569'},
+          'borderBottom': {'type': 1, 'width': 1, 'color': '#475569'},
+          'verticalAlign': 1,
+        },
+      },
+    );
+    expect(jsonDecode(jsonEncode(RhwpCommand.getStyleList().toJson())), {
+      'type': 'getStyleList',
+    });
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getCharPropertiesAt(
+            section: 0,
+            paragraph: 1,
+            offset: 2,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getCharPropertiesAt',
+        'section': 0,
+        'paragraph': 1,
+        'offset': 2,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getCellCharPropertiesAt(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 4,
+            offset: 5,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getCellCharPropertiesAt',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 4,
+        'offset': 5,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getParaPropertiesAt(section: 0, paragraph: 1).toJson(),
+        ),
+      ),
+      {'type': 'getParaPropertiesAt', 'section': 0, 'paragraph': 1},
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getCellParaPropertiesAt(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 4,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getCellParaPropertiesAt',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 4,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.applyStyle(section: 0, paragraph: 1, styleId: 3).toJson(),
+        ),
+      ),
+      {'type': 'applyStyle', 'section': 0, 'paragraph': 1, 'styleId': 3},
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.applyCellStyle(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            cellParagraph: 0,
+            styleId: 3,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'applyCellStyle',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'styleId': 3,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.mergeTableCells(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            startRow: 0,
+            startColumn: 0,
+            endRow: 1,
+            endColumn: 1,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'mergeTableCells',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'startRow': 0,
+        'startColumn': 0,
+        'endRow': 1,
+        'endColumn': 1,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.splitTableCell(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            row: 0,
+            column: 0,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'splitTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'row': 0,
+        'column': 0,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.splitTableCellInto(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            row: 0,
+            column: 0,
+            rows: 3,
+            columns: 2,
+            equalRowHeight: false,
+            mergeFirst: true,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'splitTableCellInto',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'row': 0,
+        'column': 0,
+        'rows': 3,
+        'columns': 2,
+        'equalRowHeight': false,
+        'mergeFirst': true,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.splitTableCellsInRange(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            startRow: 0,
+            startColumn: 1,
+            endRow: 2,
+            endColumn: 3,
+            rows: 3,
+            columns: 2,
+            equalRowHeight: true,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'splitTableCellsInRange',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'startRow': 0,
+        'startColumn': 1,
+        'endRow': 2,
+        'endColumn': 3,
+        'rows': 3,
+        'columns': 2,
+        'equalRowHeight': true,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getTableProperties(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getTableProperties',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.setTableProperties(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellSpacing: 10,
+            paddingLeft: 100,
+            paddingRight: 110,
+            paddingTop: 120,
+            paddingBottom: 130,
+            pageBreak: 2,
+            repeatHeader: true,
+            hasCaption: true,
+            captionDirection: 2,
+            captionVerticalAlign: 1,
+            captionWidth: 8504,
+            captionSpacing: 850,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'setTableProperties',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'properties': {
+          'cellSpacing': 10,
+          'paddingLeft': 100,
+          'paddingRight': 110,
+          'paddingTop': 120,
+          'paddingBottom': 130,
+          'pageBreak': 2,
+          'repeatHeader': true,
+          'hasCaption': true,
+          'captionDirection': 2,
+          'captionVertAlign': 1,
+          'captionWidth': 8504,
+          'captionSpacing': 850,
+        },
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getCellProperties(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getCellProperties',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.setCellProperties(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            cellIndex: 3,
+            width: 6000,
+            height: 3200,
+            paddingLeft: 210,
+            paddingRight: 220,
+            paddingTop: 230,
+            paddingBottom: 240,
+            verticalAlign: 2,
+            textDirection: 1,
+            isHeader: true,
+            cellProtect: true,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'setCellProperties',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'properties': {
+          'width': 6000,
+          'height': 3200,
+          'paddingLeft': 210,
+          'paddingRight': 220,
+          'paddingTop': 230,
+          'paddingBottom': 240,
+          'verticalAlign': 2,
+          'textDirection': 1,
+          'isHeader': true,
+          'cellProtect': true,
+        },
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.resizeTableCells(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            updates: const [
+              RhwpTableCellResize(cellIndex: 3, widthDelta: 120),
+              RhwpTableCellResize(cellIndex: 4, heightDelta: -80),
+            ],
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'resizeTableCells',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'updates': [
+          {'cellIdx': 3, 'widthDelta': 120},
+          {'cellIdx': 4, 'heightDelta': -80},
+        ],
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.evaluateTableFormula(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            row: 3,
+            column: 4,
+            formula: '=SUM(A1:B1)',
+            writeResult: true,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'evaluateTableFormula',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'row': 3,
+        'column': 4,
+        'formula': '=SUM(A1:B1)',
+        'writeResult': true,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteTableControl(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteTableControl',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.moveTableOffset(
+            section: 0,
+            paragraph: 1,
+            controlIndex: 2,
+            deltaH: 12,
+            deltaV: -8,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'moveTableOffset',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'deltaH': 12,
+        'deltaV': -8,
+      },
+    );
+  });
+
+  test('object control commands serialize to Rust envelopes', () {
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteObjectControl(
+            section: 0,
+            paragraph: 2,
+            controlIndex: 4,
+            objectType: 'shape',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteObjectControl',
+        'section': 0,
+        'paragraph': 2,
+        'controlIndex': 4,
+        'objectType': 'shape',
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.changeObjectZOrder(
+            section: 0,
+            paragraph: 2,
+            controlIndex: 4,
+            objectType: 'shape',
+            operation: RhwpObjectZOrderOperation.forward,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'changeObjectZOrder',
+        'section': 0,
+        'paragraph': 2,
+        'controlIndex': 4,
+        'objectType': 'shape',
+        'operation': 'forward',
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.copyObjectControl(
+            section: 0,
+            paragraph: 2,
+            controlIndex: 4,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'copyObjectControl',
+        'section': 0,
+        'paragraph': 2,
+        'controlIndex': 4,
+      },
+    );
+
+    expect(
+      jsonDecode(jsonEncode(RhwpCommand.clipboardHasObjectControl().toJson())),
+      {'type': 'clipboardHasObjectControl'},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.pasteObjectControl(
+            section: 0,
+            paragraph: 2,
+            offset: 1,
+          ).toJson(),
+        ),
+      ),
+      {'type': 'pasteObjectControl', 'section': 0, 'paragraph': 2, 'offset': 1},
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.exportSelectionHtml(
+            section: 0,
+            startParagraph: 1,
+            startOffset: 2,
+            endParagraph: 3,
+            endOffset: 4,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'exportSelectionHtml',
+        'section': 0,
+        'startParagraph': 1,
+        'startOffset': 2,
+        'endParagraph': 3,
+        'endOffset': 4,
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.exportSelectionInCellHtml(
+            section: 0,
+            paragraph: 2,
+            controlIndex: 1,
+            cellIndex: 3,
+            startCellParagraph: 4,
+            startOffset: 5,
+            endCellParagraph: 6,
+            endOffset: 7,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'exportSelectionInCellHtml',
+        'section': 0,
+        'paragraph': 2,
+        'controlIndex': 1,
+        'cellIndex': 3,
+        'startCellParagraph': 4,
+        'startOffset': 5,
+        'endCellParagraph': 6,
+        'endOffset': 7,
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.exportControlHtml(
+            section: 0,
+            paragraph: 2,
+            controlIndex: 1,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'exportControlHtml',
+        'section': 0,
+        'paragraph': 2,
+        'controlIndex': 1,
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.pasteHtml(
+            section: 0,
+            paragraph: 2,
+            offset: 3,
+            html: '<p>A</p>',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'pasteHtml',
+        'section': 0,
+        'paragraph': 2,
+        'offset': 3,
+        'html': '<p>A</p>',
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.pasteHtmlInCell(
+            section: 0,
+            paragraph: 2,
+            controlIndex: 1,
+            cellIndex: 3,
+            cellParagraph: 4,
+            offset: 5,
+            html: '<p>A</p>',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'pasteHtmlInCell',
+        'section': 0,
+        'paragraph': 2,
+        'controlIndex': 1,
+        'cellIndex': 3,
+        'cellParagraph': 4,
+        'offset': 5,
+        'html': '<p>A</p>',
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getObjectProperties(
+            section: 0,
+            paragraph: 2,
+            controlIndex: 4,
+            objectType: 'shape',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getObjectProperties',
+        'section': 0,
+        'paragraph': 2,
+        'controlIndex': 4,
+        'objectType': 'shape',
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.setObjectProperties(
+            section: 0,
+            paragraph: 2,
+            controlIndex: 4,
+            objectType: 'picture',
+            width: 1200,
+            height: 2400,
+            horzOffset: 80,
+            vertOffset: 90,
+            rotationAngle: 90,
+            horzFlip: true,
+            vertFlip: false,
+            hasCaption: true,
+            captionDirection: 'Bottom',
+            captionVerticalAlign: 'Top',
+            captionWidth: 1000,
+            captionSpacing: 120,
+            captionIncludeMargin: true,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'setObjectProperties',
+        'section': 0,
+        'paragraph': 2,
+        'controlIndex': 4,
+        'objectType': 'picture',
+        'properties': {
+          'width': 1200,
+          'height': 2400,
+          'horzOffset': 80,
+          'vertOffset': 90,
+          'rotationAngle': 90,
+          'horzFlip': true,
+          'vertFlip': false,
+          'hasCaption': true,
+          'captionDirection': 'Bottom',
+          'captionVertAlign': 'Top',
+          'captionWidth': 1000,
+          'captionSpacing': 120,
+          'captionIncludeMargin': true,
+        },
+      },
+    );
+
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.moveLineEndpoint(
+            section: 0,
+            paragraph: 2,
+            controlIndex: 4,
+            startX: 120,
+            startY: 60,
+            endX: 192,
+            endY: 116,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'moveLineEndpoint',
+        'section': 0,
+        'paragraph': 2,
+        'controlIndex': 4,
+        'startX': 120,
+        'startY': 60,
+        'endX': 192,
+        'endY': 116,
+      },
+    );
+  });
+
+  test('delete range command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.deleteRange(
+      section: 0,
+      startParagraph: 1,
+      startOffset: 2,
+      endParagraph: 3,
+      endOffset: 4,
+    );
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'deleteRange',
+      'section': 0,
+      'startParagraph': 1,
+      'startOffset': 2,
+      'endParagraph': 3,
+      'endOffset': 4,
+    });
+  });
+
+  test('apply char format command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.applyCharFormat(
+      section: 0,
+      paragraph: 1,
+      startOffset: 2,
+      endOffset: 4,
+      bold: true,
+      italic: true,
+      underline: true,
+      strikethrough: true,
+      superscript: true,
+      subscript: false,
+      emboss: true,
+      engrave: false,
+      fontFamily: '맑은 고딕',
+      fontSize: 1250,
+      textColor: '#dc2626',
+      shadeColor: '#fef08a',
+    );
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'applyCharFormat',
+      'section': 0,
+      'paragraph': 1,
+      'startOffset': 2,
+      'endOffset': 4,
+      'properties': {
+        'bold': true,
+        'italic': true,
+        'underline': true,
+        'strikethrough': true,
+        'superscript': true,
+        'subscript': false,
+        'emboss': true,
+        'engrave': false,
+        'fontFamily': '맑은 고딕',
+        'fontSize': 1250,
+        'textColor': '#dc2626',
+        'shadeColor': '#fef08a',
+      },
+    });
+  });
+
+  test(
+    'apply char format range command serializes to the Rust command envelope',
+    () {
+      final command = RhwpCommand.applyCharFormatRange(
+        section: 0,
+        startParagraph: 1,
+        startOffset: 2,
+        endParagraph: 3,
+        endOffset: 4,
+        bold: true,
+        strikethrough: true,
+        superscript: false,
+        subscript: true,
+        emboss: false,
+        engrave: true,
+        fontFamily: '함초롬바탕',
+        fontSize: 1100,
+        textColor: '#2563eb',
+        shadeColor: '#dbeafe',
+      );
+
+      expect(jsonDecode(jsonEncode(command.toJson())), {
+        'type': 'applyCharFormatRange',
+        'section': 0,
+        'startParagraph': 1,
+        'startOffset': 2,
+        'endParagraph': 3,
+        'endOffset': 4,
+        'properties': {
+          'bold': true,
+          'strikethrough': true,
+          'superscript': false,
+          'subscript': true,
+          'emboss': false,
+          'engrave': true,
+          'fontFamily': '함초롬바탕',
+          'fontSize': 1100,
+          'textColor': '#2563eb',
+          'shadeColor': '#dbeafe',
+        },
+      });
+    },
+  );
+
+  test('apply para format command serializes to the Rust command envelope', () {
+    final command = RhwpCommand.applyParaFormat(
+      section: 0,
+      paragraph: 1,
+      alignment: 'center',
+      lineSpacing: 180,
+      lineSpacingType: 'Percent',
+      indent: 120,
+      marginLeft: 300,
+      marginRight: 400,
+      spacingBefore: 50,
+      spacingAfter: 60,
+    );
+
+    expect(jsonDecode(jsonEncode(command.toJson())), {
+      'type': 'applyParaFormat',
+      'section': 0,
+      'paragraph': 1,
+      'properties': {
+        'alignment': 'center',
+        'lineSpacing': 180,
+        'lineSpacingType': 'Percent',
+        'indent': 120,
+        'marginLeft': 300,
+        'marginRight': 400,
+        'spacingBefore': 50,
+        'spacingAfter': 60,
+      },
+    });
+  });
+
+  test(
+    'apply para format range command serializes to the Rust command envelope',
+    () {
+      final command = RhwpCommand.applyParaFormatRange(
+        section: 0,
+        startParagraph: 1,
+        endParagraph: 3,
+        alignment: 'right',
+        lineSpacing: 200,
+        lineSpacingType: 'Fixed',
+        indent: -40,
+        marginLeft: 100,
+        marginRight: 200,
+        spacingBefore: 10,
+        spacingAfter: 20,
+      );
+
+      expect(jsonDecode(jsonEncode(command.toJson())), {
+        'type': 'applyParaFormatRange',
+        'section': 0,
+        'startParagraph': 1,
+        'endParagraph': 3,
+        'properties': {
+          'alignment': 'right',
+          'lineSpacing': 200,
+          'lineSpacingType': 'Fixed',
+          'indent': -40,
+          'marginLeft': 100,
+          'marginRight': 200,
+          'spacingBefore': 10,
+          'spacingAfter': 20,
+        },
+      });
+    },
+  );
+
+  test(
+    'apply para format in table cell command serializes to the Rust command envelope',
+    () {
+      final command = RhwpCommand.applyParaFormatInTableCell(
+        section: 0,
+        paragraph: 1,
+        controlIndex: 2,
+        cellIndex: 3,
+        cellParagraph: 0,
+        alignment: 'center',
+        lineSpacing: 180,
+        lineSpacingType: 'Percent',
+        indent: 120,
+        marginLeft: 300,
+        marginRight: 400,
+        spacingBefore: 50,
+        spacingAfter: 60,
+      );
+
+      expect(jsonDecode(jsonEncode(command.toJson())), {
+        'type': 'applyParaFormatInTableCell',
+        'section': 0,
+        'paragraph': 1,
+        'controlIndex': 2,
+        'cellIndex': 3,
+        'cellParagraph': 0,
+        'properties': {
+          'alignment': 'center',
+          'lineSpacing': 180,
+          'lineSpacingType': 'Percent',
+          'indent': 120,
+          'marginLeft': 300,
+          'marginRight': 400,
+          'spacingBefore': 50,
+          'spacingAfter': 60,
+        },
+      });
+    },
+  );
+
+  test('create header and footer commands serialize to the Rust envelope', () {
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.createHeaderFooter(
+            section: 1,
+            isHeader: true,
+            applyTo: 2,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'createHeaderFooter',
+        'section': 1,
+        'isHeader': true,
+        'applyTo': 2,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.createHeaderFooter(section: 0, isHeader: false).toJson(),
+        ),
+      ),
+      {
+        'type': 'createHeaderFooter',
+        'section': 0,
+        'isHeader': false,
+        'applyTo': 0,
+      },
+    );
+  });
+
+  test('header and footer text commands serialize to the Rust envelope', () {
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getHeaderFooter(
+            section: 1,
+            isHeader: true,
+            applyTo: 2,
+          ).toJson(),
+        ),
+      ),
+      {'type': 'getHeaderFooter', 'section': 1, 'isHeader': true, 'applyTo': 2},
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.getHeaderFooterList(
+            section: 1,
+            isHeader: true,
+            applyTo: 2,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'getHeaderFooterList',
+        'section': 1,
+        'isHeader': true,
+        'applyTo': 2,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteHeaderFooter(
+            section: 1,
+            isHeader: false,
+            applyTo: 1,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteHeaderFooter',
+        'section': 1,
+        'isHeader': false,
+        'applyTo': 1,
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.insertTextInHeaderFooter(
+            section: 1,
+            isHeader: false,
+            applyTo: 1,
+            paragraph: 0,
+            offset: 3,
+            text: 'footer',
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'insertTextInHeaderFooter',
+        'section': 1,
+        'isHeader': false,
+        'applyTo': 1,
+        'paragraph': 0,
+        'offset': 3,
+        'text': 'footer',
+      },
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.deleteTextInHeaderFooter(
+            section: 1,
+            isHeader: false,
+            applyTo: 1,
+            paragraph: 0,
+            offset: 3,
+            count: 6,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'deleteTextInHeaderFooter',
+        'section': 1,
+        'isHeader': false,
+        'applyTo': 1,
+        'paragraph': 0,
+        'offset': 3,
+        'count': 6,
+      },
+    );
+  });
+
+  test('page setup commands serialize to the Rust envelope', () {
+    expect(
+      jsonDecode(jsonEncode(RhwpCommand.getPageSetup(section: 1).toJson())),
+      {'type': 'getPageSetup', 'section': 1},
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.setPageSetup(
+            section: 1,
+            width: 59528,
+            height: 84189,
+            marginLeft: 8504,
+            marginRight: 8504,
+            marginTop: 5669,
+            marginBottom: 4252,
+            marginHeader: 4252,
+            marginFooter: 4252,
+            marginGutter: 0,
+            landscape: true,
+            binding: 1,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'setPageSetup',
+        'section': 1,
+        'properties': {
+          'width': 59528,
+          'height': 84189,
+          'marginLeft': 8504,
+          'marginRight': 8504,
+          'marginTop': 5669,
+          'marginBottom': 4252,
+          'marginHeader': 4252,
+          'marginFooter': 4252,
+          'marginGutter': 0,
+          'landscape': true,
+          'binding': 1,
+        },
+      },
+    );
+  });
+
+  test('page border fill commands serialize to the Rust envelope', () {
+    expect(
+      jsonDecode(
+        jsonEncode(RhwpCommand.getPageBorderFill(section: 1).toJson()),
+      ),
+      {'type': 'getPageBorderFill', 'section': 1},
+    );
+
+    const borderLine = RhwpBorderLine(type: 1, width: 2, color: '#000000');
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.setPageBorderFill(
+            section: 1,
+            properties: {
+              'spacingLeft': 283,
+              'spacingRight': 283,
+              'spacingTop': 566,
+              'spacingBottom': 566,
+              'borderLeft': borderLine.toJson(),
+              'borderRight': borderLine.toJson(),
+              'borderTop': borderLine.toJson(),
+              'borderBottom': borderLine.toJson(),
+              'fillType': 'solid',
+              'fillColor': '#fef08a',
+            },
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'setPageBorderFill',
+        'section': 1,
+        'properties': {
+          'spacingLeft': 283,
+          'spacingRight': 283,
+          'spacingTop': 566,
+          'spacingBottom': 566,
+          'borderLeft': {'type': 1, 'width': 2, 'color': '#000000'},
+          'borderRight': {'type': 1, 'width': 2, 'color': '#000000'},
+          'borderTop': {'type': 1, 'width': 2, 'color': '#000000'},
+          'borderBottom': {'type': 1, 'width': 2, 'color': '#000000'},
+          'fillType': 'solid',
+          'fillColor': '#fef08a',
+        },
+      },
+    );
+  });
+
+  test('page hide commands serialize to the Rust envelope', () {
+    expect(
+      jsonDecode(
+        jsonEncode(RhwpCommand.getPageHide(section: 1, paragraph: 2).toJson()),
+      ),
+      {'type': 'getPageHide', 'section': 1, 'paragraph': 2},
+    );
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.setPageHide(
+            section: 1,
+            paragraph: 2,
+            hideHeader: true,
+            hideFooter: true,
+            hideMasterPage: true,
+            hideBorder: true,
+            hideFill: true,
+            hidePageNumber: true,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'setPageHide',
+        'section': 1,
+        'paragraph': 2,
+        'hideHeader': true,
+        'hideFooter': true,
+        'hideMasterPage': true,
+        'hideBorder': true,
+        'hideFill': true,
+        'hidePageNum': true,
+      },
+    );
+  });
+
+  test('new number command serializes to the Rust envelope', () {
+    expect(
+      jsonDecode(
+        jsonEncode(
+          RhwpCommand.insertNewNumber(
+            section: 1,
+            paragraph: 2,
+            offset: 3,
+            startNumber: 7,
+          ).toJson(),
+        ),
+      ),
+      {
+        'type': 'insertNewNumber',
+        'section': 1,
+        'paragraph': 2,
+        'offset': 3,
+        'startNumber': 7,
+      },
+    );
+  });
+
+  test('snapshot commands serialize to the Rust command envelope', () {
+    expect(jsonDecode(jsonEncode(RhwpCommand.saveSnapshot().toJson())), {
+      'type': 'saveSnapshot',
+    });
+    expect(jsonDecode(jsonEncode(RhwpCommand.restoreSnapshot(7).toJson())), {
+      'type': 'restoreSnapshot',
+      'snapshotId': 7,
+    });
+    expect(jsonDecode(jsonEncode(RhwpCommand.discardSnapshot(8).toJson())), {
+      'type': 'discardSnapshot',
+      'snapshotId': 8,
+    });
+    expect(jsonDecode(jsonEncode(RhwpCommand.convertToEditable().toJson())), {
+      'type': 'convertToEditable',
+    });
+  });
+
+  test('closed exception has a stable message', () {
+    expect(
+      const RhwpClosedException().toString(),
+      'RhwpException: The rhwp document is already closed.',
+    );
+  });
+
+  test('Web editor controller reports unsupported off Web', () {
+    final controller = RhwpWebEditorController();
+    addTearDown(controller.dispose);
+
+    expect(controller.isAttached, isFalse);
+    expect(
+      controller.exportHwp(),
+      throwsA(isA<RhwpUnsupportedPlatformException>()),
+    );
+    expect(
+      controller.exportDocument(RhwpExportFormat.hwp),
+      throwsA(isA<RhwpUnsupportedPlatformException>()),
+    );
+  });
+
+  test('generated FRB bridge can call a mock Rust API', () async {
+    final api = _FakeRustLibApi();
+    RustLib.initMock(api: api);
+    addTearDown(RustLib.dispose);
+
+    expect(await rust.rhwpVersion(), 'mock-rhwp');
+    expect(api.versionCalls, 1);
+  });
+
+  test('document convenience edit methods use command envelopes', () async {
+    final session = _FakeRhwpSession();
+    final document = RhwpDocument.fromSession(session);
+
+    await document.insertText(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      text: 'hello',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertText',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'text': 'hello',
+    });
+
+    await document.deleteText(section: 0, paragraph: 1, offset: 2, count: 3);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteText',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'count': 3,
+    });
+
+    await document.deleteRange(
+      section: 0,
+      startParagraph: 1,
+      startOffset: 2,
+      endParagraph: 3,
+      endOffset: 4,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteRange',
+      'section': 0,
+      'startParagraph': 1,
+      'startOffset': 2,
+      'endParagraph': 3,
+      'endOffset': 4,
+    });
+
+    await document.applyCharFormat(
+      section: 0,
+      paragraph: 1,
+      startOffset: 2,
+      endOffset: 4,
+      bold: true,
+      superscript: true,
+      subscript: false,
+      emboss: true,
+      engrave: false,
+      fontFamily: '맑은 고딕',
+      fontSize: 1200,
+      textColor: '#16a34a',
+      shadeColor: '#dcfce7',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'applyCharFormat',
+      'section': 0,
+      'paragraph': 1,
+      'startOffset': 2,
+      'endOffset': 4,
+      'properties': {
+        'bold': true,
+        'superscript': true,
+        'subscript': false,
+        'emboss': true,
+        'engrave': false,
+        'fontFamily': '맑은 고딕',
+        'fontSize': 1200,
+        'textColor': '#16a34a',
+        'shadeColor': '#dcfce7',
+      },
+    });
+
+    await document.applyCharFormatRange(
+      section: 0,
+      startParagraph: 1,
+      startOffset: 2,
+      endParagraph: 3,
+      endOffset: 4,
+      italic: true,
+      strikethrough: true,
+      emboss: false,
+      engrave: true,
+      fontFamily: '함초롬바탕',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'applyCharFormatRange',
+      'section': 0,
+      'startParagraph': 1,
+      'startOffset': 2,
+      'endParagraph': 3,
+      'endOffset': 4,
+      'properties': {
+        'italic': true,
+        'strikethrough': true,
+        'emboss': false,
+        'engrave': true,
+        'fontFamily': '함초롬바탕',
+      },
+    });
+
+    await document.applyParaFormat(
+      section: 0,
+      paragraph: 1,
+      alignment: 'center',
+      lineSpacing: 180,
+      lineSpacingType: 'Percent',
+      indent: 120,
+      marginLeft: 300,
+      marginRight: 400,
+      spacingBefore: 50,
+      spacingAfter: 60,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'applyParaFormat',
+      'section': 0,
+      'paragraph': 1,
+      'properties': {
+        'alignment': 'center',
+        'lineSpacing': 180,
+        'lineSpacingType': 'Percent',
+        'indent': 120,
+        'marginLeft': 300,
+        'marginRight': 400,
+        'spacingBefore': 50,
+        'spacingAfter': 60,
+      },
+    });
+
+    await document.applyParaFormatRange(
+      section: 0,
+      startParagraph: 1,
+      endParagraph: 3,
+      alignment: 'right',
+      lineSpacing: 200,
+      lineSpacingType: 'Fixed',
+      indent: -40,
+      marginLeft: 100,
+      marginRight: 200,
+      spacingBefore: 10,
+      spacingAfter: 20,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'applyParaFormatRange',
+      'section': 0,
+      'startParagraph': 1,
+      'endParagraph': 3,
+      'properties': {
+        'alignment': 'right',
+        'lineSpacing': 200,
+        'lineSpacingType': 'Fixed',
+        'indent': -40,
+        'marginLeft': 100,
+        'marginRight': 200,
+        'spacingBefore': 10,
+        'spacingAfter': 20,
+      },
+    });
+
+    await document.applyParaFormatInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      alignment: 'center',
+      lineSpacing: 180,
+      lineSpacingType: 'Percent',
+      indent: 120,
+      marginLeft: 300,
+      marginRight: 400,
+      spacingBefore: 50,
+      spacingAfter: 60,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'applyParaFormatInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'properties': {
+        'alignment': 'center',
+        'lineSpacing': 180,
+        'lineSpacingType': 'Percent',
+        'indent': 120,
+        'marginLeft': 300,
+        'marginRight': 400,
+        'spacingBefore': 50,
+        'spacingAfter': 60,
+      },
+    });
+
+    await document.splitParagraph(section: 0, paragraph: 1, offset: 2);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'splitParagraph',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+
+    await document.insertParagraph(section: 0, paragraph: 2);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertParagraph',
+      'section': 0,
+      'paragraph': 2,
+    });
+
+    await document.mergeParagraph(section: 0, paragraph: 2);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'mergeParagraph',
+      'section': 0,
+      'paragraph': 2,
+    });
+
+    expect(await document.sectionCount(), 1);
+
+    expect(jsonDecode(session.lastCommandJson!), {'type': 'getSectionCount'});
+
+    expect(await document.paragraphCount(section: 0), 2);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getParagraphCount',
+      'section': 0,
+    });
+
+    expect(await document.paragraphLength(section: 0, paragraph: 1), 4);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getParagraphLength',
+      'section': 0,
+      'paragraph': 1,
+    });
+
+    await document.deleteParagraph(section: 0, paragraph: 2);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteParagraph',
+      'section': 0,
+      'paragraph': 2,
+    });
+
+    await document.insertPageBreak(section: 0, paragraph: 1, offset: 2);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertPageBreak',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+
+    await document.insertColumnBreak(section: 0, paragraph: 1, offset: 2);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertColumnBreak',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+
+    await document.insertFootnote(section: 0, paragraph: 1, offset: 2);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertFootnote',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+
+    await document.insertEquation(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      script: 'x^2 + y^2',
+      fontSize: 1200,
+      color: 0x2563eb,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertEquation',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'script': 'x^2 + y^2',
+      'fontSize': 1200,
+      'color': 0x2563eb,
+    });
+
+    final bookmarks = await document.bookmarks();
+
+    expect(jsonDecode(session.lastCommandJson!), {'type': 'getBookmarks'});
+    expect(bookmarks, hasLength(1));
+    expect(bookmarks.single.name, 'intro');
+    expect(bookmarks.single.section, 0);
+    expect(bookmarks.single.paragraph, 1);
+    expect(bookmarks.single.controlIndex, 3);
+    expect(bookmarks.single.charPosition, 2);
+
+    await document.addBookmark(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      name: 'intro',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'addBookmark',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'name': 'intro',
+    });
+
+    await document.deleteBookmark(section: 0, paragraph: 1, controlIndex: 3);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteBookmark',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 3,
+    });
+
+    await document.renameBookmark(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 3,
+      name: 'intro-renamed',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'renameBookmark',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 3,
+      'name': 'intro-renamed',
+    });
+
+    final fields = await document.fields();
+
+    expect(jsonDecode(session.lastCommandJson!), {'type': 'getFieldList'});
+    expect(fields, hasLength(1));
+    expect(fields.single.fieldId, 7);
+    expect(fields.single.fieldType, 'ClickHere');
+    expect(fields.single.name, 'customer');
+    expect(fields.single.guide, '고객명');
+    expect(fields.single.value, 'Old');
+
+    expect(await document.fieldValue(7), 'Old');
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getFieldValue',
+      'fieldId': 7,
+    });
+
+    expect(await document.fieldValueByName('customer'), 'Old');
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getFieldValueByName',
+      'name': 'customer',
+    });
+
+    await document.setFieldValue(fieldId: 7, value: 'New');
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'setFieldValue',
+      'fieldId': 7,
+      'value': 'New',
+    });
+
+    await document.setFieldValueByName(name: 'customer', value: 'New');
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'setFieldValueByName',
+      'name': 'customer',
+      'value': 'New',
+    });
+
+    final fieldInfo = await document.fieldInfoAt(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getFieldInfoAt',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+    expect(fieldInfo.inField, isTrue);
+    expect(fieldInfo.fieldId, 7);
+    expect(fieldInfo.guideName, '고객명');
+
+    final cellFieldInfo = await document.fieldInfoAtInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 3,
+      cellIndex: 4,
+      cellParagraph: 5,
+      offset: 6,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getFieldInfoAtInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 3,
+      'cellIndex': 4,
+      'cellParagraph': 5,
+      'offset': 6,
+      'isTextBox': false,
+    });
+    expect(cellFieldInfo.inField, isTrue);
+
+    expect(
+      await document.setActiveField(section: 0, paragraph: 1, offset: 2),
+      isTrue,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'setActiveField',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+
+    expect(
+      await document.setActiveFieldInTableCell(
+        section: 0,
+        paragraph: 1,
+        controlIndex: 3,
+        cellIndex: 4,
+        cellParagraph: 5,
+        offset: 6,
+      ),
+      isTrue,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'setActiveFieldInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 3,
+      'cellIndex': 4,
+      'cellParagraph': 5,
+      'offset': 6,
+      'isTextBox': false,
+    });
+
+    await document.clearActiveField();
+
+    expect(jsonDecode(session.lastCommandJson!), {'type': 'clearActiveField'});
+
+    await document.removeFieldAt(section: 0, paragraph: 1, offset: 2);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'removeFieldAt',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+
+    await document.removeFieldAtInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 3,
+      cellIndex: 4,
+      cellParagraph: 5,
+      offset: 6,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'removeFieldAtInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 3,
+      'cellIndex': 4,
+      'cellParagraph': 5,
+      'offset': 6,
+      'isTextBox': false,
+    });
+
+    final properties = await document.clickHereProperties(7);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getClickHereProperties',
+      'fieldId': 7,
+    });
+    expect(properties.guide, '고객명');
+    expect(properties.memo, 'memo');
+    expect(properties.name, 'customer');
+    expect(properties.editable, isTrue);
+
+    await document.updateClickHereProperties(
+      fieldId: 7,
+      guide: '변경',
+      memo: 'memo2',
+      name: 'customer2',
+      editable: false,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'updateClickHereProperties',
+      'fieldId': 7,
+      'guide': '변경',
+      'memo': 'memo2',
+      'name': 'customer2',
+      'editable': false,
+    });
+
+    await document.insertPicture(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      imageData: Uint8List.fromList([1, 2, 3]),
+      width: 750,
+      height: 1500,
+      naturalWidthPx: 10,
+      naturalHeightPx: 20,
+      extension: 'png',
+      description: 'sample.png',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertPicture',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'imageData': [1, 2, 3],
+      'width': 750,
+      'height': 1500,
+      'naturalWidthPx': 10,
+      'naturalHeightPx': 20,
+      'extension': 'png',
+      'description': 'sample.png',
+    });
+
+    await document.insertShape(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      width: 9000,
+      height: 6750,
+      horzOffset: 0,
+      vertOffset: 0,
+      shapeType: 'rectangle',
+      treatAsChar: false,
+      textWrap: 'InFrontOfText',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertShape',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'width': 9000,
+      'height': 6750,
+      'horzOffset': 0,
+      'vertOffset': 0,
+      'shapeType': 'rectangle',
+      'treatAsChar': false,
+      'textWrap': 'InFrontOfText',
+      'lineFlipX': false,
+      'lineFlipY': false,
+    });
+
+    await document.insertShape(
+      section: 0,
+      paragraph: 1,
+      offset: 10,
+      width: 12000,
+      height: 6000,
+      shapeType: 'textbox',
+      treatAsChar: true,
+      textWrap: 'Square',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertShape',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 10,
+      'width': 12000,
+      'height': 6000,
+      'horzOffset': 0,
+      'vertOffset': 0,
+      'shapeType': 'textbox',
+      'treatAsChar': true,
+      'textWrap': 'Square',
+      'lineFlipX': false,
+      'lineFlipY': false,
+    });
+
+    await document.insertTable(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      rows: 3,
+      columns: 4,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertTable',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'rows': 3,
+      'columns': 4,
+    });
+
+    await document.createTableEx(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+      rows: 2,
+      columns: 3,
+      treatAsChar: true,
+      columnWidths: const [2000, 2100, 2200],
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'createTableEx',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+      'rows': 2,
+      'columns': 3,
+      'treatAsChar': true,
+      'columnWidths': [2000, 2100, 2200],
+    });
+
+    await document.insertTextInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      offset: 2,
+      text: 'cell',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertTextInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'offset': 2,
+      'text': 'cell',
+    });
+
+    await document.insertHyperlinkInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      offset: 2,
+      url: 'https://example.com',
+      text: 'Example',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertHyperlinkInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'offset': 2,
+      'url': 'https://example.com',
+      'text': 'Example',
+    });
+
+    await document.insertHiddenCommentInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      offset: 2,
+      text: '검토',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertHiddenCommentInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'offset': 2,
+      'text': '검토',
+    });
+
+    await document.hiddenCommentAtInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      offset: 2,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'hiddenCommentAtInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'offset': 2,
+    });
+
+    await document.updateHiddenCommentAtInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      offset: 2,
+      text: '수정',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'updateHiddenCommentAtInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'offset': 2,
+      'text': '수정',
+    });
+
+    await document.deleteHiddenCommentAtInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      offset: 2,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteHiddenCommentAtInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'offset': 2,
+    });
+
+    await document.deleteTextInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      offset: 2,
+      count: 1,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteTextInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'offset': 2,
+      'count': 1,
+    });
+
+    final cellText = await document.textInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      offset: 1,
+      count: 4,
+    );
+
+    expect(cellText, 'cell');
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getTextInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'offset': 1,
+      'count': 4,
+    });
+
+    await document.deleteRangeInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      startCellParagraph: 0,
+      startOffset: 2,
+      endCellParagraph: 1,
+      endOffset: 0,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteRangeInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'startCellParagraph': 0,
+      'startOffset': 2,
+      'endCellParagraph': 1,
+      'endOffset': 0,
+    });
+
+    await document.splitParagraphInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      offset: 2,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'splitParagraphInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'offset': 2,
+    });
+
+    await document.mergeParagraphInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 1,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'mergeParagraphInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 1,
+    });
+
+    await document.cellParagraphCount(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getCellParagraphCount',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+    });
+
+    await document.cellParagraphLength(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getCellParagraphLength',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+    });
+
+    await document.applyCharFormatInTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      startOffset: 0,
+      endOffset: 4,
+      bold: true,
+      fontFamily: '함초롬돋움',
+      fontSize: 1100,
+      textColor: '#2563eb',
+      emboss: true,
+      engrave: false,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'applyCharFormatInTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'startOffset': 0,
+      'endOffset': 4,
+      'properties': {
+        'bold': true,
+        'fontFamily': '함초롬돋움',
+        'fontSize': 1100,
+        'textColor': '#2563eb',
+        'emboss': true,
+        'engrave': false,
+      },
+    });
+
+    await document.applyTableCellStyle(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      fillColor: '#dbeafe',
+      borderColor: '#475569',
+      verticalAlign: 2,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'applyTableCellStyle',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'properties': {
+        'fillType': 'solid',
+        'fillColor': '#dbeafe',
+        'borderLeft': {'type': 1, 'width': 1, 'color': '#475569'},
+        'borderRight': {'type': 1, 'width': 1, 'color': '#475569'},
+        'borderTop': {'type': 1, 'width': 1, 'color': '#475569'},
+        'borderBottom': {'type': 1, 'width': 1, 'color': '#475569'},
+        'verticalAlign': 2,
+      },
+    });
+
+    final styles = await document.styleList();
+
+    expect(styles.map((style) => style.displayName), ['본문', '제목 1']);
+    expect(styles.last.englishName, 'Heading 1');
+    expect(jsonDecode(session.lastCommandJson!), {'type': 'getStyleList'});
+
+    final charProperties = await document.charPropertiesAt(
+      section: 0,
+      paragraph: 1,
+      offset: 2,
+    );
+
+    expect(charProperties.fontFamily, '맑은 고딕');
+    expect(charProperties.fontSize, 1400);
+    expect(charProperties.bold, isTrue);
+    expect(charProperties.underline, isTrue);
+    expect(charProperties.textColor, '#dc2626');
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getCharPropertiesAt',
+      'section': 0,
+      'paragraph': 1,
+      'offset': 2,
+    });
+
+    final cellCharProperties = await document.cellCharPropertiesAt(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 2,
+      cellIndex: 3,
+      cellParagraph: 0,
+      offset: 4,
+    );
+
+    expect(cellCharProperties.shadeColor, '#dbeafe');
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getCellCharPropertiesAt',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 2,
+      'cellIndex': 3,
+      'cellParagraph': 0,
+      'offset': 4,
+    });
+
+    final paraProperties = await document.paraPropertiesAt(
+      section: 0,
+      paragraph: 1,
+    );
+
+    expect(paraProperties.alignment, 'center');
+    expect(paraProperties.lineSpacing, 180);
+    expect(paraProperties.lineSpacingType, 'Percent');
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getParaPropertiesAt',
+      'section': 0,
+      'paragraph': 1,
+    });
+
+    final cellParaProperties = await document.cellParaPropertiesAt(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 2,
+      cellIndex: 3,
+      cellParagraph: 0,
+    );
+
+    expect(cellParaProperties.indent, 20);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getCellParaPropertiesAt',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 2,
+      'cellIndex': 3,
+      'cellParagraph': 0,
+    });
+
+    await document.applyStyle(section: 0, paragraph: 1, styleId: 3);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'applyStyle',
+      'section': 0,
+      'paragraph': 1,
+      'styleId': 3,
+    });
+
+    await document.applyCellStyle(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      cellParagraph: 0,
+      styleId: 3,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'applyCellStyle',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'cellParagraph': 0,
+      'styleId': 3,
+    });
+
+    final header = await document.headerFooter(
+      section: 0,
+      isHeader: true,
+      applyTo: 0,
+    );
+
+    expect(header.exists, isTrue);
+    expect(header.text, 'Header');
+    expect(header.paragraphCount, 1);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getHeaderFooter',
+      'section': 0,
+      'isHeader': true,
+      'applyTo': 0,
+    });
+
+    await document.insertTextInHeaderFooter(
+      section: 0,
+      isHeader: true,
+      paragraph: 0,
+      offset: 6,
+      text: ' Text',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertTextInHeaderFooter',
+      'section': 0,
+      'isHeader': true,
+      'applyTo': 0,
+      'paragraph': 0,
+      'offset': 6,
+      'text': ' Text',
+    });
+
+    await document.deleteTextInHeaderFooter(
+      section: 0,
+      isHeader: true,
+      paragraph: 0,
+      offset: 0,
+      count: 6,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteTextInHeaderFooter',
+      'section': 0,
+      'isHeader': true,
+      'applyTo': 0,
+      'paragraph': 0,
+      'offset': 0,
+      'count': 6,
+    });
+
+    final headerFooterList = await document.headerFooterList(section: 0);
+    expect(headerFooterList.items, hasLength(2));
+    expect(headerFooterList.items.first.isHeader, isTrue);
+    expect(headerFooterList.items.last.isHeader, isFalse);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getHeaderFooterList',
+      'section': 0,
+      'isHeader': true,
+      'applyTo': 0,
+    });
+
+    await document.deleteHeaderFooter(section: 0, isHeader: false);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteHeaderFooter',
+      'section': 0,
+      'isHeader': false,
+      'applyTo': 0,
+    });
+
+    await document.insertTableRow(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      row: 2,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertTableRow',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'row': 2,
+      'below': true,
+    });
+
+    await document.insertTableColumn(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      column: 2,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertTableColumn',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'column': 2,
+      'right': true,
+    });
+
+    await document.deleteTableRow(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      row: 2,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteTableRow',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'row': 2,
+    });
+
+    await document.deleteTableColumn(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      column: 2,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteTableColumn',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'column': 2,
+    });
+
+    await document.mergeTableCells(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      startRow: 0,
+      startColumn: 0,
+      endRow: 1,
+      endColumn: 1,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'mergeTableCells',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'startRow': 0,
+      'startColumn': 0,
+      'endRow': 1,
+      'endColumn': 1,
+    });
+
+    await document.splitTableCell(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      row: 0,
+      column: 0,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'splitTableCell',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'row': 0,
+      'column': 0,
+    });
+
+    await document.splitTableCellInto(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      row: 0,
+      column: 0,
+      rows: 3,
+      columns: 2,
+      equalRowHeight: false,
+      mergeFirst: true,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'splitTableCellInto',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'row': 0,
+      'column': 0,
+      'rows': 3,
+      'columns': 2,
+      'equalRowHeight': false,
+      'mergeFirst': true,
+    });
+
+    await document.splitTableCellsInRange(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      startRow: 0,
+      startColumn: 1,
+      endRow: 2,
+      endColumn: 3,
+      rows: 3,
+      columns: 2,
+      equalRowHeight: true,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'splitTableCellsInRange',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'startRow': 0,
+      'startColumn': 1,
+      'endRow': 2,
+      'endColumn': 3,
+      'rows': 3,
+      'columns': 2,
+      'equalRowHeight': true,
+    });
+
+    final tableProperties = await document.tableProperties(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+    );
+
+    expect(tableProperties.cellSpacing, 10);
+    expect(tableProperties.paddingLeft, 100);
+    expect(tableProperties.paddingRight, 110);
+    expect(tableProperties.paddingTop, 120);
+    expect(tableProperties.paddingBottom, 130);
+    expect(tableProperties.pageBreak, 1);
+    expect(tableProperties.repeatHeader, isFalse);
+    expect(tableProperties.hasCaption, isTrue);
+    expect(tableProperties.captionDirection, 3);
+    expect(tableProperties.captionVerticalAlign, 0);
+    expect(tableProperties.captionWidth, 8504);
+    expect(tableProperties.captionSpacing, 850);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getTableProperties',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+    });
+
+    await document.setTableProperties(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellSpacing: 20,
+      paddingLeft: 210,
+      paddingRight: 220,
+      paddingTop: 230,
+      paddingBottom: 240,
+      pageBreak: 2,
+      repeatHeader: true,
+      hasCaption: true,
+      captionDirection: 2,
+      captionVerticalAlign: 1,
+      captionWidth: 9000,
+      captionSpacing: 700,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'setTableProperties',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'properties': {
+        'cellSpacing': 20,
+        'paddingLeft': 210,
+        'paddingRight': 220,
+        'paddingTop': 230,
+        'paddingBottom': 240,
+        'pageBreak': 2,
+        'repeatHeader': true,
+        'hasCaption': true,
+        'captionDirection': 2,
+        'captionVertAlign': 1,
+        'captionWidth': 9000,
+        'captionSpacing': 700,
+      },
+    });
+
+    final cellProperties = await document.cellProperties(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+    );
+
+    expect(cellProperties.width, 5000);
+    expect(cellProperties.height, 3000);
+    expect(cellProperties.paddingLeft, 100);
+    expect(cellProperties.paddingRight, 110);
+    expect(cellProperties.paddingTop, 120);
+    expect(cellProperties.paddingBottom, 130);
+    expect(cellProperties.verticalAlign, 1);
+    expect(cellProperties.textDirection, 0);
+    expect(cellProperties.isHeader, isFalse);
+    expect(cellProperties.cellProtect, isFalse);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getCellProperties',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+    });
+
+    await document.setCellProperties(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      cellIndex: 2,
+      width: 6000,
+      height: 3200,
+      paddingLeft: 210,
+      paddingRight: 220,
+      paddingTop: 230,
+      paddingBottom: 240,
+      verticalAlign: 2,
+      textDirection: 1,
+      isHeader: true,
+      cellProtect: true,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'setCellProperties',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'cellIndex': 2,
+      'properties': {
+        'width': 6000,
+        'height': 3200,
+        'paddingLeft': 210,
+        'paddingRight': 220,
+        'paddingTop': 230,
+        'paddingBottom': 240,
+        'verticalAlign': 2,
+        'textDirection': 1,
+        'isHeader': true,
+        'cellProtect': true,
+      },
+    });
+
+    await document.resizeTableCells(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      updates: const [
+        RhwpTableCellResize(cellIndex: 2, widthDelta: 120),
+        RhwpTableCellResize(cellIndex: 3, heightDelta: -80),
+      ],
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'resizeTableCells',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'updates': [
+        {'cellIdx': 2, 'widthDelta': 120},
+        {'cellIdx': 3, 'heightDelta': -80},
+      ],
+    });
+
+    await document.evaluateTableFormula(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      row: 1,
+      column: 2,
+      formula: '=SUM(A1:B1)',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'evaluateTableFormula',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'row': 1,
+      'column': 2,
+      'formula': '=SUM(A1:B1)',
+      'writeResult': true,
+    });
+
+    await document.deleteTableControl(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteTableControl',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+    });
+
+    await document.moveTableOffset(
+      section: 0,
+      paragraph: 1,
+      controlIndex: 0,
+      deltaH: 12,
+      deltaV: -8,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'moveTableOffset',
+      'section': 0,
+      'paragraph': 1,
+      'controlIndex': 0,
+      'deltaH': 12,
+      'deltaV': -8,
+    });
+
+    await document.deleteObjectControl(
+      section: 0,
+      paragraph: 2,
+      controlIndex: 1,
+      objectType: 'shape',
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'deleteObjectControl',
+      'section': 0,
+      'paragraph': 2,
+      'controlIndex': 1,
+      'objectType': 'shape',
+    });
+
+    await document.copyObjectControl(section: 0, paragraph: 2, controlIndex: 1);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'copyObjectControl',
+      'section': 0,
+      'paragraph': 2,
+      'controlIndex': 1,
+    });
+
+    final hasObjectControl = await document.clipboardHasObjectControl();
+    expect(hasObjectControl, isTrue);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'clipboardHasObjectControl',
+    });
+
+    await document.pasteObjectControl(section: 0, paragraph: 2, offset: 1);
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'pasteObjectControl',
+      'section': 0,
+      'paragraph': 2,
+      'offset': 1,
+    });
+
+    final bodyHtml = await document.exportSelectionHtml(
+      section: 0,
+      startParagraph: 1,
+      startOffset: 2,
+      endParagraph: 3,
+      endOffset: 4,
+    );
+    expect(bodyHtml, contains('StartFragment'));
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'exportSelectionHtml',
+      'section': 0,
+      'startParagraph': 1,
+      'startOffset': 2,
+      'endParagraph': 3,
+      'endOffset': 4,
+    });
+
+    final cellHtml = await document.exportSelectionInCellHtml(
+      section: 0,
+      paragraph: 2,
+      controlIndex: 1,
+      cellIndex: 3,
+      startCellParagraph: 4,
+      startOffset: 5,
+      endCellParagraph: 6,
+      endOffset: 7,
+    );
+    expect(cellHtml, contains('StartFragment'));
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'exportSelectionInCellHtml',
+      'section': 0,
+      'paragraph': 2,
+      'controlIndex': 1,
+      'cellIndex': 3,
+      'startCellParagraph': 4,
+      'startOffset': 5,
+      'endCellParagraph': 6,
+      'endOffset': 7,
+    });
+
+    final controlHtml = await document.exportControlHtml(
+      section: 0,
+      paragraph: 2,
+      controlIndex: 1,
+    );
+    expect(controlHtml, contains('StartFragment'));
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'exportControlHtml',
+      'section': 0,
+      'paragraph': 2,
+      'controlIndex': 1,
+    });
+
+    await document.pasteHtml(
+      section: 0,
+      paragraph: 2,
+      offset: 3,
+      html: '<p>A</p>',
+    );
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'pasteHtml',
+      'section': 0,
+      'paragraph': 2,
+      'offset': 3,
+      'html': '<p>A</p>',
+    });
+
+    await document.pasteHtmlInCell(
+      section: 0,
+      paragraph: 2,
+      controlIndex: 1,
+      cellIndex: 3,
+      cellParagraph: 4,
+      offset: 5,
+      html: '<p>A</p>',
+    );
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'pasteHtmlInCell',
+      'section': 0,
+      'paragraph': 2,
+      'controlIndex': 1,
+      'cellIndex': 3,
+      'cellParagraph': 4,
+      'offset': 5,
+      'html': '<p>A</p>',
+    });
+
+    await document.changeObjectZOrder(
+      section: 0,
+      paragraph: 2,
+      controlIndex: 1,
+      objectType: 'shape',
+      operation: RhwpObjectZOrderOperation.front,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'changeObjectZOrder',
+      'section': 0,
+      'paragraph': 2,
+      'controlIndex': 1,
+      'objectType': 'shape',
+      'operation': 'front',
+    });
+
+    final objectProperties = await document.objectProperties(
+      section: 0,
+      paragraph: 2,
+      controlIndex: 1,
+      objectType: 'shape',
+    );
+
+    expect(objectProperties.width, 1000);
+    expect(objectProperties.height, 2000);
+    expect(objectProperties.horzOffset, 30);
+    expect(objectProperties.vertOffset, 40);
+    expect(objectProperties.rotationAngle, 15);
+    expect(objectProperties.horzFlip, true);
+    expect(objectProperties.vertFlip, false);
+    expect(objectProperties.supportsTransform, true);
+    expect(objectProperties.hasCaption, false);
+    expect(objectProperties.captionDirection, 'Bottom');
+    expect(objectProperties.captionVerticalAlign, 'Top');
+    expect(objectProperties.captionWidth, 0);
+    expect(objectProperties.captionSpacing, 0);
+    expect(objectProperties.captionIncludeMargin, false);
+    expect(objectProperties.supportsCaption, true);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getObjectProperties',
+      'section': 0,
+      'paragraph': 2,
+      'controlIndex': 1,
+      'objectType': 'shape',
+    });
+
+    await document.setObjectProperties(
+      section: 0,
+      paragraph: 2,
+      controlIndex: 1,
+      objectType: 'shape',
+      width: 1200,
+      height: 2400,
+      horzOffset: 80,
+      vertOffset: 90,
+      rotationAngle: 90,
+      horzFlip: true,
+      vertFlip: false,
+      hasCaption: true,
+      captionDirection: 'Bottom',
+      captionVerticalAlign: 'Top',
+      captionWidth: 1000,
+      captionSpacing: 120,
+      captionIncludeMargin: true,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'setObjectProperties',
+      'section': 0,
+      'paragraph': 2,
+      'controlIndex': 1,
+      'objectType': 'shape',
+      'properties': {
+        'width': 1200,
+        'height': 2400,
+        'horzOffset': 80,
+        'vertOffset': 90,
+        'rotationAngle': 90,
+        'horzFlip': true,
+        'vertFlip': false,
+        'hasCaption': true,
+        'captionDirection': 'Bottom',
+        'captionVertAlign': 'Top',
+        'captionWidth': 1000,
+        'captionSpacing': 120,
+        'captionIncludeMargin': true,
+      },
+    });
+
+    await document.moveLineEndpoint(
+      section: 0,
+      paragraph: 2,
+      controlIndex: 1,
+      startX: 120,
+      startY: 60,
+      endX: 192,
+      endY: 116,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'moveLineEndpoint',
+      'section': 0,
+      'paragraph': 2,
+      'controlIndex': 1,
+      'startX': 120,
+      'startY': 60,
+      'endX': 192,
+      'endY': 116,
+    });
+
+    final pageSetup = await document.pageSetup(section: 0);
+    expect(pageSetup.width, 59528);
+    expect(pageSetup.height, 84189);
+    expect(pageSetup.marginLeft, 8504);
+    expect(pageSetup.landscape, isFalse);
+    expect(pageSetup.binding, 0);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getPageSetup',
+      'section': 0,
+    });
+
+    await document.setPageSetup(
+      section: 0,
+      width: 56693,
+      height: 85040,
+      marginLeft: 2835,
+      marginRight: 2835,
+      marginTop: 4252,
+      marginBottom: 4252,
+      marginHeader: 2835,
+      marginFooter: 2835,
+      marginGutter: 0,
+      landscape: true,
+      binding: 1,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'setPageSetup',
+      'section': 0,
+      'properties': {
+        'width': 56693,
+        'height': 85040,
+        'marginLeft': 2835,
+        'marginRight': 2835,
+        'marginTop': 4252,
+        'marginBottom': 4252,
+        'marginHeader': 2835,
+        'marginFooter': 2835,
+        'marginGutter': 0,
+        'landscape': true,
+        'binding': 1,
+      },
+    });
+
+    final pageBorderFill = await document.pageBorderFill(section: 0);
+    expect(pageBorderFill.spacingLeft, 283);
+    expect(pageBorderFill.spacingTop, 566);
+    expect(pageBorderFill.borderFillId, 2);
+    expect(pageBorderFill.borderLeft.type, 1);
+    expect(pageBorderFill.borderLeft.width, 2);
+    expect(pageBorderFill.fillType, 'solid');
+    expect(pageBorderFill.fillColor, '#fef08a');
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getPageBorderFill',
+      'section': 0,
+    });
+
+    const borderLine = RhwpBorderLine(type: 1, width: 2, color: '#000000');
+    await document.setPageBorderFill(
+      section: 0,
+      spacingLeft: 283,
+      spacingRight: 283,
+      spacingTop: 566,
+      spacingBottom: 566,
+      borderLeft: borderLine,
+      borderRight: borderLine,
+      borderTop: borderLine,
+      borderBottom: borderLine,
+      fillColor: '#fef08a',
+      patternColor: '#000000',
+      patternType: 0,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'setPageBorderFill',
+      'section': 0,
+      'properties': {
+        'spacingLeft': 283,
+        'spacingRight': 283,
+        'spacingTop': 566,
+        'spacingBottom': 566,
+        'borderLeft': {'type': 1, 'width': 2, 'color': '#000000'},
+        'borderRight': {'type': 1, 'width': 2, 'color': '#000000'},
+        'borderTop': {'type': 1, 'width': 2, 'color': '#000000'},
+        'borderBottom': {'type': 1, 'width': 2, 'color': '#000000'},
+        'fillType': 'solid',
+        'fillColor': '#fef08a',
+        'patternColor': '#000000',
+        'patternType': 0,
+      },
+    });
+
+    final pageHide = await document.pageHide(section: 0, paragraph: 2);
+    expect(pageHide.exists, isTrue);
+    expect(pageHide.hideHeader, isFalse);
+    expect(pageHide.hideFooter, isTrue);
+    expect(pageHide.hidePageNumber, isFalse);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'getPageHide',
+      'section': 0,
+      'paragraph': 2,
+    });
+
+    await document.setPageHide(
+      section: 0,
+      paragraph: 2,
+      hideHeader: true,
+      hideFooter: true,
+      hideBorder: true,
+      hidePageNumber: true,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'setPageHide',
+      'section': 0,
+      'paragraph': 2,
+      'hideHeader': true,
+      'hideFooter': true,
+      'hideMasterPage': false,
+      'hideBorder': true,
+      'hideFill': false,
+      'hidePageNum': true,
+    });
+
+    await document.insertNewNumber(
+      section: 0,
+      paragraph: 2,
+      offset: 3,
+      startNumber: 7,
+    );
+
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'insertNewNumber',
+      'section': 0,
+      'paragraph': 2,
+      'offset': 3,
+      'startNumber': 7,
+    });
+
+    expect(await document.saveSnapshot(), 1);
+    expect(jsonDecode(session.lastCommandJson!), {'type': 'saveSnapshot'});
+
+    await document.restoreSnapshot(1);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'restoreSnapshot',
+      'snapshotId': 1,
+    });
+
+    await document.discardSnapshot(1);
+    expect(jsonDecode(session.lastCommandJson!), {
+      'type': 'discardSnapshot',
+      'snapshotId': 1,
+    });
+
+    await document.convertToEditable();
+    expect(jsonDecode(session.lastCommandJson!), {'type': 'convertToEditable'});
+  });
+
+  test('document export helpers forward supported formats', () async {
+    final session = _FakeRhwpSession();
+    final document = RhwpDocument.fromSession(session);
+
+    expect(await document.exportHwp(), [0x48, 0x57, 0x50]);
+    expect(await document.exportHwpx(), [0x48, 0x57, 0x50, 0x58]);
+    expect(await document.exportPdf(), [0x50, 0x44, 0x46]);
+    expect(await document.exportDocx(), [0x44, 0x4f, 0x43, 0x58]);
+    expect(utf8.decode(await document.exportText(page: 2)), 'text page 2');
+    expect(utf8.decode(await document.exportMarkdown(page: 3)), '# page 3');
+    expect(
+      utf8.decode(await document.exportPageSvg(page: 4)),
+      '<svg data-page="4"/>',
+    );
+
+    expect(session.exportHwpCalls, 1);
+    expect(session.exportHwpxCalls, 1);
+    expect(session.exportPdfCalls, 1);
+    expect(session.exportDocxCalls, 1);
+    expect(session.extractedTextPages, [2]);
+    expect(session.extractedMarkdownPages, [3]);
+    expect(session.renderedSvgPages, [4]);
+  });
+
+  test('export formats expose save metadata', () {
+    expect(RhwpExportFormat.hwp.fileExtension, 'hwp');
+    expect(RhwpExportFormat.hwpx.mimeType, 'application/vnd.hancom.hwpx');
+    expect(RhwpExportFormat.pdf.mimeType, 'application/pdf');
+    expect(
+      RhwpExportFormat.docx.mimeType,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    expect(RhwpExportFormat.text.fileExtension, 'txt');
+    expect(RhwpExportFormat.markdown.fileExtension, 'md');
+    expect(RhwpExportFormat.svg.mimeType, 'image/svg+xml');
+  });
+
+  test('document exportDocument returns bytes with save metadata', () async {
+    final session = _FakeRhwpSession();
+    session.fileName = '/tmp/source/sample.hwp';
+    final document = RhwpDocument.fromSession(session);
+
+    final pdf = await document.exportDocument(RhwpExportFormat.pdf);
+
+    expect(pdf.format, RhwpExportFormat.pdf);
+    expect(pdf.bytes, [0x50, 0x44, 0x46]);
+    expect(pdf.fileName, 'sample.pdf');
+    expect(pdf.mimeType, 'application/pdf');
+    expect(pdf.intent, RhwpExportIntent.export);
+
+    final svg = await document.exportDocument(
+      RhwpExportFormat.svg,
+      sourceFileName: 'picked.hwpx',
+      page: 2,
+      intent: RhwpExportIntent.saveAs,
+    );
+
+    expect(utf8.decode(svg.bytes), '<svg data-page="2"/>');
+    expect(svg.fileName, 'picked-page-3.svg');
+    expect(svg.mimeType, 'image/svg+xml');
+    expect(svg.intent, RhwpExportIntent.saveAs);
+    expect(session.renderedSvgPages, [2]);
+  });
+
+  test('exported document default file names are robust', () {
+    expect(
+      RhwpExportedDocument.defaultFileName(
+        format: RhwpExportFormat.markdown,
+        sourceFileName: r'C:\docs\report.hwp',
+      ),
+      'report.md',
+    );
+    expect(
+      RhwpExportedDocument.defaultFileName(format: RhwpExportFormat.text),
+      'document.txt',
+    );
+    expect(
+      RhwpExportedDocument.defaultFileName(
+        format: RhwpExportFormat.svg,
+        sourceFileName: '.hwp',
+        page: 0,
+      ),
+      'document-page-1.svg',
+    );
+  });
+
+  test('page layer tree model flattens tolerant layer JSON', () {
+    final tree = RhwpLayerTree.fromJsonString(
+      0,
+      jsonEncode({
+        'type': 'page',
+        'children': [
+          {
+            'kind': 'paragraph',
+            'runs': [
+              {
+                'type': 'span',
+                'text': 'Hello',
+                'bounds': {'x': 12, 'y': 34, 'width': 56, 'height': 78},
+              },
+            ],
+          },
+          {
+            'type': 'shape',
+            'rect': {'left': 1, 'top': 2, 'right': 11, 'bottom': 22},
+          },
+        ],
+      }),
+    );
+
+    expect(tree.page, 0);
+    expect(tree.root.type, 'page');
+    expect(tree.nodes.map((node) => node.type), [
+      'page',
+      'paragraph',
+      'span',
+      'shape',
+    ]);
+    expect(tree.textNodes.single.text, 'Hello');
+    expect(tree.textNodes.single.bounds, const Rect.fromLTWH(12, 34, 56, 78));
+    expect(
+      tree.findByType('shape').single.bounds,
+      const Rect.fromLTRB(1, 2, 11, 22),
+    );
+    expect(tree.objects, hasLength(1));
+    expect(tree.objects.single.type, 'shape');
+    expect(tree.objectForPoint(const Offset(5, 10)), same(tree.objects.single));
+    expect(tree.objectForPoint(const Offset(20, 20)), isNull);
+    expect(tree.boundedNodes.length, 2);
+  });
+
+  test('document page layer tree helper decodes session JSON', () async {
+    final session = _FakeRhwpSession();
+    session.pageLayerTreeJson = jsonEncode({
+      'type': 'page',
+      'nodes': [
+        {
+          'type': 'text',
+          'content': 'from session',
+          'bbox': [1, 2, 3, 4],
+        },
+      ],
+    });
+    final document = RhwpDocument.fromSession(session);
+
+    final tree = await document.pageLayerTreeModel(5);
+
+    expect(session.pageLayerTreePages, [5]);
+    expect(tree.textNodes.single.text, 'from session');
+    expect(tree.textNodes.single.bounds, const Rect.fromLTWH(1, 2, 3, 4));
+  });
+
+  test('page layer tree model maps text run source offsets to page rects', () {
+    final tree = RhwpLayerTree.fromJsonString(
+      0,
+      jsonEncode(_textRunLayerTreeJson(charStart: 3)),
+    );
+
+    final run = tree.textRuns.single;
+    expect(tree.pageSize, const Size(240, 180));
+    expect(run.section, 0);
+    expect(run.paragraph, 0);
+    expect(run.charStart, 3);
+    expect(run.charEnd, 7);
+    expect(run.bounds, const Rect.fromLTWH(20, 30, 60, 12));
+
+    final caret = tree.caretRectFor(section: 0, paragraph: 0, offset: 5);
+    expect(caret!.left, closeTo(40, 0.001));
+    expect(caret.top, 30);
+
+    final selection = tree.selectionRectsFor(
+      section: 0,
+      paragraph: 0,
+      startOffset: 4,
+      endOffset: 7,
+    );
+    expect(selection.single, const Rect.fromLTRB(30, 30, 60, 42));
+
+    final hit = tree.textPositionForPoint(const Offset(52, 36));
+    expect(hit, isNotNull);
+    expect(hit!.section, 0);
+    expect(hit.paragraph, 0);
+    expect(hit.offset, 6);
+    expect(
+      tree.textPositionForPoint(const Offset(52, 80), verticalTolerance: 2),
+      isNull,
+    );
+  });
+
+  test('page layer tree model maps table cell hit context', () {
+    final tree = RhwpLayerTree.fromJsonString(
+      0,
+      jsonEncode(_tableCellLayerTreeJson()),
+    );
+
+    expect(tree.tableCells, hasLength(1));
+    final cell = tree.tableCells.single;
+    expect(cell.bounds, const Rect.fromLTWH(90, 50, 40, 30));
+    expect(cell.section, 0);
+    expect(cell.paragraph, 5);
+    expect(cell.controlIndex, 2);
+    expect(cell.row, 1);
+    expect(cell.column, 3);
+    expect(cell.rowSpan, 2);
+    expect(cell.columnSpan, 1);
+    expect(cell.modelCellIndex, 7);
+    expect(cell.endRow, 2);
+    expect(cell.endColumn, 3);
+    expect(tree.tableCellForPoint(const Offset(100, 60)), same(cell));
+    expect(tree.tableCellForPoint(const Offset(10, 10)), isNull);
+  });
+
+  test('page layer tree model maps table cell text source context', () {
+    final tree = RhwpLayerTree.fromJsonString(
+      0,
+      jsonEncode(_cellTextRunLayerTreeJson()),
+    );
+
+    final hit = tree.textPositionForPoint(const Offset(118, 68));
+
+    expect(hit, isNotNull);
+    expect(hit!.offset, 3);
+    expect(hit.cellContext, isNotNull);
+    expect(hit.cellContext!.parentParagraph, 5);
+    expect(hit.cellContext!.controlIndex, 2);
+    expect(hit.cellContext!.cellIndex, 7);
+    expect(hit.cellContext!.cellParagraph, 0);
+    expect(hit.cellContext!.textDirection, 0);
+  });
+
+  test('page layer tree caret rect can filter table cell text context', () {
+    final tree = RhwpLayerTree.fromJsonString(
+      0,
+      jsonEncode(_ambiguousCellTextRunLayerTreeJson()),
+    );
+
+    final bodyCaret = tree.caretRectFor(section: 0, paragraph: 5, offset: 2);
+    final cellCaret = tree.caretRectFor(
+      section: 0,
+      paragraph: 5,
+      offset: 2,
+      cellContext: const RhwpCellTextContext(
+        parentParagraph: 5,
+        controlIndex: 2,
+        cellIndex: 7,
+        cellParagraph: 0,
+        textDirection: 0,
+      ),
+    );
+
+    expect(bodyCaret, isNotNull);
+    expect(cellCaret, isNotNull);
+    expect(bodyCaret!.left, closeTo(40, 0.001));
+    expect(cellCaret!.left, closeTo(110, 0.001));
+
+    final cellSelection = tree.selectionRectsForRange(
+      startSection: 0,
+      startParagraph: 5,
+      startOffset: 1,
+      endSection: 0,
+      endParagraph: 5,
+      endOffset: 3,
+      cellContext: const RhwpCellTextContext(
+        parentParagraph: 5,
+        controlIndex: 2,
+        cellIndex: 7,
+        cellParagraph: 0,
+        textDirection: 0,
+      ),
+    );
+    expect(cellSelection.single.left, closeTo(100, 0.001));
+    expect(cellSelection.single.right, closeTo(120, 0.001));
+  });
+
+  test('page layer tree model maps multi-paragraph selection ranges', () {
+    final tree = RhwpLayerTree.fromJsonString(
+      0,
+      jsonEncode(_multiParagraphLayerTreeJson()),
+    );
+
+    final selection = tree.selectionRectsForRange(
+      startSection: 0,
+      startParagraph: 0,
+      startOffset: 2,
+      endSection: 0,
+      endParagraph: 1,
+      endOffset: 2,
+    );
+
+    expect(selection, [
+      const Rect.fromLTRB(40, 30, 60, 42),
+      const Rect.fromLTRB(20, 60, 40, 72),
+    ]);
+
+    final text = tree.textForRange(
+      startSection: 0,
+      startParagraph: 0,
+      startOffset: 2,
+      endSection: 0,
+      endParagraph: 1,
+      endOffset: 2,
+    );
+    expect(text, 'cd\nab');
+  });
+}
+
+Map<String, Object?> _textRunLayerTreeJson({required int charStart}) {
+  return {
+    'pageWidth': 240,
+    'pageHeight': 180,
+    'root': {
+      'kind': 'group',
+      'bounds': {'x': 0, 'y': 0, 'width': 240, 'height': 180},
+      'children': [
+        {
+          'kind': 'leaf',
+          'bounds': {'x': 20, 'y': 30, 'width': 60, 'height': 12},
+          'ops': [
+            {
+              'type': 'textRun',
+              'bbox': {'x': 20, 'y': 30, 'width': 60, 'height': 12},
+              'text': 'abcd',
+              'source': {
+                'id': 0,
+                'utf16Range': {'start': 0, 'end': 4},
+                'stableSourceKey': 'section:0/para:0/char:$charStart',
+              },
+              'placement': {
+                'runToPage': {'a': 1, 'b': 0, 'c': 0, 'd': 1, 'e': 20, 'f': 40},
+                'baselineY': 0,
+              },
+              'clusters': [
+                _textCluster(0, 1, 0),
+                _textCluster(1, 2, 10),
+                _textCluster(2, 3, 20),
+                _textCluster(3, 4, 30),
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    'textSources': [
+      {
+        'id': 0,
+        'text': 'abcd',
+        'utf16Range': {'start': 0, 'end': 4},
+        'stableSourceKey': 'section:0/para:0/char:$charStart',
+        'annotations': [],
+      },
+    ],
+  };
+}
+
+Map<String, Object?> _tableCellLayerTreeJson() {
+  return {
+    'pageWidth': 240,
+    'pageHeight': 180,
+    'root': {
+      'kind': 'group',
+      'bounds': {'x': 0, 'y': 0, 'width': 240, 'height': 180},
+      'children': [
+        {
+          'kind': 'group',
+          'bounds': {'x': 80, 'y': 40, 'width': 100, 'height': 80},
+          'groupKind': {
+            'kind': 'table',
+            'sectionIndex': 0,
+            'paraIndex': 5,
+            'controlIndex': 2,
+            'rowCount': 4,
+            'colCount': 5,
+          },
+          'children': [
+            {
+              'kind': 'group',
+              'bounds': {'x': 90, 'y': 50, 'width': 40, 'height': 30},
+              'groupKind': {
+                'kind': 'tableCell',
+                'row': 1,
+                'col': 3,
+                'rowSpan': 2,
+                'colSpan': 1,
+                'modelCellIndex': 7,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+Map<String, Object?> _cellTextRunLayerTreeJson() {
+  return {
+    'pageWidth': 240,
+    'pageHeight': 180,
+    'root': {
+      'kind': 'group',
+      'bounds': {'x': 0, 'y': 0, 'width': 240, 'height': 180},
+      'children': [
+        {
+          'kind': 'leaf',
+          'bounds': {'x': 90, 'y': 60, 'width': 80, 'height': 16},
+          'ops': [
+            {
+              'type': 'textRun',
+              'bbox': {'x': 90, 'y': 60, 'width': 80, 'height': 16},
+              'text': 'cell',
+              'source': {
+                'id': 0,
+                'utf16Range': {'start': 0, 'end': 4},
+                'stableSourceKey': 'section:0/para:5/char:0/cell:5:2:7:0:0',
+              },
+              'placement': {
+                'runToPage': {'a': 1, 'b': 0, 'c': 0, 'd': 1, 'e': 90, 'f': 72},
+                'baselineY': 0,
+              },
+              'clusters': [
+                _textCluster(0, 1, 0),
+                _textCluster(1, 2, 10),
+                _textCluster(2, 3, 20),
+                _textCluster(3, 4, 30),
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+Map<String, Object?> _ambiguousCellTextRunLayerTreeJson() {
+  return {
+    'pageWidth': 240,
+    'pageHeight': 180,
+    'root': {
+      'kind': 'group',
+      'bounds': {'x': 0, 'y': 0, 'width': 240, 'height': 180},
+      'children': [
+        {
+          'kind': 'leaf',
+          'bounds': {'x': 20, 'y': 30, 'width': 80, 'height': 16},
+          'ops': [
+            {
+              'type': 'textRun',
+              'bbox': {'x': 20, 'y': 30, 'width': 80, 'height': 16},
+              'text': 'body',
+              'source': {
+                'id': 0,
+                'utf16Range': {'start': 0, 'end': 4},
+                'stableSourceKey': 'section:0/para:5/char:0',
+              },
+              'placement': {
+                'runToPage': {'a': 1, 'b': 0, 'c': 0, 'd': 1, 'e': 20, 'f': 42},
+                'baselineY': 0,
+              },
+              'clusters': [
+                _textCluster(0, 1, 0),
+                _textCluster(1, 2, 10),
+                _textCluster(2, 3, 20),
+                _textCluster(3, 4, 30),
+              ],
+            },
+          ],
+        },
+        {
+          'kind': 'leaf',
+          'bounds': {'x': 90, 'y': 60, 'width': 80, 'height': 16},
+          'ops': [
+            {
+              'type': 'textRun',
+              'bbox': {'x': 90, 'y': 60, 'width': 80, 'height': 16},
+              'text': 'cell',
+              'source': {
+                'id': 1,
+                'utf16Range': {'start': 0, 'end': 4},
+                'stableSourceKey': 'section:0/para:5/char:0/cell:5:2:7:0:0',
+              },
+              'placement': {
+                'runToPage': {'a': 1, 'b': 0, 'c': 0, 'd': 1, 'e': 90, 'f': 72},
+                'baselineY': 0,
+              },
+              'clusters': [
+                _textCluster(0, 1, 0),
+                _textCluster(1, 2, 10),
+                _textCluster(2, 3, 20),
+                _textCluster(3, 4, 30),
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+Map<String, Object?> _multiParagraphLayerTreeJson() {
+  return {
+    'pageWidth': 240,
+    'pageHeight': 180,
+    'root': {
+      'kind': 'group',
+      'bounds': {'x': 0, 'y': 0, 'width': 240, 'height': 180},
+      'children': [
+        _textRunLayerNode(paragraph: 0, y: 30),
+        _textRunLayerNode(paragraph: 1, y: 60),
+      ],
+    },
+  };
+}
+
+Map<String, Object?> _textRunLayerNode({
+  required int paragraph,
+  required double y,
+}) {
+  return {
+    'kind': 'leaf',
+    'bounds': {'x': 20, 'y': y, 'width': 60, 'height': 12},
+    'ops': [
+      {
+        'type': 'textRun',
+        'bbox': {'x': 20, 'y': y, 'width': 60, 'height': 12},
+        'text': 'abcd',
+        'source': {
+          'id': paragraph,
+          'utf16Range': {'start': 0, 'end': 4},
+          'stableSourceKey': 'section:0/para:$paragraph/char:0',
+        },
+        'placement': {
+          'runToPage': {'a': 1, 'b': 0, 'c': 0, 'd': 1, 'e': 20, 'f': y + 10},
+          'baselineY': 0,
+        },
+        'clusters': [
+          _textCluster(0, 1, 0),
+          _textCluster(1, 2, 10),
+          _textCluster(2, 3, 20),
+          _textCluster(3, 4, 30),
+        ],
+      },
+    ],
+  };
+}
+
+Map<String, Object?> _textCluster(int start, int end, double x) {
+  return {
+    'textRangeUtf16': {'start': start, 'end': end},
+    'origin': {'x': x, 'y': 0},
+    'advance': {'dx': 10, 'dy': 0},
+  };
+}
+
+class _FakeRustLibApi implements RustLibApi {
+  int versionCalls = 0;
+
+  @override
+  Future<void> crateApiRhwpInitApp() async {}
+
+  @override
+  Future<String> crateApiRhwpRhwpVersion() async {
+    versionCalls += 1;
+    return 'mock-rhwp';
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeRhwpSession implements rust.RhwpSession {
+  String? lastCommandJson;
+  String? fileName = 'sample.hwp';
+  int exportHwpCalls = 0;
+  int exportHwpxCalls = 0;
+  int exportPdfCalls = 0;
+  int exportDocxCalls = 0;
+  final extractedTextPages = <int?>[];
+  final extractedMarkdownPages = <int?>[];
+  final renderedSvgPages = <int>[];
+  final pageLayerTreePages = <int>[];
+  String pageLayerTreeJson = '{"type":"page"}';
+  int nextSnapshotId = 1;
+  bool _disposed = false;
+
+  @override
+  Future<String> applyCommand({required String commandJson}) async {
+    lastCommandJson = commandJson;
+    final command = jsonDecode(commandJson);
+    if (command is Map && command['type'] == 'saveSnapshot') {
+      final snapshotId = nextSnapshotId;
+      nextSnapshotId += 1;
+      return '{"ok":true,"snapshotId":$snapshotId}';
+    }
+    if (command is Map && command['type'] == 'convertToEditable') {
+      return '{"ok":true,"converted":false}';
+    }
+    if (command is Map && command['type'] == 'getObjectProperties') {
+      return '{"width":1000,"height":2000,"horzOffset":30,"vertOffset":40,"rotationAngle":15,"horzFlip":true,"vertFlip":false,"hasCaption":false,"captionDirection":"Bottom","captionVertAlign":"Top","captionWidth":0,"captionSpacing":0,"captionIncludeMargin":false}';
+    }
+    if (command is Map && command['type'] == 'getTableProperties') {
+      return '{"cellSpacing":10,"paddingLeft":100,"paddingRight":110,"paddingTop":120,"paddingBottom":130,"pageBreak":1,"repeatHeader":false,"hasCaption":true,"captionDirection":3,"captionVertAlign":0,"captionWidth":8504,"captionSpacing":850}';
+    }
+    if (command is Map && command['type'] == 'getCellProperties') {
+      return '{"width":5000,"height":3000,"paddingLeft":100,"paddingRight":110,"paddingTop":120,"paddingBottom":130,"verticalAlign":1,"textDirection":0,"isHeader":false,"cellProtect":false}';
+    }
+    if (command is Map && command['type'] == 'getCellParagraphCount') {
+      return '{"count":2}';
+    }
+    if (command is Map && command['type'] == 'getCellParagraphLength') {
+      return '{"length":4}';
+    }
+    if (command is Map && command['type'] == 'getTextInTableCell') {
+      return 'cell';
+    }
+    if (command is Map && command['type'] == 'getSectionCount') {
+      return '{"count":1}';
+    }
+    if (command is Map && command['type'] == 'getParagraphCount') {
+      return '{"count":2}';
+    }
+    if (command is Map && command['type'] == 'getParagraphLength') {
+      return '{"length":4}';
+    }
+    if (command is Map && command['type'] == 'clipboardHasObjectControl') {
+      return '{"ok":true,"hasControl":true}';
+    }
+    if (command is Map &&
+        const {
+          'exportSelectionHtml',
+          'exportSelectionInCellHtml',
+          'exportControlHtml',
+        }.contains(command['type'])) {
+      return '<html><body><!--StartFragment--><p>A</p><!--EndFragment--></body></html>';
+    }
+    if (command is Map && command['type'] == 'pasteHtml') {
+      return '{"ok":true,"paraIdx":2,"charOffset":3}';
+    }
+    if (command is Map && command['type'] == 'pasteHtmlInCell') {
+      return '{"ok":true,"cellParaIdx":4,"charOffset":5}';
+    }
+    if (command is Map && command['type'] == 'getPageSetup') {
+      return '{"width":59528,"height":84189,"marginLeft":8504,"marginRight":8504,"marginTop":5669,"marginBottom":4252,"marginHeader":4252,"marginFooter":4252,"marginGutter":0,"landscape":false,"binding":0}';
+    }
+    if (command is Map && command['type'] == 'getPageBorderFill') {
+      return '{"attr":0,"spacingLeft":283,"spacingRight":283,"spacingTop":566,"spacingBottom":566,"borderFillId":2,"borderLeft":{"type":1,"width":2,"color":"#000000"},"borderRight":{"type":1,"width":2,"color":"#000000"},"borderTop":{"type":1,"width":2,"color":"#000000"},"borderBottom":{"type":1,"width":2,"color":"#000000"},"fillType":"solid","fillColor":"#fef08a","patternColor":"#000000","patternType":0}';
+    }
+    if (command is Map && command['type'] == 'getPageHide') {
+      return '{"ok":true,"exists":true,"hideHeader":false,"hideFooter":true,"hideMasterPage":false,"hideBorder":false,"hideFill":true,"hidePageNum":false}';
+    }
+    if (command is Map && command['type'] == 'getHeaderFooter') {
+      return '{"ok":true,"exists":true,"kind":"header","applyTo":0,"label":"양 쪽","paraIndex":0,"controlIndex":1,"paraCount":1,"text":"Header"}';
+    }
+    if (command is Map && command['type'] == 'getHeaderFooterList') {
+      return '{"ok":true,"items":[{"sectionIdx":0,"isHeader":true,"applyTo":0,"label":"머리말(양 쪽)"},{"sectionIdx":0,"isHeader":false,"applyTo":0,"label":"꼬리말(양 쪽)"}],"currentIndex":0}';
+    }
+    if (command is Map && command['type'] == 'getStyleList') {
+      return '[{"id":0,"name":"본문","englishName":"Body","type":0,"nextStyleId":0,"paraShapeId":0,"charShapeId":0},{"id":3,"name":"제목 1","englishName":"Heading 1","type":0,"nextStyleId":0,"paraShapeId":1,"charShapeId":1}]';
+    }
+    if (command is Map && command['type'] == 'getBookmarks') {
+      return '[{"name":"intro","sec":0,"para":1,"ctrlIdx":3,"charPos":2}]';
+    }
+    if (command is Map && command['type'] == 'getFieldList') {
+      return '[{"fieldId":7,"fieldType":"ClickHere","name":"customer","guide":"고객명","command":"ClickHere customer","value":"Old","location":{"section":0,"paragraph":1}}]';
+    }
+    if (command is Map &&
+        (command['type'] == 'getFieldValue' ||
+            command['type'] == 'getFieldValueByName')) {
+      return '{"value":"Old"}';
+    }
+    if (command is Map &&
+        (command['type'] == 'getFieldInfoAt' ||
+            command['type'] == 'getFieldInfoAtInTableCell')) {
+      return '{"inField":true,"fieldId":7,"fieldType":"ClickHere","startCharIdx":2,"endCharIdx":5,"isGuide":false,"guideName":"고객명"}';
+    }
+    if (command is Map && command['type'] == 'getClickHereProperties') {
+      return '{"ok":true,"guide":"고객명","memo":"memo","name":"customer","editable":true}';
+    }
+    if (command is Map &&
+        (command['type'] == 'setActiveField' ||
+            command['type'] == 'setActiveFieldInTableCell')) {
+      return '{"ok":true,"changed":true}';
+    }
+    if (command is Map && command['type'] == 'clearActiveField') {
+      return '{"ok":true}';
+    }
+    if (command is Map &&
+        (command['type'] == 'getCharPropertiesAt' ||
+            command['type'] == 'getCellCharPropertiesAt')) {
+      return '{"fontFamily":"맑은 고딕","fontSize":1400,"bold":true,"italic":false,"underline":true,"strikethrough":false,"superscript":false,"subscript":false,"emboss":false,"engrave":false,"textColor":"#dc2626","shadeColor":"#dbeafe"}';
+    }
+    if (command is Map &&
+        (command['type'] == 'getParaPropertiesAt' ||
+            command['type'] == 'getCellParaPropertiesAt')) {
+      return '{"alignment":"center","lineSpacing":180.0,"lineSpacingType":"Percent","marginLeft":10.0,"marginRight":12.0,"indent":20.0,"spacingBefore":4.0,"spacingAfter":6.0,"paraShapeId":3}';
+    }
+    return '{"ok":true}';
+  }
+
+  @override
+  Future<rust.RhwpDocumentInfo> documentInfo() async {
+    return rust.RhwpDocumentInfo(
+      pageCount: 5,
+      sourceFormat: 'hwp',
+      fileName: fileName,
+      rawJson: '{"pageCount":5}',
+    );
+  }
+
+  @override
+  Future<Uint8List> exportDocx() async {
+    exportDocxCalls += 1;
+    return Uint8List.fromList([0x44, 0x4f, 0x43, 0x58]);
+  }
+
+  @override
+  Future<Uint8List> exportHwp() async {
+    exportHwpCalls += 1;
+    return Uint8List.fromList([0x48, 0x57, 0x50]);
+  }
+
+  @override
+  Future<Uint8List> exportHwpx() async {
+    exportHwpxCalls += 1;
+    return Uint8List.fromList([0x48, 0x57, 0x50, 0x58]);
+  }
+
+  @override
+  Future<Uint8List> exportPdf() async {
+    exportPdfCalls += 1;
+    return Uint8List.fromList([0x50, 0x44, 0x46]);
+  }
+
+  @override
+  Future<String> extractText({int? page}) async {
+    extractedTextPages.add(page);
+    return 'text page ${page ?? 'all'}';
+  }
+
+  @override
+  Future<String> extractMarkdown({int? page}) async {
+    extractedMarkdownPages.add(page);
+    return '# page ${page ?? 'all'}';
+  }
+
+  @override
+  Future<String> renderPageSvg({required int page}) async {
+    renderedSvgPages.add(page);
+    return '<svg data-page="$page"/>';
+  }
+
+  @override
+  Future<String> pageLayerTree({required int page}) async {
+    pageLayerTreePages.add(page);
+    return pageLayerTreeJson;
+  }
+
+  @override
+  Future<int> pageCount() async => 5;
+
+  @override
+  void dispose() {
+    _disposed = true;
+  }
+
+  @override
+  bool get isDisposed => _disposed;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
