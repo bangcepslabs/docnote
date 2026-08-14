@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>DocNote · 모바일 시안</title>
+  <style>
+    :root {
+      --bg: oklch(0.977 0.004 260);
+      --surface: oklch(1 0 0);
+      --fg: oklch(0.205 0.027 250);
+      --muted: oklch(0.49 0.025 250);
+      --border: oklch(0.90 0.012 250);
+      --accent: oklch(0.52 0.115 247);
+      --accent-soft: oklch(0.94 0.035 247);
+      --danger: oklch(0.50 0.15 25);
+      --success: oklch(0.48 0.12 150);
+      --font-display: "SUIT", "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+      --font-body: "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+      --shadow: 0 12px 28px oklch(0.22 0.03 250 / .06);
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--fg); overflow-x: hidden; }
+    body { font-family: var(--font-body); letter-spacing: 0; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    :focus-visible { outline: 3px solid oklch(0.68 0.13 247 / .55); outline-offset: 3px; }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+    .app { width: min(100%, 560px); min-height: 100vh; margin: 0 auto; padding-bottom: calc(82px + env(safe-area-inset-bottom)); }
+    .topbar { display: flex; align-items: center; justify-content: space-between; min-height: 72px; padding: 14px 20px 8px; }
+    .brand { font-family: var(--font-display); font-size: 21px; font-weight: 700; letter-spacing: -.02em; }
+    .eyebrow { margin: 0 0 3px; color: var(--muted); font-size: 11px; font-weight: 600; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 0; font-family: var(--font-display); font-size: 27px; line-height: 1.35; }
+    h2 { margin-bottom: 4px; font-family: var(--font-display); font-size: 20px; line-height: 1.4; }
+    h3 { margin-bottom: 5px; font-family: var(--font-display); font-size: 15px; line-height: 1.45; }
+    .screen { padding: 0 20px; }
+    .screen-title { display: flex; justify-content: space-between; align-items: end; gap: 16px; padding: 8px 0 20px; }
+    .screen-title p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+    .icon-btn { width: 44px; height: 44px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); color: var(--fg); font-size: 18px; }
+    .icon-btn:hover, .outline-btn:hover { background: oklch(0.95 0.01 250); }
+    .icon-btn:active, .outline-btn:active, .primary:active, .action-card:active { transform: translateY(1px); }
+    .primary { min-height: 46px; border: 0; border-radius: 11px; background: var(--accent); color: white; padding: 0 16px; font-size: 13px; font-weight: 700; letter-spacing: .02em; box-shadow: 0 8px 16px oklch(0.52 0.115 247 / .15); }
+    .primary:hover { background: oklch(0.46 0.115 247); }
+    .outline-btn { min-height: 42px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--fg); padding: 0 13px; font-size: 12px; font-weight: 700; }
+    .text-btn { min-height: 40px; border: 0; background: transparent; color: var(--accent); padding: 8px 0; font-size: 12px; font-weight: 700; }
+    .text-btn:hover { color: oklch(0.40 0.10 247); text-decoration: underline; text-underline-offset: 3px; }
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 15px; box-shadow: var(--shadow); }
+    .panel + .panel { margin-top: 14px; }
+    .panel-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding: 18px 18px 14px; }
+    .panel-head p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .hero { padding: 0 0 18px; }
+    .hero-copy { margin-bottom: 14px; color: var(--muted); font-size: 14px; line-height: 1.7; }
+    .hero .primary { width: 100%; }
+    .continue-card { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 12px; align-items: center; margin: 0 18px 18px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; }
+    .thumb { min-height: 82px; display: grid; place-items: center; border-radius: 8px; background: oklch(0.95 0.04 25); color: oklch(0.52 0.16 25); }
+    .doc-glyph { font-size: 28px; }
+    .meta { min-width: 0; }
+    .meta .type { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+    .meta h3 { margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .meta p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .continue-card .outline-btn { grid-column: 2; justify-self: start; min-height: 38px; }
+    .quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding: 0 18px 18px; }
+    .action-card { min-height: 86px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); padding: 13px; text-align: left; }
+    .action-card:hover { border-color: oklch(0.72 0.07 247); background: var(--accent-soft); }
+    .action-card strong { display: block; margin-top: 11px; font-size: 13px; }
+    .action-card span { color: var(--muted); font-size: 11px; }
+    .action-card.primary-action { background: var(--accent); color: white; border-color: var(--accent); }
+    .action-card.primary-action span { color: oklch(0.94 0.02 247); }
+    .book-row { display: flex; gap: 10px; overflow-x: auto; padding: 0 18px 18px; scrollbar-width: thin; }
+    .book { flex: 0 0 136px; min-height: 180px; display: flex; flex-direction: column; justify-content: end; position: relative; overflow: hidden; border-radius: 11px; padding: 14px; border: 1px solid oklch(0.8 0.03 250 / .35); }
+    .book::after { content: ""; width: 92px; height: 92px; position: absolute; right: -28px; bottom: -28px; border-radius: 50%; background: oklch(1 0 0 / .22); }
+    .book.work { background: oklch(0.91 0.035 247); color: oklch(0.35 0.08 247); }
+    .book.study { background: oklch(0.93 0.05 120); color: oklch(0.38 0.07 135); }
+    .book.planner { background: oklch(0.94 0.055 50); color: oklch(0.43 0.09 45); }
+    .book small { position: absolute; top: 14px; left: 14px; font-size: 9px; font-weight: 800; letter-spacing: .07em; }
+    .book strong { position: relative; z-index: 1; max-width: 105px; font-family: var(--font-display); font-size: 17px; line-height: 1.45; }
+    .book span { position: relative; z-index: 1; margin-top: 6px; font-size: 10px; font-weight: 700; opacity: .72; }
+    .filters { display: flex; gap: 7px; overflow-x: auto; padding: 0 18px 14px; }
+    .filter { min-height: 38px; border: 0; border-radius: 999px; background: oklch(0.95 0.01 250); color: var(--muted); padding: 0 13px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .filter:hover { background: oklch(0.91 0.025 247); color: var(--fg); }
+    .filter.active { background: var(--accent); color: white; }
+    .doc-list { padding: 0 18px 16px; }
+    .doc-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) 44px; align-items: center; gap: 11px; min-height: 64px; padding: 10px 0; border-top: 1px solid var(--border); }
+    .doc-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 9px; background: oklch(0.95 0.04 25); color: oklch(0.52 0.16 25); }
+    .doc-row.hwp .doc-icon { background: oklch(0.94 0.04 145); color: oklch(0.44 0.10 145); }
+    .doc-row.memo .doc-icon { background: oklch(0.94 0.035 247); color: var(--accent); }
+    .doc-row strong { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .doc-row span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .state-message { display: grid; gap: 5px; padding: 20px 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .state-message strong { color: var(--fg); font-size: 13px; }
+    .state-message.error strong { color: var(--danger); }
+    .toast { position: fixed; z-index: 20; right: 20px; bottom: calc(88px + env(safe-area-inset-bottom)); left: 20px; width: min(520px, calc(100% - 40px)); margin: 0 auto; padding: 13px 15px; border: 1px solid oklch(0.72 0.04 247); border-radius: 10px; background: var(--fg); color: white; box-shadow: var(--shadow); font-size: 12px; line-height: 1.5; }
+    .search-box { display: flex; gap: 9px; align-items: center; margin-bottom: 13px; }
+    .search-box input { width: 100%; min-height: 46px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--fg); padding: 0 13px; }
+    .search-box input:focus { border-color: var(--accent); outline: 3px solid oklch(0.68 0.13 247 / .20); }
+    .search-result-label { margin: 18px 0 9px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .setting-list { overflow: hidden; }
+    .setting-row { display: flex; align-items: center; gap: 13px; min-height: 68px; padding: 12px 18px; border-top: 1px solid var(--border); }
+    .setting-row:first-child { border-top: 0; }
+    .setting-mark { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-size: 17px; }
+    .setting-copy { min-width: 0; flex: 1; }
+    .setting-copy strong { display: block; font-size: 13px; }
+    .setting-copy span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+    .switch { width: 48px; height: 28px; border: 0; border-radius: 999px; padding: 3px; background: oklch(0.86 0.01 250); }
+    .switch::after { content: ""; display: block; width: 22px; height: 22px; border-radius: 50%; background: white; box-shadow: 0 1px 3px oklch(0.2 0.02 250 / .25); transition: transform .15s cubic-bezier(.2,0,0,1); }
+    .switch.on { background: var(--accent); }
+    .switch.on::after { transform: translateX(20px); }
+    .select-wrap select { min-height: 40px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--fg); padding: 0 8px; font-size: 11px; }
+    .storage-value { color: var(--muted); font-size: 12px; font-weight: 600; }
+    .about { margin-top: 14px; padding: 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .about strong { display: block; color: var(--fg); margin-bottom: 5px; font-family: var(--font-display); font-size: 16px; }
+    .bottom-nav { position: fixed; z-index: 10; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(4, 1fr); width: min(100%, 560px); height: calc(76px + env(safe-area-inset-bottom)); margin: 0 auto; padding: 7px 10px env(safe-area-inset-bottom); background: oklch(1 0 0 / .97); border-top: 1px solid var(--border); backdrop-filter: blur(10px); }
+    .bottom-nav button { min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 700; }
+    .bottom-nav button.active { color: var(--accent); background: var(--accent-soft); }
+    .bottom-nav i { display: block; margin-bottom: 4px; font-style: normal; font-size: 19px; }
+    @media (min-width: 561px) { body { background: oklch(0.94 0.008 250); } .app { background: var(--bg); box-shadow: 0 0 34px oklch(0.2 0.03 250 / .08); } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar" data-od-id="mobile-topbar">
+      <div><p class="eyebrow" id="top-eyebrow">수요일, 8월 12일</p><div class="brand">DocNote</div></div>
+      <button class="icon-btn" id="top-action" data-od-id="top-action" aria-label="검색 열기">⌕</button>
+    </header>
+    <main>
+      <section class="screen" id="screen-home" data-screen="home" data-od-id="home-screen">
+        <div class="screen-title"><div><h1>다시 이어서 기록하세요</h1><p>최근 문서와 노트북을 한눈에 보고, 필요한 기록으로 바로 들어갈 수 있습니다.</p></div></div>
+        <section class="hero" data-od-id="home-hero"><button class="primary" data-action="new-notebook">+ 새 노트북 만들기</button></section>
+        <section class="panel" data-od-id="continue-section"><div class="panel-head"><div><h2>최근 작업</h2><p>마지막으로 열었던 문서부터 이어서 작업합니다.</p></div><button class="text-btn" data-tab-target="documents">전체 보기</button></div><article class="continue-card" data-od-id="recent-document"><div class="thumb"><span class="doc-glyph">▤</span></div><div class="meta"><span class="type">PDF · 12페이지</span><h3>2026 사업계획서 검토본</h3><p>마지막 열람 · 오늘 오전 10:32</p></div><button class="outline-btn" data-action="open-document">열기</button></article></section>
+        <section class="panel" data-od-id="quick-actions-section"><div class="panel-head"><div><h2>바로 시작하기</h2><p>새 기록이나 외부 문서를 추가합니다.</p></div></div><div class="quick-grid"><button class="action-card primary-action" data-action="new-memo"><span>가볍게 시작</span><strong>새 메모</strong></button><button class="action-card" data-action="open-pdf"><span>파일에서 이어서</span><strong>PDF 열기</strong></button><button class="action-card" data-action="open-hwp"><span>문서 가져오기</span><strong>HWP 열기</strong></button><button class="action-card" data-action="new-note"><span>손으로 기록</span><strong>필기 노트</strong></button></div></section>
+        <section class="panel" data-od-id="notebooks-section"><div class="panel-head"><div><h2>내 노트북</h2><p>표지와 속지로 정리한 작업 공간입니다.</p></div><button class="text-btn" data-action="new-notebook">새 노트</button></div><div class="book-row"><article class="book work" data-od-id="notebook-work"><small>WORK</small><strong>프로젝트<br />기록</strong><span>Meeting notes</span></article><article class="book study" data-od-id="notebook-study"><small>STUDY</small><strong>제품 공부<br />노트</strong><span>Cornell</span></article><article class="book planner" data-od-id="notebook-planner"><small>PLANNER</small><strong>주간<br />플래너</strong><span>Weekly planner</span></article></div></section>
+      </section>
+
+      <section class="screen" id="screen-documents" data-screen="documents" data-od-id="documents-screen" hidden>
+        <div class="screen-title"><div><h1>문서</h1><p>가져온 파일과 내 노트를 한 곳에서 관리합니다.</p></div><button class="icon-btn" data-action="open-pdf" aria-label="문서 가져오기">+</button></div>
+        <div class="filters" data-od-id="document-category-filter" role="tablist" aria-label="문서 종류"><button class="filter active" role="tab" aria-selected="true" data-doc-filter="all">전체</button><button class="filter" role="tab" aria-selected="false" data-doc-filter="memo">메모</button><button class="filter" role="tab" aria-selected="false" data-doc-filter="pdf">PDF</button><button class="filter" role="tab" aria-selected="false" data-doc-filter="hwp">HWP</button></div>
+        <div class="panel" data-od-id="documents-list"><div class="doc-list" id="all-documents"><article class="doc-row memo" data-kind="memo"><div class="doc-icon">✎</div><div><strong>제품 아이디어 메모</strong><span>메모 · 8월 9일</span></div><button class="icon-btn" aria-label="제품 아이디어 메모 메뉴">⋯</button></article><article class="doc-row pdf" data-kind="pdf"><div class="doc-icon">▤</div><div><strong>2026 사업계획서 검토본</strong><span>PDF · 오늘 오전 10:32</span></div><button class="icon-btn" aria-label="2026 사업계획서 검토본 메뉴">⋯</button></article><article class="doc-row hwp" data-kind="hwp"><div class="doc-icon">▧</div><div><strong>회의록_08월_1주차</strong><span>HWP · 어제 오후 4:18</span></div><button class="icon-btn" aria-label="회의록 메뉴">⋯</button></article></div><div class="state-message" id="documents-empty" hidden><strong>아직 문서가 없습니다</strong><span>PDF, HWP를 가져오거나 새 메모를 만들어 보세요.</span></div></div>
+      </section>
+
+      <section class="screen" id="screen-search" data-screen="search" data-od-id="search-screen" hidden>
+        <div class="screen-title"><div><h1>검색</h1><p>제목과 문서 내용에서 원하는 기록을 찾습니다.</p></div></div>
+        <div class="search-box"><input id="global-search" type="search" placeholder="문서 검색" aria-label="문서 검색" autocomplete="off" /><button class="icon-btn" id="clear-search" aria-label="검색어 지우기">×</button></div>
+        <div class="filters" role="tablist" aria-label="검색 필터"><button class="filter active" role="tab" aria-selected="true" data-search-filter="all">전체</button><button class="filter" role="tab" aria-selected="false" data-search-filter="favorite">즐겨찾기</button><button class="filter" role="tab" aria-selected="false" data-search-filter="memo">메모</button><button class="filter" role="tab" aria-selected="false" data-search-filter="pdf">PDF</button></div>
+        <p class="search-result-label" id="search-result-label">최근 문서 3개</p>
+        <div class="panel"><div class="doc-list" id="search-results"><article class="doc-row memo" data-kind="memo" data-favorite="true"><div class="doc-icon">✎</div><div><strong>제품 아이디어 메모</strong><span>메모 · 8월 9일 · 즐겨찾기</span></div><button class="icon-btn" aria-label="제품 아이디어 메모 메뉴">⋯</button></article><article class="doc-row pdf" data-kind="pdf" data-favorite="false"><div class="doc-icon">▤</div><div><strong>2026 사업계획서 검토본</strong><span>PDF · 오늘 오전 10:32</span></div><button class="icon-btn" aria-label="사업계획서 메뉴">⋯</button></article><article class="doc-row hwp" data-kind="hwp" data-favorite="true"><div class="doc-icon">▧</div><div><strong>회의록_08월_1주차</strong><span>HWP · 어제 오후 4:18 · 즐겨찾기</span></div><button class="icon-btn" aria-label="회의록 메뉴">⋯</button></article></div><div class="state-message" id="search-empty" hidden><strong>검색 결과가 없습니다</strong><span>다른 제목이나 문서 종류로 다시 찾아보세요.</span></div></div>
+      </section>
+
+      <section class="screen" id="screen-settings" data-screen="settings" data-od-id="settings-screen" hidden>
+        <div class="screen-title"><div><h1>설정</h1><p>DocNote를 내 작업 방식에 맞게 조정합니다.</p></div></div>
+        <div class="panel setting-list"><div class="setting-row"><div class="setting-mark">◐</div><div class="setting-copy"><strong>테마 설정</strong><span id="theme-label">현재 라이트 모드</span></div><div class="select-wrap"><select id="theme-select" aria-label="테마 설정"><option value="light">라이트</option><option value="system">시스템</option><option value="dark">다크</option></select></div></div><div class="setting-row"><div class="setting-mark">↗</div><div class="setting-copy"><strong>자동 저장</strong><span id="autosave-label">변경 사항을 자동으로 저장합니다.</span></div><button class="switch on" id="autosave-switch" aria-label="자동 저장 켜기" aria-pressed="true"></button></div><div class="setting-row"><div class="setting-mark">▱</div><div class="setting-copy"><strong>저장 공간</strong><span>앱 문서와 첨부 파일이 저장되는 공간입니다.</span></div><span class="storage-value">기기 저장 공간</span></div><button class="setting-row" style="width:100%;border:0;background:transparent;text-align:left;"><div class="setting-mark">⌫</div><div class="setting-copy"><strong>휴지통</strong><span>삭제한 문서를 복원하거나 영구 삭제합니다.</span></div><span aria-hidden="true">›</span></button></div>
+        <div class="panel about"><strong>DocNote</strong>문서와 필기를 한 곳에서 관리하는 노트 앱입니다.<br />버전 0.1.0</div>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <nav class="bottom-nav" data-od-id="bottom-navigation" aria-label="주요 메뉴"><button class="active" data-tab="home" aria-current="page"><i>⌂</i>홈</button><button data-tab="documents"><i>□</i>문서</button><button data-tab="search"><i>⌕</i>검색</button><button data-tab="settings"><i>⚙</i>설정</button></nav>
+  <script>
+    const screens = [...document.querySelectorAll('[data-screen]')];
+    const navItems = [...document.querySelectorAll('[data-tab]')];
+    const switchTab = (name) => { screens.forEach((screen) => { screen.hidden = screen.dataset.screen !== name; }); navItems.forEach((item) => { const active = item.dataset.tab === name; item.classList.toggle('active', active); item.toggleAttribute('aria-current', active); }); document.getElementById('top-action').setAttribute('aria-label', name === 'search' ? '검색어 지우기' : '검색 열기'); window.scrollTo(0, 0); };
+    navItems.forEach((item) => item.addEventListener('click', () => switchTab(item.dataset.tab)));
+    document.querySelectorAll('[data-tab-target]').forEach((item) => item.addEventListener('click', () => switchTab(item.dataset.tabTarget)));
+    const toast = document.getElementById('toast'); let toastTimer;
+    const showToast = (message) => { toast.textContent = message; toast.hidden = false; window.clearTimeout(toastTimer); toastTimer = window.setTimeout(() => { toast.hidden = true; }, 2200); };
+    document.getElementById('top-action').addEventListener('click', () => { const searchVisible = !document.getElementById('screen-search').hidden; if (searchVisible) { document.getElementById('clear-search').click(); showToast('검색어를 지웠습니다.'); } else { switchTab('search'); document.getElementById('global-search').focus(); } });
+    const filterRows = (buttons, rows, attribute, empty, countLabel) => buttons.forEach((button) => button.addEventListener('click', () => { buttons.forEach((item) => { const active = item === button; item.classList.toggle('active', active); item.setAttribute('aria-selected', active); }); const value = button.dataset[attribute]; let count = 0; rows.forEach((row) => { const match = value === 'all' || row.dataset.kind === value || (value === 'favorite' && row.dataset.favorite === 'true'); row.hidden = !match; if (match) count += 1; }); empty.hidden = count !== 0; if (countLabel) countLabel.textContent = count + '개 문서'; }));
+    const docRows = [...document.querySelectorAll('#all-documents .doc-row')];
+    filterRows([...document.querySelectorAll('[data-doc-filter]')], docRows, 'docFilter', document.getElementById('documents-empty'));
+    const searchRows = [...document.querySelectorAll('#search-results .doc-row')]; const searchEmpty = document.getElementById('search-empty'); const resultLabel = document.getElementById('search-result-label');
+    const runSearch = () => { const query = document.getElementById('global-search').value.trim().toLowerCase(); const active = document.querySelector('[data-search-filter].active'); const filter = active.dataset.searchFilter; let count = 0; searchRows.forEach((row) => { const matchText = row.textContent.toLowerCase().includes(query); const matchFilter = filter === 'all' || row.dataset.kind === filter || (filter === 'favorite' && row.dataset.favorite === 'true'); const visible = matchText && matchFilter; row.hidden = !visible; if (visible) count += 1; }); searchEmpty.hidden = count !== 0; resultLabel.textContent = query ? '검색 결과 ' + count + '개' : '최근 문서 ' + count + '개'; };
+    filterRows([...document.querySelectorAll('[data-search-filter]')], searchRows, 'searchFilter', searchEmpty, resultLabel); document.getElementById('global-search').addEventListener('input', runSearch); document.getElementById('clear-search').addEventListener('click', () => { document.getElementById('global-search').value = ''; runSearch(); document.getElementById('global-search').focus(); });
+    const autosave = document.getElementById('autosave-switch'); autosave.addEventListener('click', () => { const on = autosave.classList.toggle('on'); autosave.setAttribute('aria-pressed', on); autosave.setAttribute('aria-label', on ? '자동 저장 켜기' : '자동 저장 끄기'); document.getElementById('autosave-label').textContent = on ? '변경 사항을 자동으로 저장합니다.' : '자동 저장이 꺼져 있습니다.'; });
+    document.getElementById('theme-select').addEventListener('change', (event) => { const labels = { light: '라이트', system: '시스템', dark: '다크' }; document.getElementById('theme-label').textContent = '현재 ' + labels[event.target.value] + ' 모드'; showToast('테마 설정을 변경했습니다.'); });
+    const actionMessages = { 'new-notebook': '새 노트북 만들기 흐름으로 연결됩니다.', 'new-memo': '새 메모 작성 흐름으로 연결됩니다.', 'open-pdf': 'PDF 가져오기 흐름으로 연결됩니다.', 'open-hwp': 'HWP 가져오기 흐름으로 연결됩니다.', 'new-note': '필기 노트 만들기 흐름으로 연결됩니다.', 'open-document': '문서 열기 흐름으로 연결됩니다.' };
+    document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => { button.setAttribute('aria-busy', 'true'); showToast(actionMessages[button.dataset.action] || '요청을 처리하고 있습니다.'); window.setTimeout(() => button.removeAttribute('aria-busy'), 450); }));
+  </script>
+</body>
+</html>

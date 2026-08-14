@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 /// Shared visual language for the document-first DocNote surfaces.
 abstract final class DocNoteTheme {
   static const accent = Color(0xff2f6eaa);
-  static const page = Color(0xfff6f7f9);
-  static const ink = Color(0xff17212c);
+  static const page = Color(0xfff7f8fa);
+  static const ink = Color(0xff27303d);
   // Keep the Android surfaces on a small, predictable radius scale.
   static const radiusSm = 8.0;
   static const radiusMd = 12.0;
@@ -66,7 +66,7 @@ abstract final class DocNoteTheme {
         backgroundColor: scheme.surface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        height: 80,
+        height: 76,
         indicatorColor: scheme.primaryContainer,
         labelTextStyle: WidgetStatePropertyAll(
           TextStyle(fontSize: 11, fontWeight: FontWeight.w700),

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "docnote-documents-design.html",
+  "entry": "docnote-documents-design.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T06:21:53.789Z",
+  "updatedAt": "2026-08-12T06:21:53.789Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

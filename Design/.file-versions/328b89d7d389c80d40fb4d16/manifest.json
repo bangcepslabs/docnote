@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 2,
+  "fileName": "docnote-search-refined.html",
+  "currentVersionId": "1770cfa4-ddc4-4104-94fe-2e2fa0cfb907",
+  "entries": [
+    {
+      "id": "055f19fd-bbe9-4ae7-9712-b9a1d170bb3d",
+      "fileName": "docnote-search-refined.html",
+      "version": 1,
+      "label": "Version 1",
+      "createdAt": 1786518451335,
+      "source": "ai",
+      "prompt": "현재 OpenDesign으로 만든 DocNote 시안을 다시 정리해줘.\n\n중요:\n이번 요청은 새로운 방향을 처음부터 다시 제안하는 것이 아니라,\n현재 나온 Home / Documents / Search 시안을 기준으로\nspacing, alignment, component consistency, hierarchy를 정리하는 refinement 작업이다.\n\n현재 시안은 방향 자체는 이전보다 훨씬 좋아졌지만,\n아직 화면별 여백과 기준선이 조금씩 달라 보이고,\n일부 컴포넌트는 기본 상태인데도 너무 강조되어 보여서\n완성도 높은 제품 느낌이 덜하다.\n\n이번에는 다음 항목을 중심으로 전체 UI를 재정리해줘.\n\n==================================================\n1. 전체 화면 spacing / alignment audit\n==================================================\n\n먼저 Home / Documents / Search 화면을 비교하면서\n공통 레이아웃 규칙이 잘 맞는지 검토한다.\n\n특히 확인할 것:\n- 좌우 outer padding\n- section title 시작 위치\n- header baseline\n- vertical spacing rhythm\n- chip group spacing\n- card spacing\n- list card internal padding\n- title / description / filter / content 간격\n- bottom navigation과 content 간 관계\n\n화면마다 다른 숫자를 임의로 사용하지 말고,\n공통 spacing system을 먼저 정리한다.\n\n권장 spacing tokens:\n4 / 8 / 12 / 16 / 20 / 24 / 32\n\n==================================================\n2. Home 화면 refinement\n==================================================\n\n현재 Home의 방향은 나쁘지 않지만,\n상단의 큰 텍스트 안내문이 다소 과하고\n마케팅 랜딩 페이지 느낌이 난다.\n\n현재 문구 예:\n“손에 잡히는 기록을 차분하게 이어가세요”\n\n이런 형태의 긴 감성 카피는 줄이고,\n실제 앱 콘텐츠 중심 구조가 더 잘 보이도록 조정한다.\n\n수정 방향:\n- Hero 영역의 텍스트 밀도 축소\n- 큰 headline은 더 짧고 기능 중심적으로\n- 설명문은 1~2줄 이내로 정리\n- Home의 중심은 문장보다 노트북 / 템플릿 / 최근 작업이어야 함\n- Quick actions와 Hero 간 간격 및 비율 재조정\n- “내 노트북” 섹션이 더 자연스럽게 이어지도록 구성\n\n즉,\nHome은 “마케팅 카피”보다\n“노트북 라이브러리와 실제 사용 흐름”이 중심이 되게 한다.\n\n==================================================\n3. Documents 화면 refinement\n==================================================\n\nDocuments 화면은 구조는 괜찮지만\nspacing과 baseline을 더 정리해서\n더 안정된 library 화면처럼 보이게 한다.\n\n확인할 것:\n- title, description, filter, list 사이 간격\n- “전체 문서 12”와 view toggle 영역 정렬\n- chip의 높이와 간격\n- list card 썸네일/텍스트/overflow button baseline\n- 카드 간 vertical gap\n- 화면 하단 빈 공간이 너무 허전하지 않은지\n\n문서 화면이 단순한 file list가 아니라\n정리된 document library처럼 느껴지게 다듬는다.\n\n==================================================\n4. Search 화면 refinement\n==================================================\n\n현재 Search 화면에서 가장 어색한 부분 중 하나는\n검색창 오른쪽의 X 버튼이다.\n\n기본 상태인데도 border가 너무 강하게 보여\npressed 또는 active 상태처럼 보인다.\n\n수정 방향:\n- X 버튼의 시각적 강조도를 낮춘다\n- 기본 상태에서는 border 없는 ghost icon button 또는 very soft tone 사용\n- 입력값이 없으면 숨기거나 더 약하게 표시\n- 입력값이 있을 때만 명확하게 활성화되는 느낌으로 처리\n\n추가로:\n- Search field 높이와 내부 padding 정리\n- chip row spacing 정리\n- “최근 검색 결과” title과 count 정렬 정리\n- result list card 내부 정보 정렬 정리\n- notebook / pdf / hwp / memo 결과 타입별 thumbnail 규칙 일관화\n\n==================================================\n5. 공통 component consistency\n==================================================\n\n다음 컴포넌트들이 화면마다 조금씩 다른 스타일처럼 보이지 않게 정리한다.\n\n- Header\n- Search icon button\n- Plus / action icon button\n- Filter chips\n- Section header\n- Notebook card\n- Document list card\n- Overflow menu button\n- Search field\n- Bottom navigation\n\n각 컴포넌트는:\n- 같은 radius system\n- 같은 icon size system\n- 같은 text hierarchy\n- 같은 padding logic\n- 같은 selected/unselected rule\n\n을 공유해야 한다.\n\n==================================================\n6. Border / emphasis refinement\n==================================================\n\n현재 일부 UI는 기본 상태에서도 outline이 너무 눈에 띈다.\n\n특히:\n- search field 안의 x button\n- 일부 outline chip / button\n- card outline\n\n등은 기본 상태에서 너무 도드라지지 않게 한다.\n\n원칙:\n- 기본 상태는 조용하게\n- hover / focus / selected / active 상태만 명확하게\n- 강조는 border보다 tonal contrast와 spacing으로 해결\n\n==================================================\n7. 최종 목표\n==================================================\n\n이번 refinement의 목표는\n더 많은 기능을 추가하는 것이 아니라,\n현재 시안이 하나의 완성된 제품처럼 보이도록\n레이아웃과 컴포넌트 완성도를 끌어올리는 것이다.\n\n다음 인상이 느껴져야 한다.\n\n- 화면마다 동일한 앱처럼 보인다\n- 여백이 안정적이다\n- 정렬이 깔끔하다\n- 강조가 필요한 요소만 강조된다\n- 기본 상태 컴포넌트가 과하게 튀지 않는다\n- Home은 카피보다 실제 콘텐츠가 중심이다\n- Search는 가볍고 정돈된 도구처럼 보인다\n- 전체적으로 generic한 느낌이 줄어든다\n\n==================================================\n8. 작업 방식\n==================================================\n\n바로 구현 코드 수정하지 말고,\n먼저 다음 3개 화면의 refined high-fidelity 시안을 다시 제시해줘.\n\n1. Home\n2. Documents\n3. Search\n\n그리고 각 화면에서 다음을 함께 설명해줘.\n- spacing rule을 어떻게 통일했는지\n- 어떤 컴포넌트 강조도를 낮췄는지\n- Home의 카피를 어떻게 조정했는지\n- Search의 X 버튼을 어떻게 재설계했는지",
+      "size": 10434,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0001-055f19fd-bbe9-4ae7-9712-b9a1d170bb3d.html",
+      "promptSource": "message",
+      "contentDigest": "83d30e6dfab468e4c56079897493d60af7af7d24281beb3bc548f9ea51924745"
+    },
+    {
+      "id": "49e743c8-64ef-41bf-92fd-05d4f83cbfaf",
+      "fileName": "docnote-search-refined.html",
+      "version": 2,
+      "label": "Version 2",
+      "createdAt": 1786518946760,
+      "source": "ai",
+      "prompt": "수정 반영이 안되는 것 같은데?? 모바일 기준 수정하고 있는거 맞아? 하단 메뉴 네비게이션 통합으로 사용하게 해줘 다 다르게 나오고, 검색 메뉴 들어갔을 때 검색바 안에 X버튼에서 테두리가 보여지고 있어, 제대로 검증후 진행해",
+      "size": 11536,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0002-49e743c8-64ef-41bf-92fd-05d4f83cbfaf.html",
+      "promptSource": "message",
+      "contentDigest": "690214e6898353c691fefe23e45b27edc284f0f131a592de31f841806d6b982e"
+    },
+    {
+      "id": "624dced5-36d7-4540-99bc-304334b9d77f",
+      "fileName": "docnote-search-refined.html",
+      "version": 3,
+      "label": "Version 3",
+      "createdAt": 1786520422789,
+      "source": "ai",
+      "prompt": "@impeccable-design-polish\n현재 대상: 파일 · docnote-search-refined.html.\n선택된 skill: impeccable-design-polish. 이번 턴의 기본 워크플로로 사용하세요.\n전역 리소스 인덱스: skill(162), 플러그인(446), MCP(활성화 0개 / 템플릿 39개), 커넥터(연결 0개), 디자인 파일(26).\n검색 가능한 skill: 8-bit-orbit-video-template, ad-creative, after-hours-editorial-template, agent-browser, ai-music-album, algorithmic-art, apple-hig, article-magazine, artifacts-builder, brainstorming, brand-extract, brand-guidelines, brandkit, industrial-brutalist-ui, canvas-design, card-twitter, card-xiaohongshu, chat-motion-overlay, color-expert, competitive-ads-extractor, copywriting, creative-director, d3-visualization, data-report, deck-guizang-editorial, deck-open-slide-canvas, deck-swiss-international, design-brief, design-consultation, design-md, design-review, digits-fintech-swiss-template, doc, doc-kami-parchment, docx, domain-name-brainstormer, ecommerce-image-workflow, editorial-burgundy-principles-template, emil-design-eng, emilkowalski-motion, enhance-prompt, export-download-debugging, fal-3d, fal-generate, fal-image-edit, fal-kling-o3, fal-lip-sync, fal-realtime, fal-restore, fal-train, fal-tryon, fal-upscale, fal-video-edit, fal-vision, faq-page, field-notes-editorial-template, figma-code-connect-components, figma-create-design-system-rules, figma-create-new-file, figma-generate-design, +102개 더.\n검색 가능한 플러그인: 3D Animated Boy Building Lego, 3D Stone Staircase Evolution Infographic, A Decade of Refinement Glow-Up, Agentic, Airbnb, Airtable, Ancient Guardian Dragon Rescue, Ancient Indian Kingdom FPV Video, Animation transfer and camera tracking prompt, Anime Martial Arts Battle Illustration, Ant, Apple, Application, Arc Browser, Art-Direct an Annual Report like a Magazine Creative Director, Artistic, Atelier Zero, Audio Jingle, Aurora Veil, BMW, BMW M, Beat-Synced Outfit Transformation Dance, Bento, Binance.US, Blog Post, Bold, Bold Poster Frame, Bold Signal Frame, Brief AI in Your Industry like a Tier-1 Consulting AI Vertical Lead, Brief a Health-System Board on Data Governance like a Chief Compliance Officer, Brutalism, Bugatti, Build Minimal Frame, Build a Buyer-Committee Leave-Behind like an Enterprise Sales Lead, Build a Designer Portfolio Narrative like a Hiring Bar-Raiser, Build a New-Hire Onboarding Module like a Top Enablement Lead, Build a Positioning & Messaging System like a Brand Strategist, Build a Studio Portfolio & Rate Deck like a Creative Studio Owner, Build an Editorial Design System like a Magazine Art Director, Cafe, +398개 더.\n사용 가능한 MCP: Higgsfield (OpenClaw) 템플릿, Pollinations 템플릿, Allyson (animated SVG) 템플릿, AWS Bedrock Image (Nova Canvas / SD 3.5) 템플릿, Prompt-to-Asset (icons / favicons / OG / logos) 템플릿, Nano Banana (AceDataCloud) 템플릿, Seedream (AceDataCloud) 템플릿, fal.ai (600+ models) 템플릿, Imagician (image post-processing) 템플릿, ImageSorcery (CV-based editing) 템플릿, Photopea (layered editor) 템플릿, Topaz Labs (AI upscale / denoise / sharpen) 템플릿, Transloadit (media pipelines) 템플릿, Screenshot Website (fast) 템플릿, ScreenshotOne (managed) 템플릿, Pagecast (browser → demo GIF / MP4) 템플릿, Figma Context (read designs → code) 템플릿, Design Token Bridge 템플릿, Design System Extractor (Storybook) 템플릿, figma-use (write designs from chat) 템플릿, Aesthetics Wiki (moodboard / inspiration) 템플릿, 21st.dev Magic (UI components) 템플릿, shadcn/ui 템플릿, FlyonUI (blocks & landing pages) 템플릿, AntV Chart 템플릿, Mermaid diagrams 템플릿, MCP Dashboards (45+ chart types) 템플릿, Excalidraw Architect (hand-drawn diagrams) 템플릿, EdgeOne Pages (publish HTML) 템플릿, PageDrop (instant HTML hosting) 템플릿, PDFSpark (HTML / URL → PDF) 템플릿, OGForge (Open Graph image generator) 템플릿, QRMint (styled QR codes) 템플릿, Slideshot (HTML → PDF / PNG / WebP / PPTX) 템플릿, Deckrun (Markdown → PDF / video / audio) 템플릿, Filesystem 템플릿, GitHub 템플릿, Fetch (HTTP) 템플릿, A11y (Web accessibility / WCAG) 템플릿.\n참조 디자인 파일: docnote-search-refined-preview.png, docnote-search-refined.html, docnote-documents-refined.html, docnote-home-refined.html, docnote-settings-refined.html, docnote-settings-design.html, docnote-home-refined-preview.png, docnote-settings-design-preview.png, docnote-search-design.html, docnote-documents-design.html, docnote-documents-design-preview.png, docnote-home-design.html, docnote-home-design-preview.png, docnote-design-system.md, docnote-spacing-preview.png, docnote-home.html, docnote-documents-category-preview.png, docnote-home-v5.html, docnote-mobile-polished-preview.png, docnote-home-v4.html, docnote-mobile-preview.png, docnote-home-v3.html, docnote-home-polished-preview.png, docnote-home-preview.png, docnote-home-v2.html, brand-spec.md.\nWorkflow rule: define the aesthetic goal and constraints first, then search and match resources; when user choice is needed, generate a structured question-form with editable custom answers and continue after confirmation.\n이 디자인을 출시 준비가 될 때까지 다듬으세요: 위계, 타이포그래피, 간격, 반응형 동작, 버튼 상태, 빈/로딩/오류 상태, 접근성을 점검하고, 가장 중요한 문제를 바로 수정하세요.",
+      "size": 13199,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0003-624dced5-36d7-4540-99bc-304334b9d77f.html",
+      "promptSource": "message",
+      "contentDigest": "b43dad5dc5d323ac9c5a659523c27e11e0f2636e7d14fc9bad85057bebabda01"
+    },
+    {
+      "id": "1770cfa4-ddc4-4104-94fe-2e2fa0cfb907",
+      "fileName": "docnote-search-refined.html",
+      "version": 4,
+      "label": "Version 4",
+      "createdAt": 1786521447061,
+      "source": "ai",
+      "prompt": "현재 만들어진 Create / New Notebook 디자인 방향을 수정해줘.\n\n중요:\n“새로 만들기”를 별도의 독립 페이지나 별도의 앱 화면처럼 설계하지 말아줘.\n\n현재 DocNote에는 이미 하단 Navigation의 중앙 `+ 새로 만들기` 버튼과\n해당 버튼을 눌렀을 때 실행되는 기존 Flutter 로직이 있다.\n\n내가 원하는 것은 새로운 navigation flow를 만드는 것이 아니라,\n기존 `+ 새로 만들기` interaction의 UI만 재설계하는 것이다.\n\n즉 다음 상태를 디자인해줘.\n\nHome / Documents 등의 기존 화면\n↓\n사용자가 하단 `+ 새로 만들기` 클릭\n↓\n현재 화면 위에 Modal Bottom Sheet / Create Sheet 표시\n\n기존 화면 context는 뒤에 그대로 유지되고,\nbackground는 적절히 dim 처리한다.\n\n별도의 full page로 navigation하지 않는다.\n\nCreate Sheet에는 기존 기능을 유지한다.\n\n* 새 노트\n* PDF 가져오기\n* HWP 가져오기\n* 폴더 만들기\n* 현재 프로젝트에 이미 존재하는 기타 생성/import 액션이 있다면 유지\n\n기존 기능을 임의로 제거하거나 다른 기능으로 대체하지 않는다.\n\n새 노트만 선택했을 경우에 다음 단계로:\n\n* 제목\n* 표지 선택\n* 속지/템플릿 선택\n\nflow가 이어지도록 디자인한다.\n\n다만 Create Sheet 자체는 compact하게 유지한다.\n\n원하는 구조 예:\n\n┌─────────────────────────────┐\n│             ━               │\n│ 새로 만들기                 │\n│                             │\n│ [아이콘] 새 노트            │\n│          표지와 속지로 시작  │\n│                             │\n│ [아이콘] PDF 가져오기        │\n│          PDF 문서 불러오기   │\n│                             │\n│ [아이콘] HWP 가져오기        │\n│          한글 문서 불러오기  │\n│                             │\n│ [아이콘] 폴더 만들기         │\n└─────────────────────────────┘\n\n다음 디자인 원칙을 적용한다.\n\n* 별도의 독립 페이지처럼 보이지 않음\n* 현재 화면의 연속적인 interaction처럼 보여야 함\n* Material 기본 BottomSheet 그대로의 인상을 피함\n* 과도한 카드 중첩 금지\n* 큰 outline 버튼 나열 금지\n* icon + title + supporting text 구조\n* 현재 Home / Documents / Search 디자인 시스템과 동일한 spacing 및 typography 사용\n* content-driven height\n* 상단 drag handle\n* 충분한 touch target\n* 하단 SafeArea 고려\n\n그리고 다음 3가지 상태를 같은 디자인 안에서 보여줘.\n\n1. 기본 화면\n2. `+ 새로 만들기`를 눌러 Create Sheet가 열린 상태\n3. Create Sheet에서 `새 노트`를 선택해 Notebook 생성 단계로 넘어간 상태\n\n중요:\n이번 작업에서는 실제 Flutter 코드를 수정하지 말고\n“기존 + 버튼 interaction에 적용할 UI 상태”를 디자인하는 것이 목적이다.\n\n새로운 독립 앱 페이지를 만드는 방식으로 해결하지 말아줘.",
+      "size": 13230,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0004-1770cfa4-ddc4-4104-94fe-2e2fa0cfb907.html",
+      "contentDigest": "bb48ea3a9d626ac18aeb2daa9777b1782ff28620050e12a4236689fbd6a7cb61",
+      "promptSource": "message"
+    }
+  ]
+}

@@ -36,6 +36,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   Color color = Colors.black;
   double width = 3;
   bool loaded = false;
+  bool toolbarVisible = true;
   late int pageCount = widget.initialPageCount;
   int pageIndex = 1;
   String get pageId => 'page_$pageIndex';
@@ -171,14 +172,51 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
 
   void _erase(Offset p, Size size) {
     final n = normalizePoint(p, size);
-    final before = strokes.length;
-    final radius = (width / size.width).clamp(.012, .12);
-    strokes.removeWhere((s) => s.points.any((point) {
-          final dx = point.x - n.x;
-          final dy = point.y - n.y;
-          return dx * dx + dy * dy <= radius * radius;
-        }));
-    if (before != strokes.length) {
+    final radius = (width / size.width).clamp(.002, .12);
+    final kept = <Stroke>[];
+    var changed = false;
+    for (final stroke in strokes) {
+      final segments = <List<StrokePoint>>[];
+      var segment = <StrokePoint>[];
+      for (final point in stroke.points) {
+        final dx = point.x - n.x;
+        final dy = point.y - n.y;
+        if (dx * dx + dy * dy <= radius * radius) {
+          changed = true;
+          if (segment.isNotEmpty) segments.add(segment);
+          segment = <StrokePoint>[];
+        } else {
+          segment.add(point);
+        }
+      }
+      if (segment.isNotEmpty) segments.add(segment);
+      if (segments.length == 1 &&
+          segments.single.length == stroke.points.length) {
+        kept.add(stroke);
+        continue;
+      }
+      for (var index = 0; index < segments.length; index++) {
+        final points = segments[index];
+        if (points.isEmpty) continue;
+        kept.add(Stroke(
+          id: '${stroke.id}_erase_$index',
+          documentId: stroke.documentId,
+          pageId: stroke.pageId,
+          tool: stroke.tool,
+          penType: stroke.penType,
+          points: points,
+          color: stroke.color,
+          width: stroke.width,
+          opacity: stroke.opacity,
+          order: kept.length,
+          createdAt: stroke.createdAt,
+        ));
+      }
+    }
+    if (changed) {
+      strokes
+        ..clear()
+        ..addAll(kept);
       _scheduleSave();
       setState(() {});
     }
@@ -230,6 +268,13 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
                 onPressed: redo.isEmpty ? null : _redo,
                 icon: const Icon(Icons.redo)),
             IconButton(
+                onPressed: () =>
+                    setState(() => toolbarVisible = !toolbarVisible),
+                tooltip: toolbarVisible ? '편집 도구 숨기기' : '편집 도구 열기',
+                icon: Icon(toolbarVisible
+                    ? Icons.keyboard_arrow_up
+                    : Icons.keyboard_arrow_down)),
+            IconButton(
                 onPressed: () {
                   strokes.clear();
                   redo.clear();
@@ -241,6 +286,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       body: !loaded
           ? const Center(child: CircularProgressIndicator())
           : Column(children: [
+              if (toolbarVisible) _toolbar(context),
               Expanded(
                   child: Center(
                       child: AspectRatio(
@@ -263,60 +309,72 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
                                 onMove: _move,
                                 onEnd: _end),
                           )))),
-              _toolbar(context),
             ]),
     );
   }
 
   Widget _toolbar(BuildContext context) => Material(
       color: Theme.of(context).colorScheme.surface,
-      child: SafeArea(
-          child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                IconButton(
-                    onPressed: () => setState(() => tool = StrokeTool.pen),
-                    color: tool == StrokeTool.pen
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                    icon: const Icon(Icons.edit)),
-                IconButton(
-                    onPressed: () =>
-                        setState(() => tool = StrokeTool.highlighter),
-                    color: tool == StrokeTool.highlighter
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                    icon: const Icon(Icons.highlight)),
-                IconButton(
-                    onPressed: () => setState(() => tool = StrokeTool.eraser),
-                    color: tool == StrokeTool.eraser
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                    icon: const Icon(Icons.auto_fix_normal)),
-                PopupMenuButton<Color>(
-                    icon: Icon(Icons.color_lens, color: color),
-                    onSelected: (v) => setState(() {
-                          color = v;
-                          tool = StrokeTool.pen;
-                        }),
-                    itemBuilder: (_) => [
-                          Colors.black,
-                          Colors.red,
-                          Colors.blue,
-                          Colors.green,
-                          Colors.orange
-                        ]
+      child: DecoratedBox(
+          decoration: BoxDecoration(
+              border: Border(
+                  bottom: BorderSide(
+                      color: Theme.of(context).colorScheme.outlineVariant))),
+          child: SizedBox(
+              height: 56,
+              child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    IconButton(
+                        onPressed: () => setState(() => tool = StrokeTool.pen),
+                        color: tool == StrokeTool.pen
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
+                        icon: const Icon(Icons.edit)),
+                    IconButton(
+                        onPressed: () =>
+                            setState(() => tool = StrokeTool.highlighter),
+                        color: tool == StrokeTool.highlighter
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
+                        icon: const Icon(Icons.highlight)),
+                    IconButton(
+                        onPressed: () =>
+                            setState(() => tool = StrokeTool.eraser),
+                        color: tool == StrokeTool.eraser
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
+                        icon: const Icon(Icons.auto_fix_normal)),
+                    PopupMenuButton<Color>(
+                        icon: Icon(Icons.color_lens, color: color),
+                        onSelected: (v) => setState(() {
+                              color = v;
+                              tool = StrokeTool.pen;
+                            }),
+                        itemBuilder: (_) => [
+                              Colors.black,
+                              Colors.red,
+                              Colors.blue,
+                              Colors.green,
+                              Colors.orange
+                            ]
+                                .map((v) => PopupMenuItem(
+                                    value: v,
+                                    child: Icon(Icons.circle, color: v)))
+                                .toList()),
+                    PopupMenuButton<double>(
+                        tooltip: tool == StrokeTool.eraser ? '지우개 크기' : '펜 굵기',
+                        icon: Icon(tool == StrokeTool.eraser
+                            ? Icons.cleaning_services_outlined
+                            : Icons.line_weight),
+                        onSelected: (v) => setState(() => width = v),
+                        itemBuilder: (_) => (tool == StrokeTool.eraser
+                                ? [1, 2, 4, 8, 16, 32]
+                                : [2, 4, 8, 14])
                             .map((v) => PopupMenuItem(
-                                value: v, child: Icon(Icons.circle, color: v)))
+                                value: v.toDouble(), child: Text('${v}px')))
                             .toList()),
-                PopupMenuButton<double>(
-                    icon: const Icon(Icons.line_weight),
-                    onSelected: (v) => setState(() => width = v),
-                    itemBuilder: (_) => [2, 4, 8, 14]
-                        .map((v) => PopupMenuItem(
-                            value: v.toDouble(), child: Text('${v}px')))
-                        .toList()),
-              ]))));
+                  ])))));
 }
 
 class DrawingCanvas extends StatelessWidget {
@@ -369,10 +427,14 @@ class _NotebookPagePainter extends CustomPainter {
     final line = Paint()
       ..color = const Color(0xffd7e1eb)
       ..strokeWidth = 1;
-    if (templateId == 'grid' || templateId == 'dotted') {
-      const gap = 24.0;
+    if (templateId == 'grid' ||
+        templateId == 'graph5' ||
+        templateId == 'dotted') {
+      final gap = templateId == 'graph5' ? 18.0 : 24.0;
       for (double x = gap; x < size.width; x += gap) {
-        if (templateId == 'grid') canvas.drawLine(Offset(x, 0), Offset(x, size.height), line);
+        if (templateId == 'grid' || templateId == 'graph5') {
+          canvas.drawLine(Offset(x, 0), Offset(x, size.height), line);
+        }
         for (double y = gap; y < size.height; y += gap) {
           if (templateId == 'dotted') {
             canvas.drawCircle(Offset(x, y), 1, line);
@@ -383,12 +445,47 @@ class _NotebookPagePainter extends CustomPainter {
       }
       return;
     }
-    if (templateId == 'cornell') {
-      canvas.drawLine(Offset(size.width * .28, 0), Offset(size.width * .28, size.height), line);
-      canvas.drawLine(Offset(0, size.height * .79), Offset(size.width, size.height * .79), line);
+    if (templateId == 'kanban') {
+      for (var column = 1; column < 3; column++) {
+        final x = size.width * column / 3;
+        canvas.drawLine(Offset(x, 0), Offset(x, size.height), line);
+      }
+      canvas.drawLine(Offset(0, 52), Offset(size.width, 52), line);
+      for (double y = 104; y < size.height; y += 84) {
+        canvas.drawLine(Offset(20, y), Offset(size.width - 20, y), line);
+      }
+      return;
     }
-    if (templateId == 'daily' || templateId == 'weekly' || templateId == 'monthly') {
-      final columns = templateId == 'daily' ? 1 : templateId == 'weekly' ? 2 : 3;
+    if (templateId == 'timetable' || templateId == 'habit') {
+      final columns = templateId == 'timetable' ? 5 : 7;
+      final rows = templateId == 'timetable' ? 7 : 5;
+      for (var column = 1; column < columns; column++) {
+        final x = size.width * column / columns;
+        canvas.drawLine(Offset(x, 0), Offset(x, size.height), line);
+      }
+      for (var row = 1; row < rows; row++) {
+        final y = size.height * row / rows;
+        canvas.drawLine(Offset(0, y), Offset(size.width, y), line);
+      }
+      return;
+    }
+    if (templateId == 'cornell') {
+      canvas.drawLine(Offset(size.width * .28, 0),
+          Offset(size.width * .28, size.height), line);
+      canvas.drawLine(Offset(0, size.height * .79),
+          Offset(size.width, size.height * .79), line);
+    }
+    if (templateId == 'daily' ||
+        templateId == 'weekly' ||
+        templateId == 'monthly' ||
+        templateId == 'calendar') {
+      final columns = templateId == 'daily'
+          ? 1
+          : templateId == 'weekly'
+              ? 2
+              : templateId == 'calendar'
+                  ? 7
+                  : 3;
       for (var column = 1; column < columns; column++) {
         final x = size.width * column / columns;
         canvas.drawLine(Offset(x, 0), Offset(x, size.height), line);
@@ -396,17 +493,20 @@ class _NotebookPagePainter extends CustomPainter {
       canvas.drawLine(Offset(0, 44), Offset(size.width, 44), line);
     }
     final start = templateId == 'meeting' ? 62.0 : 36.0;
-    for (double y = start; y < size.height; y += 36) {
+    final gap = templateId == 'ruledWide' ? 48.0 : 36.0;
+    for (double y = start; y < size.height; y += gap) {
       canvas.drawLine(Offset(20, y), Offset(size.width - 20, y), line);
       if (templateId == 'checklist') {
-        canvas.drawRect(Rect.fromLTWH(20, y - 16, 11, 11), line..style = PaintingStyle.stroke);
+        canvas.drawRect(Rect.fromLTWH(20, y - 16, 11, 11),
+            line..style = PaintingStyle.stroke);
         line.style = PaintingStyle.stroke;
       }
     }
   }
 
   @override
-  bool shouldRepaint(covariant _NotebookPagePainter oldDelegate) => oldDelegate.templateId != templateId;
+  bool shouldRepaint(covariant _NotebookPagePainter oldDelegate) =>
+      oldDelegate.templateId != templateId;
 }
 
 class StrokePainter extends CustomPainter {

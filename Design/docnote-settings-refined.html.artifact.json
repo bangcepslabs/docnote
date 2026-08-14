@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "docnote-settings-refined.html",
+  "entry": "docnote-settings-refined.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T07:15:13.359Z",
+  "updatedAt": "2026-08-12T07:15:13.359Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

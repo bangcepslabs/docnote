@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "docnote-paper-picker-refined.html",
+  "entry": "docnote-paper-picker-refined.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T07:48:27.185Z",
+  "updatedAt": "2026-08-12T07:48:27.185Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

@@ -330,73 +330,18 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
                     ])
           ],
         ),
-        body: Stack(children: [
-          ListView.builder(
-              padding: EdgeInsets.fromLTRB(
-                12,
-                16,
-                12,
-                toolbarVisible ? 100 : 24,
-              ),
-              physics: editing.mode == PdfInteractionMode.draw
-                  ? const NeverScrollableScrollPhysics()
-                  : null,
-              itemCount: pdf.pagesCount,
-              itemBuilder: (_, index) {
-                final key = _keyFor(index);
-                return PdfPageWithInk(
-                    key: key,
-                    document: pdf,
-                    pageNumber: index + 1,
-                    documentId: widget.documentId,
-                    editMode: editing.mode == PdfInteractionMode.draw,
-                    tool: editing.selectedTool,
-                    penType: editing.selectedPenType,
-                    color: editing.selectedColor,
-                    width: editing.strokeWidth,
-                    opacity: editing.opacity,
-                    shapeKind: editing.shapeKind,
-                    onPageActivated: () => _activatePage(index),
-                    onStateChanged: () => _pageStateChanged(index));
-              }),
-          Positioned(
-            right: 16,
-            bottom: toolbarVisible ? 72 : 16,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .surface
-                      .withValues(alpha: .96),
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: .08),
-                      blurRadius: 4,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                  child: Text(
-                    '${editing.selectedPageIndex + 1} / ${pdf.pagesCount}',
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                  ),
-                ),
-              ),
-            ),
-          ),
+        body: Column(children: [
           if (toolbarVisible)
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 10,
-              child: SafeArea(
-                top: false,
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                border: Border(
+                  bottom: BorderSide(
+                      color: Theme.of(context).colorScheme.outlineVariant),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                 child: PdfDrawingToolbar(
                     state: editing,
                     onView: () => _setMode(PdfInteractionMode.view),
@@ -425,6 +370,66 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
                     onClear: () => _confirmClearCurrent()),
               ),
             ),
+          Expanded(
+            child: Stack(children: [
+              ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(12, 16, 12, 24),
+                  physics: editing.mode == PdfInteractionMode.draw
+                      ? const NeverScrollableScrollPhysics()
+                      : null,
+                  itemCount: pdf.pagesCount,
+                  itemBuilder: (_, index) {
+                    final key = _keyFor(index);
+                    return PdfPageWithInk(
+                        key: key,
+                        document: pdf,
+                        pageNumber: index + 1,
+                        documentId: widget.documentId,
+                        editMode: editing.mode == PdfInteractionMode.draw,
+                        tool: editing.selectedTool,
+                        penType: editing.selectedPenType,
+                        color: editing.selectedColor,
+                        width: editing.strokeWidth,
+                        opacity: editing.opacity,
+                        shapeKind: editing.shapeKind,
+                        onPageActivated: () => _activatePage(index),
+                        onStateChanged: () => _pageStateChanged(index));
+                  }),
+              Positioned(
+                right: 16,
+                bottom: 16,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surface
+                          .withValues(alpha: .96),
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: .08),
+                          blurRadius: 4,
+                          offset: const Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 9, vertical: 5),
+                      child: Text(
+                        '${editing.selectedPageIndex + 1} / ${pdf.pagesCount}',
+                        style:
+                            Theme.of(context).textTheme.labelMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ]),
+          ),
         ]));
   }
 
@@ -579,18 +584,18 @@ class PdfDrawingToolbar extends StatelessWidget {
             ),
           ],
         ),
-      child: SafeArea(
-        top: false,
-        bottom: false,
-        child: SizedBox(
-          height: 56,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Row(children: children),
+        child: SafeArea(
+          top: false,
+          bottom: false,
+          child: SizedBox(
+            height: 56,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Row(children: children),
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -616,7 +621,8 @@ class PdfDrawingToolbar extends StatelessWidget {
           padding: EdgeInsets.zero,
           visualDensity: VisualDensity.compact,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           backgroundColor: selected ? scheme.primaryContainer : null,
           foregroundColor: selected ? scheme.primary : null),
       icon: const Icon(Icons.pan_tool_outlined, size: 18),
@@ -722,6 +728,7 @@ class PdfDrawingToolbar extends StatelessWidget {
     final isPen = tool == DrawingTool.pen;
     final isHighlighter = tool == DrawingTool.highlighter;
     final isShape = tool == DrawingTool.shape;
+    final isEraser = tool == DrawingTool.eraser;
     final title = isPen
         ? '펜 설정'
         : isHighlighter
@@ -805,31 +812,49 @@ class PdfDrawingToolbar extends StatelessWidget {
                                   : null,
                               icon: Icon(item.$2)),
                       ]),
+                if (isEraser)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text('정밀 지우개 크기',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                  ),
                 Row(children: [
-                  const Icon(Icons.line_weight, size: 18),
+                  Icon(
+                      isEraser
+                          ? Icons.cleaning_services_outlined
+                          : Icons.line_weight,
+                      size: 18),
                   Expanded(
                       child: Slider(
-                          min: isHighlighter
-                              ? 4
-                              : isPen
-                                  ? 1
-                                  : 4,
-                          max: isHighlighter
-                              ? 30
-                              : isPen
-                                  ? 12
-                                  : 40,
-                          value: state.strokeWidth.clamp(
-                              isHighlighter
+                          min: isEraser
+                              ? 1
+                              : isHighlighter
                                   ? 4
                                   : isPen
                                       ? 1
                                       : 4,
+                          max: isHighlighter
+                              ? 30
+                              : isPen
+                                  ? 12
+                                  : isEraser
+                                      ? 50
+                                      : 40,
+                          value: state.strokeWidth.clamp(
+                              isEraser
+                                  ? 1
+                                  : isHighlighter
+                                      ? 4
+                                      : isPen
+                                          ? 1
+                                          : 4,
                               isHighlighter
                                   ? 30
                                   : isPen
                                       ? 12
-                                      : 40),
+                                      : isEraser
+                                          ? 50
+                                          : 40),
                           onChanged: (value) {
                             if (isPen) {
                               onPenWidthChanged(value);
@@ -837,7 +862,12 @@ class PdfDrawingToolbar extends StatelessWidget {
                               onWidthChanged(value);
                             }
                             setPanelState(() {});
-                          }))
+                          })),
+                  SizedBox(
+                      width: 42,
+                      child: Text('${state.strokeWidth.round()}px',
+                          textAlign: TextAlign.end,
+                          style: Theme.of(context).textTheme.labelSmall)),
                 ]),
                 if (isPen || isHighlighter || isShape)
                   Row(children: [
@@ -852,7 +882,7 @@ class PdfDrawingToolbar extends StatelessWidget {
                               setPanelState(() {});
                             }))
                   ]),
-                if (tool == DrawingTool.eraser)
+                if (isEraser)
                   TextButton.icon(
                       onPressed: onClear,
                       icon: const Icon(Icons.delete_sweep_outlined),
@@ -1192,14 +1222,52 @@ class _PdfPageWithInkState extends State<PdfPageWithInk> {
       };
   void _erase(Offset p, Size size) {
     final n = normalizePoint(p, size);
-    final before = strokes.length;
-    final radius = (widget.width / size.width).clamp(.012, .12);
-    strokes.removeWhere((s) => s.points.any((point) {
-          final dx = point.x - n.x;
-          final dy = point.y - n.y;
-          return dx * dx + dy * dy <= radius * radius;
-        }));
-    if (before != strokes.length) {
+    final radius = (widget.width / size.width).clamp(.002, .12);
+    final kept = <Stroke>[];
+    var changed = false;
+    for (final stroke in strokes) {
+      final segments = <List<StrokePoint>>[];
+      var segment = <StrokePoint>[];
+      for (final point in stroke.points) {
+        final dx = point.x - n.x;
+        final dy = point.y - n.y;
+        if (dx * dx + dy * dy <= radius * radius) {
+          changed = true;
+          if (segment.isNotEmpty) segments.add(segment);
+          segment = <StrokePoint>[];
+        } else {
+          segment.add(point);
+        }
+      }
+      if (segment.isNotEmpty) segments.add(segment);
+      if (segments.length == 1 &&
+          segments.single.length == stroke.points.length) {
+        kept.add(stroke);
+        continue;
+      }
+      for (var index = 0; index < segments.length; index++) {
+        final points = segments[index];
+        if (points.isEmpty) continue;
+        kept.add(Stroke(
+          id: '${stroke.id}_erase_$index',
+          documentId: stroke.documentId,
+          pageId: stroke.pageId,
+          tool: stroke.tool,
+          penType: stroke.penType,
+          points: points,
+          color: stroke.color,
+          width: stroke.width,
+          opacity: stroke.opacity,
+          order: kept.length,
+          createdAt: stroke.createdAt,
+        ));
+      }
+    }
+    if (changed) {
+      strokes
+        ..clear()
+        ..addAll(kept);
+      redoStrokes.clear();
       _schedule();
       widget.onStateChanged();
       setState(() {});

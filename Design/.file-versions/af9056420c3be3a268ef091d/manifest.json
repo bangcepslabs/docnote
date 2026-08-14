@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 2,
+  "fileName": "docnote-home-v3.html",
+  "currentVersionId": "e77c376f-260c-4e07-8fb2-6462146ce026",
+  "entries": [
+    {
+      "id": "e77c376f-260c-4e07-8fb2-6462146ce026",
+      "fileName": "docnote-home-v3.html",
+      "version": 1,
+      "label": "Version 1",
+      "createdAt": 1786514638988,
+      "source": "ai",
+      "prompt": "해당 프로젝트는 모바일만 출시할 거거든?? 모바일만 고려해서 수정해주면되고, 문서 탭, 검색 탭, 설정 탭도 다같이 확인 후 수정 부탁해",
+      "size": 21187,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0001-e77c376f-260c-4e07-8fb2-6462146ce026.html",
+      "contentDigest": "d90b30788c1ab287e4e3c8534b6e89af086366edfd32495cf9453df465192a1a",
+      "promptSource": "message"
+    }
+  ]
+}

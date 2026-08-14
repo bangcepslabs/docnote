@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DocNote · Home 시안</title>
+  <style>
+    :root {
+      --bg: oklch(0.977 0.004 260);
+      --surface: oklch(1 0 0);
+      --fg: oklch(0.205 0.027 250);
+      --muted: oklch(0.49 0.025 250);
+      --border: oklch(0.90 0.012 250);
+      --accent: oklch(0.52 0.115 247);
+      --accent-soft: oklch(0.94 0.035 247);
+      --success: oklch(0.56 0.12 150);
+      --font-display: "SUIT", "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+      --font-body: "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+      --shadow: 0 14px 32px oklch(0.22 0.03 250 / .07);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--fg); }
+    body { font-family: var(--font-body); letter-spacing: 0; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    :focus-visible { outline: 3px solid oklch(0.68 0.13 247 / .55); outline-offset: 3px; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 236px minmax(0, 1fr); }
+    .sidebar { background: var(--surface); border-right: 1px solid var(--border); padding: 28px 16px; display: flex; flex-direction: column; }
+    .brand { padding: 0 12px 34px; font-family: var(--font-display); font-size: 23px; font-weight: 700; letter-spacing: -.02em; }
+    .brand small { display: block; color: var(--muted); font-family: var(--font-body); font-size: 11px; font-weight: 600; letter-spacing: .04em; margin-top: 5px; }
+    .nav { display: grid; gap: 6px; }
+    .nav button { min-height: 46px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); text-align: left; padding: 0 13px; font-size: 14px; font-weight: 600; }
+    .nav button:hover { background: oklch(0.95 0.01 250); color: var(--fg); }
+    .nav button.active { background: var(--accent-soft); color: var(--accent); }
+    .nav-icon { width: 20px; display: inline-block; margin-right: 9px; font-size: 17px; }
+    .side-note { margin-top: auto; padding: 16px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; }
+    .side-note p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+    .main { min-width: 0; }
+    .topbar { height: 78px; display: flex; align-items: center; justify-content: space-between; padding: 0 clamp(24px, 5vw, 64px); background: var(--bg); }
+    .eyebrow { margin: 0 0 5px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .03em; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 0; font-family: var(--font-display); font-size: clamp(28px, 3vw, 40px); line-height: 1.35; letter-spacing: 0; }
+    h2 { margin-bottom: 4px; font-family: var(--font-display); font-size: 22px; line-height: 1.4; letter-spacing: 0; }
+    h3 { margin-bottom: 5px; font-family: var(--font-display); font-size: 16px; line-height: 1.45; }
+    .top-actions { display: flex; gap: 8px; align-items: center; }
+    .icon-btn { width: 44px; height: 44px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 10px; color: var(--fg); background: var(--surface); font-size: 18px; }
+    .icon-btn:hover { background: oklch(0.95 0.01 250); }
+    .content { max-width: 1320px; margin: 0 auto; padding: 14px clamp(24px, 5vw, 64px) 48px; }
+    .hero { display: flex; justify-content: space-between; gap: 28px; align-items: end; margin-bottom: 28px; }
+    .hero-copy { max-width: 560px; }
+    .hero-copy p { margin: 12px 0 0; color: var(--muted); font-size: 15px; line-height: 1.75; }
+    .primary { min-height: 46px; border: 0; border-radius: 10px; background: var(--accent); color: white; padding: 0 18px; font-size: 14px; font-weight: 700; letter-spacing: .02em; box-shadow: 0 8px 18px oklch(0.52 0.115 247 / .17); }
+    .primary:hover { background: oklch(0.46 0.115 247); }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(320px, .8fr); gap: 18px; align-items: start; }
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
+    .panel-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding: 22px 22px 16px; }
+    .panel-head p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .text-btn { border: 0; background: transparent; color: var(--accent); font-size: 12px; font-weight: 700; padding: 8px 0; }
+    .continue { padding-bottom: 20px; }
+    .continue-card { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 16px; align-items: center; margin: 0 22px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; }
+    .thumb { min-height: 100px; display: grid; place-items: center; border-radius: 8px; overflow: hidden; }
+    .thumb.pdf { background: oklch(0.95 0.04 25); color: oklch(0.52 0.16 25); }
+    .doc-glyph { font-size: 30px; }
+    .meta { min-width: 0; }
+    .meta .type { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+    .meta h3 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 7px; }
+    .meta p { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 0; }
+    .open-btn { min-height: 40px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--fg); padding: 0 13px; font-size: 12px; font-weight: 700; }
+    .open-btn:hover { background: oklch(0.95 0.01 250); }
+    .quick { padding-bottom: 22px; }
+    .quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 22px; }
+    .quick-card { min-height: 88px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 14px; text-align: left; }
+    .quick-card:hover { border-color: oklch(0.72 0.07 247); background: var(--accent-soft); }
+    .quick-card strong { display: block; margin-top: 12px; font-size: 13px; }
+    .quick-card span { color: var(--muted); font-size: 11px; }
+    .quick-card.primary-quick { background: var(--accent); color: white; border-color: var(--accent); }
+    .quick-card.primary-quick span { color: oklch(0.94 0.02 247); }
+    .notebooks { margin-top: 18px; }
+    .book-row { display: flex; gap: 12px; overflow-x: auto; padding: 0 22px 20px; scrollbar-width: thin; }
+    .book { flex: 0 0 150px; min-height: 202px; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: end; position: relative; overflow: hidden; border: 1px solid oklch(0.8 0.03 250 / .35); }
+    .book::after { content: ""; width: 100px; height: 100px; position: absolute; right: -30px; bottom: -30px; border-radius: 50%; background: oklch(1 0 0 / .22); }
+    .book.work { background: oklch(0.91 0.035 247); color: oklch(0.35 0.08 247); }
+    .book.study { background: oklch(0.93 0.05 120); color: oklch(0.38 0.07 135); }
+    .book.planner { background: oklch(0.94 0.055 50); color: oklch(0.43 0.09 45); }
+    .book small { position: absolute; top: 16px; left: 16px; font-size: 10px; font-weight: 800; letter-spacing: .04em; }
+    .book strong { position: relative; z-index: 1; max-width: 112px; font-family: var(--font-display); font-size: 18px; line-height: 1.45; }
+    .book span { position: relative; z-index: 1; margin-top: 7px; font-size: 10px; font-weight: 700; opacity: .72; }
+    .recent { margin-top: 18px; }
+    .recent .panel-head { padding-bottom: 12px; align-items: center; }
+    .filters { display: flex; gap: 8px; padding: 0 22px 16px; overflow-x: auto; }
+    .filter { border: 0; border-radius: 999px; background: oklch(0.95 0.01 250); color: var(--muted); padding: 8px 13px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .filter.active { background: var(--accent); color: white; }
+    .doc-list { display: grid; gap: 10px; padding: 0 22px 22px; }
+    .doc-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 62px; padding: 10px; border-top: 1px solid var(--border); }
+    .doc-row:first-child { border-top: 0; }
+    .doc-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 9px; background: oklch(0.95 0.04 25); color: oklch(0.52 0.16 25); }
+    .doc-row.hwp .doc-icon { background: oklch(0.94 0.04 145); color: oklch(0.44 0.10 145); }
+    .doc-row.memo .doc-icon { background: oklch(0.94 0.035 247); color: var(--accent); }
+    .doc-row strong { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .doc-row span { display: block; color: var(--muted); margin-top: 4px; font-size: 11px; }
+    .empty-note { padding: 24px 22px; color: var(--muted); font-size: 12px; line-height: 1.65; }
+    .mobile-nav { display: none; }
+    @media (max-width: 900px) {
+      .app { display: block; padding-bottom: 76px; }
+      .sidebar { display: none; }
+      .topbar { height: 72px; padding: 0 20px; }
+      .content { padding: 10px 20px 32px; }
+      .hero { align-items: start; flex-direction: column; gap: 18px; }
+      .hero .primary { width: 100%; }
+      .workspace { grid-template-columns: 1fr; }
+      .mobile-nav { position: fixed; z-index: 10; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(4, 1fr); height: 72px; padding: 7px 10px calc(7px + env(safe-area-inset-bottom)); background: oklch(1 0 0 / .96); border-top: 1px solid var(--border); backdrop-filter: blur(10px); }
+      .mobile-nav button { border: 0; background: transparent; color: var(--muted); font-size: 10px; font-weight: 700; }
+      .mobile-nav button.active { color: var(--accent); }
+      .mobile-nav i { display: block; font-style: normal; font-size: 19px; margin-bottom: 3px; }
+    }
+    @media (max-width: 520px) {
+      .continue-card { grid-template-columns: 84px minmax(0, 1fr); }
+      .continue-card .open-btn { grid-column: 2; justify-self: start; }
+      .thumb { min-height: 84px; }
+      .panel-head { padding-left: 18px; padding-right: 18px; }
+      .quick-grid, .filters, .doc-list { padding-left: 18px; padding-right: 18px; }
+      .book-row { padding-left: 18px; padding-right: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" data-od-id="sidebar-navigation">
+      <div class="brand">DocNote<small>문서와 필기를 한 곳에서</small></div>
+      <nav class="nav" aria-label="주요 메뉴">
+        <button class="active" data-tab="home"><span class="nav-icon">⌂</span>홈</button>
+        <button data-tab="documents"><span class="nav-icon">□</span>문서</button>
+        <button data-tab="search"><span class="nav-icon">⌕</span>검색</button>
+        <button data-tab="settings"><span class="nav-icon">⚙</span>설정</button>
+      </nav>
+      <div class="side-note"><p>빠른 메모, PDF, HWP를<br />DocNote 안에서 이어서 작업하세요.</p></div>
+    </aside>
+    <main class="main" data-od-id="home-screen">
+      <header class="topbar" data-od-id="home-topbar">
+        <div><p class="eyebrow">수요일, 8월 12일</p><h1>다시 이어서 기록하세요</h1></div>
+        <div class="top-actions"><button class="icon-btn" data-od-id="search-button" aria-label="검색">⌕</button><button class="icon-btn" aria-label="더 보기">⋯</button></div>
+      </header>
+      <div class="content">
+        <section class="hero" data-od-id="home-hero">
+          <div class="hero-copy"><p>최근 문서와 노트북을 한눈에 보고, 필요한 기록으로 바로 들어갈 수 있습니다.</p></div>
+          <button class="primary" data-od-id="primary-create-notebook">+ 새 노트북 만들기</button>
+        </section>
+        <div class="workspace">
+          <div>
+            <section class="panel continue" data-od-id="continue-section">
+              <div class="panel-head"><div><h2>최근 작업</h2><p>마지막으로 열었던 문서부터 이어서 작업합니다.</p></div><button class="text-btn">전체 보기</button></div>
+              <article class="continue-card" data-od-id="recent-document-contract">
+                <div class="thumb pdf"><span class="doc-glyph">▤</span></div>
+                <div class="meta"><span class="type">PDF · 12페이지</span><h3>2026 사업계획서 검토본</h3><p>마지막 열람 · 오늘 오전 10:32</p></div>
+                <button class="open-btn">열기</button>
+              </article>
+            </section>
+            <section class="panel recent" data-od-id="recent-documents-section">
+              <div class="panel-head"><div><h2>최근 가져온 문서</h2><p>파일 형식별로 빠르게 찾을 수 있어요.</p></div><button class="text-btn">정렬 · 최근 수정</button></div>
+              <div class="filters" role="tablist" aria-label="문서 필터">
+                <button class="filter active" data-filter="all">전체</button><button class="filter" data-filter="pdf">PDF</button><button class="filter" data-filter="hwp">HWP</button><button class="filter" data-filter="memo">메모</button>
+              </div>
+              <div class="doc-list">
+                <article class="doc-row pdf" data-kind="pdf"><div class="doc-icon">▤</div><div><strong>2026 사업계획서 검토본</strong><span>PDF · 오늘 오전 10:32</span></div><button class="icon-btn" aria-label="문서 메뉴">⋯</button></article>
+                <article class="doc-row hwp" data-kind="hwp"><div class="doc-icon">▧</div><div><strong>회의록_08월_1주차</strong><span>HWP · 어제 오후 4:18</span></div><button class="icon-btn" aria-label="문서 메뉴">⋯</button></article>
+                <article class="doc-row memo" data-kind="memo"><div class="doc-icon">✎</div><div><strong>제품 아이디어 메모</strong><span>메모 · 8월 9일</span></div><button class="icon-btn" aria-label="문서 메뉴">⋯</button></article>
+              </div>
+              <div class="empty-note" hidden>이 형식의 문서가 아직 없습니다.</div>
+            </section>
+          </div>
+          <div>
+            <section class="panel quick" data-od-id="quick-actions-section">
+              <div class="panel-head"><div><h2>바로 시작하기</h2><p>새 기록이나 외부 문서를 추가합니다.</p></div></div>
+              <div class="quick-grid">
+                <button class="quick-card primary-quick"><span>가볍게 시작</span><strong>새 메모</strong></button>
+                <button class="quick-card"><span>파일에서 이어서</span><strong>PDF 열기</strong></button>
+                <button class="quick-card"><span>문서 가져오기</span><strong>HWP 열기</strong></button>
+                <button class="quick-card"><span>손으로 기록</span><strong>필기 노트</strong></button>
+              </div>
+            </section>
+            <section class="panel notebooks" data-od-id="notebooks-section">
+              <div class="panel-head"><div><h2>내 노트북</h2><p>표지와 속지로 정리한 작업 공간입니다.</p></div><button class="text-btn">모두 보기</button></div>
+              <div class="book-row">
+                <article class="book work" data-od-id="notebook-work"><small>WORK</small><strong>프로젝트<br />기록</strong><span>Meeting notes</span></article>
+                <article class="book study" data-od-id="notebook-study"><small>STUDY</small><strong>제품 공부<br />노트</strong><span>Cornell</span></article>
+                <article class="book planner" data-od-id="notebook-planner"><small>PLANNER</small><strong>주간<br />플래너</strong><span>Weekly planner</span></article>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <nav class="mobile-nav" data-od-id="mobile-navigation" aria-label="모바일 메뉴">
+    <button class="active"><i>⌂</i>홈</button><button><i>□</i>문서</button><button><i>⌕</i>검색</button><button><i>⚙</i>설정</button>
+  </nav>
+  <script>
+    const filters = [...document.querySelectorAll('.filter')];
+    const rows = [...document.querySelectorAll('.doc-row')];
+    const empty = document.querySelector('.empty-note');
+    filters.forEach((filter) => filter.addEventListener('click', () => {
+      filters.forEach((item) => item.classList.toggle('active', item === filter));
+      const kind = filter.dataset.filter;
+      let visible = 0;
+      rows.forEach((row) => { const show = kind === 'all' || row.dataset.kind === kind; row.hidden = !show; if (show) visible += 1; });
+      empty.hidden = visible !== 0;
+    }));
+    document.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => {
+      document.querySelectorAll('[data-tab]').forEach((item) => item.classList.toggle('active', item === button));
+    }));
+    document.querySelector('[data-od-id="primary-create-notebook"]').addEventListener('click', () => alert('노트북 만들기 흐름으로 연결됩니다.'));
+  </script>
+</body>
+</html>

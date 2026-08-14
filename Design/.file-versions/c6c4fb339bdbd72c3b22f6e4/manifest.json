@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 2,
+  "fileName": "docnote-settings-refined.html",
+  "currentVersionId": "5b9cd675-70de-4048-9a4b-c354211c4e54",
+  "entries": [
+    {
+      "id": "5b9cd675-70de-4048-9a4b-c354211c4e54",
+      "fileName": "docnote-settings-refined.html",
+      "version": 1,
+      "label": "Version 1",
+      "createdAt": 1786518946742,
+      "source": "ai",
+      "prompt": "수정 반영이 안되는 것 같은데?? 모바일 기준 수정하고 있는거 맞아? 하단 메뉴 네비게이션 통합으로 사용하게 해줘 다 다르게 나오고, 검색 메뉴 들어갔을 때 검색바 안에 X버튼에서 테두리가 보여지고 있어, 제대로 검증후 진행해",
+      "size": 6577,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0001-5b9cd675-70de-4048-9a4b-c354211c4e54.html",
+      "contentDigest": "51764ac656a623928ca7c0957b7320a01979752bd05c8d022a88fb55189ed9be",
+      "promptSource": "message"
+    }
+  ]
+}

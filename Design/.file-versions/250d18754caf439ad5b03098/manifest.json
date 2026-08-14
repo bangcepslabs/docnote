@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 2,
+  "fileName": "docnote-home-v5.html",
+  "currentVersionId": "358ac798-47a8-4541-9b27-fb5278396550",
+  "entries": [
+    {
+      "id": "358ac798-47a8-4541-9b27-fb5278396550",
+      "fileName": "docnote-home-v5.html",
+      "version": 1,
+      "label": "Version 1",
+      "createdAt": 1786515105248,
+      "source": "ai",
+      "prompt": "현재 문서 및 검색 박스 위아래 간격이 안맞아, 제일 우측 위 검색 버튼 박스도 안에 돋보기 모양 간격이 안맞아,  아래 홈, 문서, 검색, 설정 이부분도 간격 안맞아",
+      "size": 25769,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0001-358ac798-47a8-4541-9b27-fb5278396550.html",
+      "contentDigest": "71fba71c7661c8823ca191f23110c180b40da8365544a6eaa7a2572669147246",
+      "promptSource": "message"
+    }
+  ]
+}

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>DocNote · 홈 디자인 시안</title>
+  <style>
+    :root {
+      --bg: oklch(0.977 0.004 260);
+      --surface: oklch(1 0 0);
+      --surface-subtle: oklch(0.958 0.007 255);
+      --fg: oklch(0.205 0.027 250);
+      --muted: oklch(0.49 0.025 250);
+      --border: oklch(0.90 0.012 250);
+      --accent: oklch(0.52 0.115 247);
+      --accent-soft: oklch(0.93 0.032 247);
+      --success: oklch(0.52 0.12 150);
+      --danger: oklch(0.53 0.15 25);
+      --font-display: "SUIT", "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+      --font-body: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s7: 32px;
+      --r1: 8px; --r2: 12px; --r3: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--bg); }
+    body { margin: 0; padding-bottom: calc(80px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--fg); font-family: var(--font-body); -webkit-font-smoothing: antialiased; }
+    button, input { font: inherit; }
+    button { border: 0; cursor: pointer; }
+    a { color: inherit; text-decoration: none; }
+    .app { width: 100%; max-width: 720px; margin: 0 auto; }
+    .screen { padding-inline: 16px; }
+    .header { height: 64px; display: flex; align-items: center; justify-content: space-between; }
+    .brand { font-family: var(--font-display); font-size: 22px; line-height: 1.35; font-weight: 700; letter-spacing: -0.01em; }
+    .header-actions { display: flex; gap: 4px; }
+    .icon-btn { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; background: transparent; color: var(--fg); }
+    .icon-btn:hover { background: var(--surface-subtle); }
+    .icon-btn:focus-visible, .primary:focus-visible, .quiet-btn:focus-visible, .section-link:focus-visible, .template:focus-visible, .nav-item:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+    .hero { display: grid; gap: var(--s4); margin-top: var(--s4); }
+    .eyebrow { margin: 0 0 8px; color: var(--muted); font-size: 12px; line-height: 1.55; font-weight: 650; letter-spacing: .02em; }
+    .hero h1 { max-width: 18ch; margin: 0; font-family: var(--font-display); font-size: 32px; line-height: 1.35; font-weight: 700; letter-spacing: 0; }
+    .hero p { max-width: 34ch; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.7; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
+    .primary, .quiet-btn { min-height: 44px; border-radius: var(--r2); padding-inline: 16px; font-size: 14px; font-weight: 700; letter-spacing: .02em; }
+    .primary { background: var(--accent); color: var(--surface); }
+    .primary:hover { background: oklch(0.44 0.115 247); }
+    .quiet-btn { border: 1px solid var(--border); background: var(--surface); color: var(--fg); }
+    .quiet-btn:hover { background: var(--surface-subtle); }
+    .section { margin-top: var(--s7); }
+    .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .section-head h2 { margin: 0; font-family: var(--font-display); font-size: 17px; line-height: 1.45; font-weight: 700; }
+    .section-link { min-height: 44px; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; font-weight: 650; }
+    .section-link:hover { color: var(--fg); }
+    .notebook-row, .template-row { display: grid; grid-auto-flow: column; overflow-x: auto; scrollbar-width: none; }
+    .notebook-row::-webkit-scrollbar, .template-row::-webkit-scrollbar { display: none; }
+    .notebook-row { grid-auto-columns: minmax(136px, 42%); gap: 12px; padding-bottom: 4px; }
+    .notebook { min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r3); background: var(--surface); }
+    .cover { height: 164px; position: relative; display: flex; flex-direction: column; justify-content: space-between; padding: 16px; }
+    .cover.blue { background: oklch(0.91 0.035 247); color: oklch(0.34 0.08 247); }
+    .cover.green { background: oklch(0.91 0.045 130); color: oklch(0.35 0.07 130); }
+    .cover.rose { background: oklch(0.93 0.045 25); color: oklch(0.39 0.09 25); }
+    .cover-mark { font-size: 11px; line-height: 1.5; font-weight: 700; letter-spacing: .08em; }
+    .cover-title { max-width: 8ch; font-family: var(--font-display); font-size: 18px; line-height: 1.4; font-weight: 700; }
+    .cover-lines { position: absolute; top: 50px; right: 16px; width: 48px; height: 72px; opacity: .32; border-top: 1px solid currentColor; background: repeating-linear-gradient(to bottom, transparent 0, transparent 14px, currentColor 15px, currentColor 16px); }
+    .notebook-meta { padding: 12px 12px 14px; }
+    .notebook-meta strong, .doc-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 1.5; }
+    .notebook-meta span, .doc-copy span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .template-row { grid-auto-columns: 124px; gap: 8px; }
+    .template { height: 140px; padding: 10px; border: 1px solid var(--border); border-radius: var(--r2); background: var(--surface); text-align: left; }
+    .template:hover { background: var(--surface-subtle); }
+    .paper { height: 76px; position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r1); background: var(--surface-subtle); }
+    .paper::before { content: ""; position: absolute; inset: 12px 10px; background: repeating-linear-gradient(to bottom, transparent 0, transparent 11px, oklch(0.86 0.018 250) 12px, oklch(0.86 0.018 250) 13px); }
+    .paper.cornell::after { content: ""; position: absolute; top: 12px; bottom: 12px; left: 36px; border-left: 2px solid oklch(0.73 0.07 247); }
+    .paper.weekly::before { background: linear-gradient(to right, transparent 0 32%, oklch(0.86 0.018 250) 33% 34%, transparent 35% 65%, oklch(0.86 0.018 250) 66% 67%, transparent 68%), repeating-linear-gradient(to bottom, transparent 0, transparent 22px, oklch(0.86 0.018 250) 23px, oklch(0.86 0.018 250) 24px); }
+    .paper.meeting::after { content: "✓  ·  ○  ·  □"; position: absolute; left: 10px; bottom: 10px; color: var(--muted); font-size: 11px; }
+    .template strong { display: block; margin-top: 8px; font-size: 13px; line-height: 1.5; }
+    .template span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .imported { display: grid; gap: 8px; }
+    .doc-card { min-height: 84px; display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r2); background: var(--surface); }
+    .doc-card:hover { border-color: oklch(0.78 0.04 250); }
+    .doc-preview { width: 48px; height: 60px; flex: none; position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r1); background: var(--surface-subtle); }
+    .doc-preview::before { content: ""; position: absolute; inset: 12px 8px; background: repeating-linear-gradient(to bottom, oklch(0.77 0.02 250) 0 2px, transparent 2px 9px); }
+    .doc-preview.pdf { background: oklch(0.95 0.035 25); }
+    .doc-preview.hwp { background: oklch(0.94 0.035 247); }
+    .doc-copy { min-width: 0; flex: 1; }
+    .status-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--success); }
+    .state-card { margin-top: 16px; padding: 24px; border: 1px dashed var(--border); border-radius: var(--r3); background: var(--surface); text-align: center; }
+    .state-card h2 { margin: 12px 0 4px; font-family: var(--font-display); font-size: 17px; line-height: 1.45; }
+    .state-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+    .skeleton { height: 12px; margin: 8px auto; border-radius: 99px; background: var(--surface-subtle); }
+    .skeleton.wide { width: 70%; } .skeleton.short { width: 42%; }
+    .toast { position: fixed; z-index: 30; left: 16px; right: 16px; bottom: calc(92px + env(safe-area-inset-bottom)); max-width: 480px; margin: auto; padding: 12px 16px; border-radius: 12px; background: var(--fg); color: var(--surface); font-size: 13px; line-height: 1.5; text-align: center; box-shadow: 0 8px 24px oklch(0.2 0.02 250 / .18); }
+    .bottom-nav { position: fixed; z-index: 20; left: 0; right: 0; bottom: 0; height: 80px; display: grid; grid-template-columns: repeat(5, 1fr); padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 94%, transparent); backdrop-filter: blur(16px); }
+    .nav-item { min-width: 44px; min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border-radius: var(--r2); background: transparent; color: var(--muted); font-size: 11px; line-height: 1.4; font-weight: 650; }
+    .nav-item.active { color: var(--accent); background: var(--accent-soft); }
+    .nav-create .create-icon { width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: var(--r2); background: var(--surface); color: var(--fg); }
+    @media (min-width: 720px) {
+      .app { max-width: 960px; }
+      .hero { grid-template-columns: minmax(0, 1fr) 260px; align-items: end; column-gap: 32px; }
+      .hero > p { grid-column: 2; grid-row: 1; align-self: center; }
+      .hero-actions { grid-column: 1; }
+      .notebook-row { grid-auto-columns: minmax(180px, 1fr); overflow-x: visible; }
+      .template-row { grid-auto-columns: minmax(140px, 1fr); overflow-x: visible; }
+      .section { margin-top: 40px; }
+    }
+    @media (max-width: 360px) { .hero h1 { font-size: 29px; } .cover { height: 150px; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+  </style>
+</head>
+<body>
+  <main class="app" data-od-id="home-screen">
+    <header class="header screen" data-od-id="app-header">
+      <div class="brand">DocNote</div>
+      <div class="header-actions"><a class="icon-btn" href="docnote-search-design.html" aria-label="검색" data-od-id="home-search"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg></a></div>
+    </header>
+    <section class="screen hero" data-od-id="home-hero">
+      <div><p class="eyebrow">오늘의 작업 공간</p><h1>손에 잡히는 기록을<br />차분하게 이어가세요</h1></div>
+      <p>노트북을 고르고, 필요한 문서를 다시 여는 흐름을 한곳에서 관리합니다.</p>
+      <div class="hero-actions"><button class="primary" data-od-id="home-create-notebook">새 노트북 만들기</button><a class="quiet-btn" href="docnote-documents-design.html" data-od-id="home-open-documents">문서 둘러보기</a></div>
+    </section>
+    <section class="screen section" data-od-id="notebook-library">
+      <div class="section-head"><h2>내 노트북</h2><a class="section-link" href="docnote-documents-design.html" data-od-id="notebook-view-all">모두 보기 <span aria-hidden="true">›</span></a></div>
+      <div class="notebook-row">
+        <article class="notebook" data-od-id="notebook-study"><div class="cover blue"><span class="cover-mark">DOCNOTE</span><span class="cover-title">공부 기록</span><span class="cover-lines" aria-hidden="true"></span></div><div class="notebook-meta"><strong>공부 기록</strong><span>Cornell · 12페이지</span></div></article>
+        <article class="notebook" data-od-id="notebook-project"><div class="cover green"><span class="cover-mark">DOCNOTE</span><span class="cover-title">프로젝트 노트</span><span class="cover-lines" aria-hidden="true"></span></div><div class="notebook-meta"><strong>프로젝트 노트</strong><span>줄 노트 · 8페이지</span></div></article>
+        <article class="notebook" data-od-id="notebook-weekly"><div class="cover rose"><span class="cover-mark">DOCNOTE</span><span class="cover-title">주간 플래너</span><span class="cover-lines" aria-hidden="true"></span></div><div class="notebook-meta"><strong>주간 플래너</strong><span>Weekly · 5페이지</span></div></article>
+      </div>
+    </section>
+    <section class="screen section" data-od-id="template-library">
+      <div class="section-head"><h2>템플릿으로 시작</h2><a class="section-link" href="#" data-od-id="template-view-all">모두 보기 <span aria-hidden="true">›</span></a></div>
+      <div class="template-row"><button class="template" data-od-id="template-cornell"><div class="paper cornell"></div><strong>공부</strong><span>Cornell</span></button><button class="template" data-od-id="template-weekly"><div class="paper weekly"></div><strong>플래너</strong><span>Weekly</span></button><button class="template" data-od-id="template-meeting"><div class="paper meeting"></div><strong>회의</strong><span>Meeting note</span></button></div>
+    </section>
+    <section class="screen section" data-od-id="recent-documents">
+      <div class="section-head"><h2>최근 문서</h2><a class="section-link" href="docnote-documents-design.html" data-od-id="recent-documents-link">문서 보기 <span aria-hidden="true">›</span></a></div>
+      <div class="imported"><article class="doc-card" data-od-id="recent-pdf"><div class="doc-preview pdf" aria-hidden="true"></div><div class="doc-copy"><strong>2024_회의자료.pdf</strong><span>PDF · 어제 오후 4:12</span></div><span class="status-dot" title="저장됨"></span><button class="icon-btn" aria-label="문서 메뉴" data-od-id="recent-pdf-menu"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button></article><article class="doc-card" data-od-id="recent-hwp"><div class="doc-preview hwp" aria-hidden="true"></div><div class="doc-copy"><strong>서비스 기획안.hwpx</strong><span>HWPX · 월요일 오전 9:40</span></div><span class="status-dot" title="저장됨"></span><button class="icon-btn" aria-label="문서 메뉴" data-od-id="recent-hwp-menu"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></button></article></div>
+    </section>
+    <section class="screen state-card" data-od-id="home-loading-state" hidden aria-live="polite"><div class="skeleton wide"></div><div class="skeleton short"></div><p>노트북을 불러오는 중입니다.</p></section>
+    <section class="screen state-card" data-od-id="home-error-state" hidden role="alert"><h2>문서를 불러오지 못했습니다</h2><p>잠시 후 다시 시도해 주세요.</p><button class="quiet-btn" data-od-id="home-retry">다시 시도</button></section>
+  </main>
+  <nav class="bottom-nav" aria-label="주요 메뉴" data-od-id="bottom-navigation"><a class="nav-item active" href="#" aria-current="page" data-od-id="nav-home"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 8-6 8 6v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M9 20v-6h6v6"/></svg><span>홈</span></a><a class="nav-item" href="docnote-documents-design.html" data-od-id="nav-documents"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 3h9l3 3v15H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg><span>문서</span></a><button class="nav-item nav-create" data-od-id="nav-create"><span class="create-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span><span>새로 만들기</span></button><a class="nav-item" href="docnote-search-design.html" data-od-id="nav-search"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg><span>검색</span></a><a class="nav-item" href="#" data-od-id="nav-settings"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19 13 .1-1-.1-1 1.5-1.3-1.6-2.7-1.9-.8a8 8 0 0 0-1.7-1L15 3.8h-3l-.3 2a8 8 0 0 0-1.7 1l-1.9-.8-1.6 2.7L8 10a8 8 0 0 0-.1 2L6.5 13l1.6 2.7 1.9-.8 1.6 2.7Z"/></svg><span>설정</span></a></nav>
+  <div class="toast" data-od-id="home-toast" hidden role="status"></div>
+  <script>
+    const toast = document.querySelector('[data-od-id="home-toast"]');
+    let toastTimer;
+    function showToast(message) { toast.textContent = message; toast.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { toast.hidden = true; }, 2200); }
+    document.querySelector('[data-od-id="nav-create"]').addEventListener('click', () => showToast('새 노트북 만들기 흐름을 엽니다.'));
+    document.querySelector('[data-od-id="home-create-notebook"]').addEventListener('click', () => showToast('새 노트북 만들기 흐름을 엽니다.'));
+    document.querySelector('[data-od-id="home-retry"]').addEventListener('click', () => showToast('문서를 다시 불러옵니다.'));
+  </script>
+</body>
+</html>

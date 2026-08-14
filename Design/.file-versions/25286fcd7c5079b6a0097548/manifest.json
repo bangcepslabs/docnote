@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 2,
+  "fileName": "docnote-settings-design.html",
+  "currentVersionId": "74e288b9-9475-441b-bf8b-d494fe71168a",
+  "entries": [
+    {
+      "id": "4a309909-a6fe-4f9f-961e-e2566925b658",
+      "fileName": "docnote-settings-design.html",
+      "version": 1,
+      "label": "Version 1",
+      "createdAt": 1786516814008,
+      "source": "ai",
+      "prompt": "문서 탭이나 검색 탭을 눌렀을 때 새로 만들기 버튼이랑 ... 같은 버튼이 테두리가 생긴 것처럼 보여, 추가로 설정 페이지 접근이 안돼",
+      "size": 6008,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0001-4a309909-a6fe-4f9f-961e-e2566925b658.html",
+      "promptSource": "message",
+      "contentDigest": "683152ee6b4e7bb5a147d9770ac180bfcfff5421cf8b7b2b50f57dc1e42d9f70"
+    },
+    {
+      "id": "1a96635b-7450-4260-9ae1-8f8bc45bc075",
+      "fileName": "docnote-settings-design.html",
+      "version": 2,
+      "label": "Version 2",
+      "createdAt": 1786517092495,
+      "source": "ai",
+      "prompt": "검색눌렀을 때 제일상단 X부분에 똑같이 테두리 발생해, 그리고 홈눌렀을 때 제일 하단 바 위치가 미세하게 달라져, 그리고 설정 페이지 접근했을 때 하단 바 모습이 달라",
+      "size": 7146,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0002-1a96635b-7450-4260-9ae1-8f8bc45bc075.html",
+      "promptSource": "message",
+      "contentDigest": "e3e0c64214147f7ac315f519125f370c1df84837cf4380a1e7871b5d2b2b423a"
+    },
+    {
+      "id": "74e288b9-9475-441b-bf8b-d494fe71168a",
+      "fileName": "docnote-settings-design.html",
+      "version": 3,
+      "label": "Version 3",
+      "createdAt": 1786518946759,
+      "source": "ai",
+      "prompt": "수정 반영이 안되는 것 같은데?? 모바일 기준 수정하고 있는거 맞아? 하단 메뉴 네비게이션 통합으로 사용하게 해줘 다 다르게 나오고, 검색 메뉴 들어갔을 때 검색바 안에 X버튼에서 테두리가 보여지고 있어, 제대로 검증후 진행해",
+      "size": 7630,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0003-74e288b9-9475-441b-bf8b-d494fe71168a.html",
+      "contentDigest": "e330ef4b322d7ea65e523c9a35af6c0332214ec00b5d1aa1816fc7aa763de94a",
+      "promptSource": "message"
+    }
+  ]
+}

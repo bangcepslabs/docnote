@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 2,
+  "fileName": "docnote-home-v2.html",
+  "currentVersionId": "56c43296-1c11-4856-8758-8f92d08080c1",
+  "entries": [
+    {
+      "id": "56c43296-1c11-4856-8758-8f92d08080c1",
+      "fileName": "docnote-home-v2.html",
+      "version": 1,
+      "label": "Version 1",
+      "createdAt": 1786514314228,
+      "source": "ai",
+      "prompt": "@impeccable-design-polish\n현재 대상: 파일 · docnote-home.html.\n선택된 skill: impeccable-design-polish. 이번 턴의 기본 워크플로로 사용하세요.\n전역 리소스 인덱스: skill(162), 플러그인(0), MCP(활성화 0개 / 템플릿 0개), 커넥터(연결 0개), 디자인 파일(3).\n검색 가능한 skill: 8-bit-orbit-video-template, ad-creative, after-hours-editorial-template, agent-browser, ai-music-album, algorithmic-art, apple-hig, article-magazine, artifacts-builder, brainstorming, brand-extract, brand-guidelines, brandkit, industrial-brutalist-ui, canvas-design, card-twitter, card-xiaohongshu, chat-motion-overlay, color-expert, competitive-ads-extractor, copywriting, creative-director, d3-visualization, data-report, deck-guizang-editorial, deck-open-slide-canvas, deck-swiss-international, design-brief, design-consultation, design-md, design-review, digits-fintech-swiss-template, doc, doc-kami-parchment, docx, domain-name-brainstormer, ecommerce-image-workflow, editorial-burgundy-principles-template, emil-design-eng, emilkowalski-motion, enhance-prompt, export-download-debugging, fal-3d, fal-generate, fal-image-edit, fal-kling-o3, fal-lip-sync, fal-realtime, fal-restore, fal-train, fal-tryon, fal-upscale, fal-video-edit, fal-vision, faq-page, field-notes-editorial-template, figma-code-connect-components, figma-create-design-system-rules, figma-create-new-file, figma-generate-design, +102개 더.\n참조 디자인 파일: docnote-home-preview.png, docnote-home.html, brand-spec.md.\nWorkflow rule: define the aesthetic goal and constraints first, then search and match resources; when user choice is needed, generate a structured question-form with editable custom answers and continue after confirmation.\n이 디자인을 출시 준비가 될 때까지 다듬으세요: 위계, 타이포그래피, 간격, 반응형 동작, 버튼 상태, 빈/로딩/오류 상태, 접근성을 점검하고, 가장 중요한 문제를 바로 수정하세요.",
+      "size": 17030,
+      "mime": "text/html; charset=utf-8",
+      "kind": "html",
+      "contentPath": "0001-56c43296-1c11-4856-8758-8f92d08080c1.html",
+      "contentDigest": "b65da34354ef93f013a853ee5ce49177ab4667db7c8932cc510ef308cf265990",
+      "promptSource": "message"
+    }
+  ]
+}

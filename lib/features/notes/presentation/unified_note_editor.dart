@@ -28,6 +28,7 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
   String status = '저장됨';
   bool removed = false;
   bool closing = false;
+  bool toolbarVisible = true;
   late final List<String> attachments;
 
   @override
@@ -132,6 +133,13 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
                     tooltip: '저장',
                     icon: const Icon(Icons.save_outlined)),
                 IconButton(
+                    onPressed: () =>
+                        setState(() => toolbarVisible = !toolbarVisible),
+                    tooltip: toolbarVisible ? '편집 도구 숨기기' : '편집 도구 열기',
+                    icon: Icon(toolbarVisible
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down)),
+                IconButton(
                     onPressed: () {
                       widget.document.favorite = !widget.document.favorite;
                       _save();
@@ -158,8 +166,10 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
                               value: 'delete', child: Text('Delete'))
                         ])
               ]),
-          body:
-              Column(children: [Expanded(child: _pageBody()), _bottomBar()])));
+          body: Column(children: [
+            if (toolbarVisible) _editorToolbar(),
+            Expanded(child: _pageBody()),
+          ])));
   Widget _textBody() {
     return Column(children: [
       TextField(
@@ -204,7 +214,7 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
                   boxShadow: [BoxShadow(blurRadius: 8, color: Colors.black12)]),
               child: _textBody())));
 
-  Widget _bottomBar() {
+  Widget _editorToolbar() {
     final items = <Widget>[
       IconButton(
           onPressed: () {
@@ -226,10 +236,23 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
           icon: const Icon(Icons.keyboard_hide)),
     ];
     return Material(
-        child: SafeArea(
-            child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: items)));
+      color: Theme.of(context).colorScheme.surface,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(
+            bottom:
+                BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+          ),
+        ),
+        child: SizedBox(
+          height: 56,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: items,
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _attachImage() async {

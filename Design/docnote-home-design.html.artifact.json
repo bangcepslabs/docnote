@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "docnote-home-design.html",
+  "entry": "docnote-home-design.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-08-12T06:27:05.695Z",
+  "updatedAt": "2026-08-12T06:33:03.581Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}
