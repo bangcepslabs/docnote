@@ -115,18 +115,20 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
           appBar: AppBar(
               leading: IconButton(
                   onPressed: _close, icon: const Icon(Icons.arrow_back)),
-              title: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                        titleController.text.trim().isEmpty
-                            ? '새 메모'
-                            : titleController.text,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
-                    Text(status, style: Theme.of(context).textTheme.labelSmall),
-                  ]),
+              title: TextField(
+                controller: titleController,
+                maxLines: 1,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(
+                  hintText: '제목',
+                  border: InputBorder.none,
+                  isDense: true,
+                  hintStyle: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               actions: [
                 IconButton(
                     onPressed: _saveNow,
@@ -172,13 +174,6 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
           ])));
   Widget _textBody() {
     return Column(children: [
-      TextField(
-          controller: titleController,
-          decoration: const InputDecoration(
-              hintText: 'Title',
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.fromLTRB(20, 16, 20, 0)),
-          style: Theme.of(context).textTheme.titleLarge),
       if (attachments.isNotEmpty)
         SizedBox(
             height: 72,
@@ -235,20 +230,32 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
           tooltip: '키보드 닫기',
           icon: const Icon(Icons.keyboard_hide)),
     ];
+    final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: Theme.of(context).colorScheme.surface,
+      color: scheme.surface,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          border: Border(
-            bottom:
-                BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-          ),
-        ),
+            border: Border(bottom: BorderSide(color: scheme.outlineVariant))),
         child: SizedBox(
-          height: 56,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: items,
+          height: 54,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(children: [
+              for (var index = 0; index < items.length; index++)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Semantics(
+                    button: true,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                          color: const Color(0xfff3f5f6),
+                          borderRadius: BorderRadius.circular(11)),
+                      child: items[index],
+                    ),
+                  ),
+                ),
+            ]),
           ),
         ),
       ),

@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:uuid/uuid.dart';
@@ -26,11 +26,14 @@ export 'core/database/document_model.dart';
 final repositoryProvider = Provider((ref) => DocumentRepository());
 final documentsProvider =
     StateNotifierProvider<DocumentsController, List<DocumentItem>>(
-        (ref) => DocumentsController(ref.read(repositoryProvider))..restore());
+        (ref) => DocumentsController(ref.read(repositoryProvider)));
 
 class DocumentsController extends StateNotifier<List<DocumentItem>> {
-  DocumentsController(this.repo) : super([]);
+  DocumentsController(this.repo) : super([]) {
+    ready = restore();
+  }
   final DocumentRepository repo;
+  late final Future<void> ready;
   Future<void> restore() async => state = await repo.load();
   Future<void> add(DocumentItem d) async {
     state = [...state, d];
@@ -61,6 +64,7 @@ class DocumentsController extends StateNotifier<List<DocumentItem>> {
   Future<void> permanentlyRemove(String id) async {
     state = state.where((x) => x.id != id).toList();
     await repo.save(state);
+    await _deleteDocumentFiles(id);
   }
 
   Future<int> collapseDuplicatePdfs() async {
@@ -173,6 +177,11 @@ void openDocument(BuildContext context, DocumentItem document, WidgetRef ref) {
                   document.pageCount = count;
                   document.modified = DateTime.now();
                   ref.read(documentsProvider.notifier).update(document);
+                },
+                onTitleChanged: (title) async {
+                  document.title = title;
+                  document.modified = DateTime.now();
+                  await ref.read(documentsProvider.notifier).update(document);
                 })));
     return;
   }
@@ -194,29 +203,82 @@ class AppShell extends ConsumerStatefulWidget {
 class _AppShellState extends ConsumerState<AppShell> {
   int index = 0;
   bool creating = false;
+  final ImagePicker _imagePicker = ImagePicker();
+  final _pages = <int, Widget>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _pages[0] = _pageFor(0);
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _recoverLostCameraData());
+  }
+
+  Widget _pageFor(int pageIndex) => switch (pageIndex) {
+        0 => HomePage(
+            onQuickMemo: _quickMemo,
+            onCreate: _createSheet,
+            onImportPdf: _pickPdf,
+            onImportHwp: _pickHwp,
+            onSearch: () => _selectPage(3),
+            onOpenDocuments: () => _selectPage(1),
+          ),
+        1 => const DocumentsPage(),
+        3 => SearchPage(onClose: () => _selectPage(0)),
+        4 => SettingsPage(onClose: () => _selectPage(0)),
+        _ => const SizedBox.shrink(),
+      };
+
+  void _selectPage(int pageIndex) => setState(() {
+        _pages.putIfAbsent(pageIndex, () => _pageFor(pageIndex));
+        index = pageIndex;
+      });
+
+  Future<void> _recoverLostCameraData() async {
+    try {
+      final response = await _imagePicker.retrieveLostData();
+      if (response.isEmpty) return;
+      if (response.file == null) {
+        developer.log(
+            'Lost camera data could not be recovered: ${response.exception}',
+            name: 'docnote.scan');
+        return;
+      }
+      await ref.read(documentsProvider.notifier).ready;
+      final document = await _createCameraDocument(response.file!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('촬영한 문서 “${document.title}”를 복구했습니다.')));
+      }
+    } catch (error, stack) {
+      developer.log('Lost camera data recovery failed: $error',
+          name: 'docnote.scan', error: error, stackTrace: stack);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      HomePage(
-          onQuickMemo: _quickMemo,
-          onImportPdf: _pickPdf,
-          onImportHwp: _pickHwp,
-          onSearch: () => setState(() => index = 3),
-          onOpenDocuments: () => setState(() => index = 1)),
-      const DocumentsPage(),
-      const SizedBox(),
-      SearchPage(onClose: () => setState(() => index = 0)),
-      SettingsPage(onClose: () => setState(() => index = 0)),
-    ];
     return Scaffold(
-      body: IndexedStack(index: index, children: pages),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          for (final entry in _pages.entries)
+            Offstage(
+              offstage: entry.key != index,
+              child: TickerMode(
+                enabled: entry.key == index,
+                child: entry.value,
+              ),
+            ),
+        ],
+      ),
       bottomNavigationBar: _RefinedBottomNavigation(
         selectedIndex: index,
         onSelected: (value) {
           if (value == 2) {
             _createSheet();
           } else {
-            setState(() => index = value);
+            _selectPage(value);
           }
         },
       ),
@@ -232,10 +294,8 @@ class _AppShellState extends ConsumerState<AppShell> {
           onDrawingNote: _drawingNote,
           onImportPdf: _pickPdf,
           onImportHwp: _pickHwp,
-          onUnavailable: (message) =>
-              ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(message)),
-          ),
+          onImportImages: _importImages,
+          onScanDocument: _scanDocument,
         ),
       );
   Future<void> _quickMemo() async {
@@ -377,6 +437,158 @@ class _AppShellState extends ConsumerState<AppShell> {
     }
   }
 
+  Future<void> _importImages() async {
+    if (creating) return;
+    String? pendingDocumentId;
+    var saved = false;
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp'],
+        allowMultiple: true,
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      creating = true;
+      final document = DocumentItem(
+        id: const Uuid().v4(),
+        title: _imageNoteTitle(result.files.first.name),
+        type: DocumentType.textNote,
+      );
+      pendingDocumentId = document.id;
+      document.attachments
+          .addAll(await _copyPickedImages(document.id, result.files));
+      if (document.attachments.isEmpty) {
+        throw const FileSystemException('선택한 이미지를 읽을 수 없습니다.');
+      }
+      await ref.read(documentsProvider.notifier).add(document);
+      saved = true;
+      if (mounted) openDocument(context, document, ref);
+    } catch (error, stack) {
+      developer.log('Image import failed: $error',
+          name: 'docnote.image', error: error, stackTrace: stack);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('이미지를 가져오지 못했습니다.')));
+      }
+    } finally {
+      if (!saved && pendingDocumentId != null) {
+        await _deleteDocumentFiles(pendingDocumentId);
+      }
+      creating = false;
+    }
+  }
+
+  Future<void> _scanDocument() async {
+    if (creating) return;
+    try {
+      final captured = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 92,
+      );
+      if (captured == null) return;
+
+      creating = true;
+      final document = await _createCameraDocument(captured);
+      if (mounted) openDocument(context, document, ref);
+    } catch (error, stack) {
+      developer.log('Document scan failed: $error',
+          name: 'docnote.scan', error: error, stackTrace: stack);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('문서를 촬영하지 못했습니다.')));
+      }
+    } finally {
+      creating = false;
+    }
+  }
+
+  Future<DocumentItem> _createCameraDocument(XFile captured) async {
+    final now = DateTime.now();
+    final document = DocumentItem(
+      id: const Uuid().v4(),
+      title:
+          '촬영 문서 · ${now.year}.${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')}',
+      type: DocumentType.textNote,
+    );
+    var saved = false;
+    try {
+      document.attachments.add(await _copyCameraImage(document.id, captured));
+      await ref.read(documentsProvider.notifier).add(document);
+      saved = true;
+      return document;
+    } finally {
+      if (!saved) await _deleteDocumentFiles(document.id);
+    }
+  }
+
+  Future<List<String>> _copyPickedImages(
+      String documentId, List<PlatformFile> files) async {
+    final directory = await _attachmentsDirectory(documentId);
+    final paths = <String>[];
+    for (final file in files) {
+      final extension = (file.extension ?? 'jpg').toLowerCase();
+      final attachment = await _copyAttachment(
+        directory: directory,
+        extension: extension,
+        suffix: paths.length,
+        sourcePath: file.path,
+        bytes: file.bytes,
+      );
+      if (attachment != null) paths.add(attachment);
+    }
+    return paths;
+  }
+
+  Future<String> _copyCameraImage(String documentId, XFile captured) async {
+    final directory = await _attachmentsDirectory(documentId);
+    final dotIndex = captured.path.lastIndexOf('.');
+    final slashIndex = captured.path.lastIndexOf(Platform.pathSeparator);
+    final extension = dotIndex > slashIndex
+        ? captured.path.substring(dotIndex + 1).toLowerCase()
+        : 'jpg';
+    return (await _copyAttachment(
+      directory: directory,
+      extension: extension,
+      sourcePath: captured.path,
+    ))!;
+  }
+
+  Future<String?> _copyAttachment({
+    required Directory directory,
+    required String extension,
+    String? sourcePath,
+    List<int>? bytes,
+    int? suffix,
+  }) async {
+    if (sourcePath == null && bytes == null) return null;
+    final safeExtension = extension.isEmpty ? 'jpg' : extension;
+    final suffixPart = suffix == null ? '' : '_$suffix';
+    final target = File(
+        '${directory.path}/${DateTime.now().microsecondsSinceEpoch}$suffixPart.$safeExtension');
+    if (sourcePath != null) {
+      await File(sourcePath).copy(target.path);
+    } else {
+      await target.writeAsBytes(bytes!, flush: true);
+    }
+    return target.path;
+  }
+
+  Future<Directory> _attachmentsDirectory(String documentId) async {
+    final root = await getApplicationDocumentsDirectory();
+    final directory =
+        Directory('${root.path}/documents/$documentId/attachments');
+    await directory.create(recursive: true);
+    return directory;
+  }
+
+  String _imageNoteTitle(String filename) {
+    final dotIndex = filename.lastIndexOf('.');
+    final title = dotIndex > 0 ? filename.substring(0, dotIndex) : filename;
+    return title.trim().isEmpty ? '이미지 메모' : title.trim();
+  }
+
   Future<DocumentItem?> _findDuplicatePdf(
       List<int> selectedBytes, List<DocumentItem> documents) async {
     for (final document in documents.where((d) => d.type == DocumentType.pdf)) {
@@ -423,7 +635,7 @@ class _RefinedBottomNavigation extends StatelessWidget {
     return Container(
       height: 76 + MediaQuery.paddingOf(context).bottom,
       padding:
-          EdgeInsets.fromLTRB(12, 8, 12, MediaQuery.paddingOf(context).bottom),
+          EdgeInsets.fromLTRB(14, 10, 14, MediaQuery.paddingOf(context).bottom),
       decoration: BoxDecoration(
         color: scheme.surface.withValues(alpha: .96),
         border: Border(top: BorderSide(color: scheme.outlineVariant)),
@@ -462,14 +674,14 @@ class _RefinedNavigationItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: selected ? const Color(0xffd9eafe) : Colors.transparent,
-      borderRadius: BorderRadius.circular(12),
+      color: selected ? const Color(0xffe6eff7) : Colors.transparent,
+      borderRadius: BorderRadius.circular(10),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         child: SizedBox(
           width: double.infinity,
-          height: 60,
+          height: 56,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -510,24 +722,27 @@ class _RefinedCreateSheet extends StatelessWidget {
     required this.onDrawingNote,
     required this.onImportPdf,
     required this.onImportHwp,
-    required this.onUnavailable,
+    required this.onImportImages,
+    required this.onScanDocument,
   });
   final VoidCallback onQuickMemo;
   final VoidCallback onDrawingNote;
   final VoidCallback onImportPdf;
   final VoidCallback onImportHwp;
-  final ValueChanged<String> onUnavailable;
+  final VoidCallback onImportImages;
+  final VoidCallback onScanDocument;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return SafeArea(
       child: Container(
-        constraints: const BoxConstraints(maxHeight: 620),
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .88,
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 18),
         decoration: BoxDecoration(
-          color: scheme.surface,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          color: const Color(0xfff8f9fb),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           boxShadow: [
             BoxShadow(
                 color: Colors.black.withValues(alpha: .12),
@@ -538,74 +753,90 @@ class _RefinedCreateSheet extends StatelessWidget {
         child: SingleChildScrollView(
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            _RefinedSheetHandle(color: scheme.outlineVariant),
-            const SizedBox(height: 16),
+            _RefinedSheetHandle(color: const Color(0xffcbd3db)),
+            const SizedBox(height: 12),
             Row(children: [
               Expanded(
                   child: Text('새로 만들기',
-                      style: Theme.of(context).textTheme.titleLarge)),
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xff1f252d)))),
               IconButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.of(context).pop(),
                 tooltip: '닫기',
-                icon: const Icon(Icons.close_outlined),
+                visualDensity: VisualDensity.compact,
+                icon:
+                    const Icon(Icons.close_outlined, color: Color(0xff505862)),
               ),
             ]),
-            const SizedBox(height: 8),
-            _CreateActionTile(
-              icon: Icons.note_add_outlined,
-              title: '새 노트',
-              description: '표지와 속지를 골라 시작합니다.',
-              primary: true,
-              onTap: () {
-                Navigator.pop(context);
-                onQuickMemo();
-              },
-            ),
-            _CreateActionTile(
-              icon: Icons.draw_outlined,
-              title: '필기 노트',
-              description: '빈 페이지에 바로 필기합니다.',
-              onTap: () {
-                Navigator.pop(context);
-                onDrawingNote();
-              },
-            ),
-            _CreateActionTile(
-              icon: Icons.picture_as_pdf_outlined,
-              title: 'PDF 가져오기',
-              description: 'PDF 문서를 불러옵니다.',
-              onTap: () {
-                Navigator.pop(context);
-                onImportPdf();
-              },
-            ),
-            _CreateActionTile(
-              icon: Icons.description_outlined,
-              title: 'HWP 가져오기',
-              description: '한글 문서를 불러옵니다.',
-              onTap: () {
-                Navigator.pop(context);
-                onImportHwp();
-              },
-            ),
-            _CreateActionTile(
-              icon: Icons.image_outlined,
-              title: '이미지 가져오기',
-              description: '메모 첨부 기능 준비 중',
-              onTap: () {
-                Navigator.pop(context);
-                onUnavailable('이미지 첨부 기능은 준비 중입니다.');
-              },
-            ),
-            _CreateActionTile(
-              icon: Icons.document_scanner_outlined,
-              title: '문서 스캔',
-              description: '카메라 스캔 기능 준비 중',
-              onTap: () {
-                Navigator.pop(context);
-                onUnavailable('문서 스캔 기능은 준비 중입니다.');
-              },
-            ),
+            const SizedBox(height: 10),
+            _CreateHeroCard(onTap: () {
+              Navigator.pop(context);
+              onQuickMemo();
+            }),
+            const SizedBox(height: 22),
+            Text('빠르게 시작하기',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(
+                  child: _CreateQuickCard(
+                      icon: Icons.draw_outlined,
+                      title: '빠른 필기',
+                      subtitle: '빈 페이지에서 바로 시작',
+                      onTap: () {
+                        Navigator.pop(context);
+                        onDrawingNote();
+                      })),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: _CreateQuickCard(
+                      icon: Icons.camera_alt_outlined,
+                      title: '문서 촬영',
+                      subtitle: '카메라로 문서 남기기',
+                      onTap: () {
+                        Navigator.pop(context);
+                        onScanDocument();
+                      })),
+            ]),
+            const SizedBox(height: 22),
+            Text('가져오기',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(
+                  child: _CreateImportTile(
+                      icon: Icons.picture_as_pdf_outlined,
+                      label: 'PDF',
+                      onTap: () {
+                        Navigator.pop(context);
+                        onImportPdf();
+                      })),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: _CreateImportTile(
+                      icon: Icons.description_outlined,
+                      label: 'HWP',
+                      onTap: () {
+                        Navigator.pop(context);
+                        onImportHwp();
+                      })),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: _CreateImportTile(
+                      icon: Icons.image_outlined,
+                      label: '이미지',
+                      onTap: () {
+                        Navigator.pop(context);
+                        onImportImages();
+                      })),
+            ]),
           ]),
         ),
       ),
@@ -613,57 +844,133 @@ class _RefinedCreateSheet extends StatelessWidget {
   }
 }
 
-class _CreateActionTile extends StatelessWidget {
-  const _CreateActionTile({
-    required this.icon,
-    required this.title,
-    required this.description,
-    required this.onTap,
-    this.primary = false,
-  });
-  final IconData icon;
-  final String title;
-  final String description;
+class _CreateHeroCard extends StatelessWidget {
+  const _CreateHeroCard({required this.onTap});
   final VoidCallback onTap;
-  final bool primary;
-
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Material(
-        color: primary
-            ? scheme.primaryContainer.withValues(alpha: .62)
-            : scheme.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
-          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: .72)),
-        ),
+  Widget build(BuildContext context) => Material(
+        color: const Color(0xffe5f1f8),
+        borderRadius: BorderRadius.circular(18),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
-          child: ListTile(
-            minVerticalPadding: 10,
-            leading: DecoratedBox(
-              decoration: BoxDecoration(
-                color: primary ? scheme.primary : scheme.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(11),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(9),
-                child: Icon(icon,
-                    color:
-                        primary ? scheme.onPrimary : scheme.onSurfaceVariant),
-              ),
+          borderRadius: BorderRadius.circular(18),
+          child: SizedBox(
+            height: 136,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 14, 14),
+              child: Row(children: [
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                      Text('새 노트',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleLarge
+                              ?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xff203847))),
+                      const SizedBox(height: 6),
+                      Text('표지와 속지를 골라\n나만의 노트를 만들어보세요',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(
+                                  color: const Color(0xff587080),
+                                  height: 1.35)),
+                    ])),
+                SizedBox(
+                    width: 82,
+                    height: 108,
+                    child: _NotebookCoverArt(
+                        coverId: 'simple',
+                        title: '새 노트',
+                        template: 'ruled',
+                        compact: true)),
+              ]),
             ),
-            title: Text(title),
-            subtitle: Text(description),
-            trailing: Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
           ),
         ),
-      ),
-    );
+      );
+}
+
+class _CreateQuickCard extends StatelessWidget {
+  const _CreateQuickCard(
+      {required this.icon,
+      required this.title,
+      required this.subtitle,
+      required this.onTap});
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => Material(
+        color: const Color(0xffeef2f5),
+        borderRadius: BorderRadius.circular(15),
+        child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(15),
+            child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(icon, size: 22, color: const Color(0xff506170)),
+                      const SizedBox(height: 12),
+                      Text(title,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 3),
+                      Text(subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: const Color(0xff6b7680))),
+                    ]))),
+      );
+}
+
+class _CreateImportTile extends StatelessWidget {
+  const _CreateImportTile(
+      {required this.icon, required this.label, required this.onTap});
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => Material(
+        color: const Color(0xfff0f2f4),
+        borderRadius: BorderRadius.circular(13),
+        child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(13),
+            child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 13),
+                child: Column(children: [
+                  Icon(icon, size: 20, color: const Color(0xff63707c)),
+                  const SizedBox(height: 5),
+                  Text(label,
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelMedium
+                          ?.copyWith(fontWeight: FontWeight.w600)),
+                ]))),
+      );
+}
+
+Future<void> _deleteDocumentFiles(String documentId) async {
+  try {
+    final root = await getApplicationDocumentsDirectory();
+    final directory = Directory('${root.path}/documents/$documentId');
+    if (await directory.exists()) await directory.delete(recursive: true);
+  } catch (error, stack) {
+    developer.log('Document file cleanup failed: $error',
+        name: 'docnote.storage', error: error, stackTrace: stack);
   }
 }
 
@@ -913,13 +1220,14 @@ class _RefinedNotebookCreateBodyState
     return SafeArea(
       top: false,
       child: Container(
-        constraints: const BoxConstraints(maxHeight: 760),
+        constraints:
+            BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .92),
         decoration: BoxDecoration(
           color: scheme.surface,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         ),
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _RefinedSheetHandle(color: scheme.outlineVariant),
@@ -951,54 +1259,64 @@ class _RefinedNotebookCreateBodyState
   Widget _notebookForm(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const SizedBox(height: 4),
-      const _RefinedStepIndicator(),
-      const SizedBox(height: 22),
-      Text('새 기록을 위한 공간', style: Theme.of(context).textTheme.headlineSmall),
-      const SizedBox(height: 8),
-      Text('제목을 입력한 뒤 표지와 속지를 선택하세요.',
+      const SizedBox(height: 12),
+      Text('어떤 노트를 만들까요?',
+          style: Theme.of(context)
+              .textTheme
+              .headlineSmall
+              ?.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 6),
+      Text('제목을 정하고, 마음에 드는 표지와 종이를 골라보세요.',
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: scheme.onSurfaceVariant,
               )),
-      const SizedBox(height: 20),
-      Text('노트북 이름', style: Theme.of(context).textTheme.labelLarge),
-      const SizedBox(height: 8),
-      TextField(
-        controller: widget.titleController,
-        decoration: const InputDecoration(
-          hintText: '새 노트북',
-          border: OutlineInputBorder(),
+      const SizedBox(height: 18),
+      Container(
+        decoration: BoxDecoration(
+            color: const Color(0xfff1f4f6),
+            borderRadius: BorderRadius.circular(14)),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+        child: TextField(
+          controller: widget.titleController,
+          decoration: const InputDecoration(
+              hintText: '노트 제목', border: InputBorder.none),
+          textInputAction: TextInputAction.done,
         ),
       ),
-      const SizedBox(height: 16),
-      _RefinedChoiceRow(
-        icon: Icons.book_outlined,
-        title: '표지',
-        description: '${_coverName(widget.coverId)} · 선택하기',
-        onTap: () => _openCoverPicker(context),
-      ),
-      const SizedBox(height: 8),
-      _RefinedChoiceRow(
-        icon: Icons.description_outlined,
-        title: '속지',
-        description: '${paperNames[widget.templateId] ?? '줄 노트'} · 선택하기',
-        onTap: () => _openPaperPicker(context),
-      ),
-      const SizedBox(height: 20),
-      Row(children: [
-        Expanded(
-          child: OutlinedButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('취소'),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          flex: 2,
+      const SizedBox(height: 24),
+      _CreationPreviewSection(
+          title: '표지',
+          action: '전체 보기',
+          onAction: () => _openCoverPicker(context),
+          children: [
+            for (final id in const ['simple', 'work', 'planner', 'mood'])
+              _CreationCoverOption(
+                  id: id,
+                  selected: widget.coverId == id,
+                  title: _coverName(id),
+                  onTap: () => widget.onCoverChanged(id)),
+          ]),
+      const SizedBox(height: 24),
+      _CreationPreviewSection(
+          title: '속지',
+          action: '전체 보기',
+          onAction: () => _openPaperPicker(context),
+          children: [
+            for (final id in const ['blank', 'ruled', 'dotted', 'grid'])
+              _CreationPaperOption(
+                  id: id,
+                  selected: widget.templateId == id,
+                  title: paperNames[id] ?? id,
+                  onTap: () => widget.onTemplateChanged(id)),
+          ]),
+      const SizedBox(height: 26),
+      SizedBox(
+          width: double.infinity,
           child: FilledButton(
-              onPressed: widget.onCreate, child: const Text('노트북 만들기')),
-        ),
-      ]),
+              onPressed: widget.onCreate,
+              child: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 4),
+                  child: Text('노트 만들기')))),
     ]);
   }
 
@@ -1086,6 +1404,149 @@ class _RefinedNotebookCreateBodyState
   }
 }
 
+class _CreationPreviewSection extends StatelessWidget {
+  const _CreationPreviewSection(
+      {required this.title,
+      required this.action,
+      required this.onAction,
+      required this.children});
+  final String title;
+  final String action;
+  final VoidCallback onAction;
+  final List<Widget> children;
+  @override
+  Widget build(BuildContext context) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+              child: Text(title,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700))),
+          TextButton(onPressed: onAction, child: Text(action))
+        ]),
+        const SizedBox(height: 8),
+        SizedBox(
+            height: title == '표지' ? 174 : 158,
+            child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: children.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                itemBuilder: (_, i) => children[i])),
+      ]);
+}
+
+class _CreationCoverOption extends StatelessWidget {
+  const _CreationCoverOption(
+      {required this.id,
+      required this.selected,
+      required this.title,
+      required this.onTap});
+  final String id;
+  final bool selected;
+  final String title;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: 92,
+        child: Column(children: [
+          Expanded(
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(10),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: selected
+                          ? const Color(0xff5b95c2)
+                          : Colors.transparent,
+                      width: 1.5,
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: _NotebookCoverArt(
+                      coverId: id,
+                      title: '새 노트',
+                      template: 'ruled',
+                      compact: true,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+        ]),
+      );
+}
+
+class _CreationPaperOption extends StatelessWidget {
+  const _CreationPaperOption(
+      {required this.id,
+      required this.selected,
+      required this.title,
+      required this.onTap});
+  final String id;
+  final bool selected;
+  final String title;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: 92,
+        child: Column(children: [
+          Expanded(
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(9),
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(9),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border.all(
+                      color: selected
+                          ? const Color(0xff5b95c2)
+                          : const Color(0xffe0e5e9),
+                      width: selected ? 1.5 : 1,
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(7),
+                    child: DecoratedBox(
+                      decoration: const BoxDecoration(color: Colors.white),
+                      child: _TemplatePaper(templateId: id),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+        ]),
+      );
+}
+
 class NotebookPaperPickerPage extends StatefulWidget {
   const NotebookPaperPickerPage({required this.initialTemplateId, super.key});
   final String initialTemplateId;
@@ -1139,7 +1600,7 @@ class _NotebookPaperPickerPageState extends State<NotebookPaperPickerPage> {
             crossAxisCount: columns,
             mainAxisSpacing: 12,
             crossAxisSpacing: 12,
-            childAspectRatio: .84,
+            childAspectRatio: .76,
           ),
           itemCount: categories[category]!.length,
           itemBuilder: (_, index) {
@@ -1250,10 +1711,8 @@ class _PickerScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const bg = Color(0xfff5f7f8);
-    const surface = Color(0xfffcfdfd);
     const ink = Color(0xff26313e);
     const muted = Color(0xff6c7682);
-    const border = Color(0xffd9e0e5);
     return Scaffold(
       backgroundColor: bg,
       body: SafeArea(
@@ -1261,7 +1720,7 @@ class _PickerScaffold extends StatelessWidget {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 720),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
               child: LayoutBuilder(builder: (context, constraints) {
                 final columns = constraints.maxWidth >= 600 ? 3 : 2;
                 return Column(
@@ -1299,7 +1758,7 @@ class _PickerScaffold extends StatelessWidget {
                       ),
                       const SizedBox(height: 24),
                       SizedBox(
-                        height: 34,
+                        height: 36,
                         child: ListView.separated(
                           scrollDirection: Axis.horizontal,
                           itemCount: categories.length,
@@ -1310,13 +1769,17 @@ class _PickerScaffold extends StatelessWidget {
                             return OutlinedButton(
                               onPressed: () => onCategoryChanged(item),
                               style: OutlinedButton.styleFrom(
-                                minimumSize: const Size(0, 34),
+                                minimumSize: const Size(0, 36),
                                 padding:
-                                    const EdgeInsets.symmetric(horizontal: 12),
-                                side: BorderSide(color: active ? ink : border),
-                                backgroundColor:
-                                    active ? ink : Colors.transparent,
-                                foregroundColor: active ? surface : muted,
+                                    const EdgeInsets.symmetric(horizontal: 14),
+                                side: BorderSide(
+                                    color: active
+                                        ? const Color(0xffd6e5f1)
+                                        : Colors.transparent),
+                                backgroundColor: active
+                                    ? const Color(0xffe4eff8)
+                                    : const Color(0xffeef1f4),
+                                foregroundColor: active ? ink : muted,
                                 shape: const StadiumBorder(),
                               ),
                               child: Text(item,
@@ -1352,32 +1815,54 @@ class _PickerPaperCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-        color: const Color(0xfffcfdfd),
+        color: selected ? const Color(0xffedf4fa) : const Color(0xfffcfdfd),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: BorderSide(
-              color: selected ? DocNoteTheme.accent : const Color(0xffd9e0e5),
-              width: selected ? 2 : 1),
+              color:
+                  selected ? const Color(0xff94bddb) : const Color(0xffd9e0e5),
+              width: 1),
         ),
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(14),
           child: Padding(
-            padding: EdgeInsets.all(selected ? 9 : 10),
+            padding: const EdgeInsets.all(10),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SizedBox(
-                  height: 110,
-                  width: double.infinity,
-                  child: ClipRRect(
-                      borderRadius: BorderRadius.circular(9),
-                      child: _TemplatePaper(templateId: id))),
-              const SizedBox(height: 8),
+              Expanded(
+                child: Center(
+                  child: AspectRatio(
+                    aspectRatio: .72,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(7),
+                        border: Border.all(color: const Color(0xffdce2e7)),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x10000000),
+                            blurRadius: 4,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: _TemplatePaper(templateId: id),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 7),
               Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 3),
-              Text(selected ? '선택됨 · $category' : category,
+                      fontSize: 12, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text(selected ? '선택됨' : category,
                   style:
                       const TextStyle(color: Color(0xff6c7682), fontSize: 11)),
             ]),
@@ -1404,18 +1889,19 @@ class _PickerCoverCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-        color: const Color(0xfffcfdfd),
+        color: selected ? const Color(0xffedf4fa) : const Color(0xfffcfdfd),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: BorderSide(
-              color: selected ? DocNoteTheme.accent : const Color(0xffd9e0e5),
-              width: selected ? 2 : 1),
+              color:
+                  selected ? const Color(0xff94bddb) : const Color(0xffd9e0e5),
+              width: 1),
         ),
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(14),
           child: Padding(
-            padding: EdgeInsets.all(selected ? 7 : 8),
+            padding: const EdgeInsets.all(8),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(
@@ -1424,17 +1910,17 @@ class _PickerCoverCard extends StatelessWidget {
                 child: _NotebookCoverArt(coverId: id, title: sample),
               )),
               Padding(
-                padding: const EdgeInsets.fromLTRB(4, 8, 4, 2),
+                padding: const EdgeInsets.fromLTRB(4, 7, 4, 1),
                 child: Row(children: [
                   Expanded(
                       child: Text(name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w700))),
+                              fontSize: 12, fontWeight: FontWeight.w700))),
                   Text(selected ? '선택됨' : category,
                       style: const TextStyle(
-                          color: Color(0xff6c7682), fontSize: 11)),
+                          color: Color(0xff798490), fontSize: 10)),
                 ]),
               ),
             ]),
@@ -1467,67 +1953,6 @@ class _RefinedSheetHandle extends StatelessWidget {
           height: 4,
           decoration: BoxDecoration(
               color: color, borderRadius: BorderRadius.circular(99)),
-        ),
-      );
-}
-
-class _RefinedStepIndicator extends StatelessWidget {
-  const _RefinedStepIndicator();
-  @override
-  Widget build(BuildContext context) => Row(children: [
-        for (var index = 1; index <= 3; index++) ...[
-          if (index > 1)
-            Expanded(
-                child: Container(
-                    height: 1,
-                    color: Theme.of(context).colorScheme.outlineVariant)),
-          Row(mainAxisSize: MainAxisSize.min, children: [
-            CircleAvatar(
-              radius: 12,
-              backgroundColor: index == 1
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.surfaceContainerLow,
-              child: Text('$index',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: index == 1
-                            ? Theme.of(context).colorScheme.onPrimary
-                            : Theme.of(context).colorScheme.onSurfaceVariant,
-                      )),
-            ),
-            const SizedBox(width: 5),
-            Text(switch (index) { 1 => '제목', 2 => '표지', _ => '속지' },
-                style: Theme.of(context).textTheme.labelSmall),
-          ]),
-        ],
-      ]);
-}
-
-class _RefinedChoiceRow extends StatelessWidget {
-  const _RefinedChoiceRow(
-      {required this.icon,
-      required this.title,
-      required this.description,
-      required this.onTap});
-  final IconData icon;
-  final String title;
-  final String description;
-  final VoidCallback onTap;
-  @override
-  Widget build(BuildContext context) => Material(
-        color: Theme.of(context).colorScheme.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
-          side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-        ),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
-          child: ListTile(
-            leading: Icon(icon),
-            title: Text(title),
-            subtitle: Text(description),
-            trailing: const Icon(Icons.chevron_right),
-          ),
         ),
       );
 }
@@ -1723,17 +2148,58 @@ class _TemplatePaper extends StatelessWidget {
       );
 }
 
-enum HomeDocumentCategory { all, memo, pdf, hwp }
+enum HomeDocumentCategory { all, memo, pdf, hwp, folder }
+
+enum _CoverStyle {
+  minimalBlue,
+  sage,
+  coral,
+  lavender,
+  navy,
+  study,
+  business,
+  planner,
+  ivory,
+  neutral,
+}
+
+_CoverStyle _resolveCoverStyle(String? coverId) => switch (coverId) {
+      'simple' || 'ocean' => _CoverStyle.minimalBlue,
+      'forest' => _CoverStyle.sage,
+      'planner' => _CoverStyle.planner,
+      'rose' => _CoverStyle.coral,
+      'mood' || 'violet' => _CoverStyle.lavender,
+      'dark' => _CoverStyle.navy,
+      'study' => _CoverStyle.study,
+      'work' => _CoverStyle.business,
+      'sand' || 'minimal' => _CoverStyle.ivory,
+      _ => _CoverStyle.neutral,
+    };
+
+String _coverStyleName(_CoverStyle style) => switch (style) {
+      _CoverStyle.minimalBlue => 'minimalBlue',
+      _CoverStyle.sage => 'sage',
+      _CoverStyle.coral => 'coral',
+      _CoverStyle.lavender => 'lavender',
+      _CoverStyle.navy => 'navy',
+      _CoverStyle.study => 'study',
+      _CoverStyle.business => 'business',
+      _CoverStyle.planner => 'planner',
+      _CoverStyle.ivory => 'ivory',
+      _CoverStyle.neutral => 'neutral fallback',
+    };
 
 class HomePage extends ConsumerStatefulWidget {
   const HomePage(
       {required this.onQuickMemo,
+      required this.onCreate,
       required this.onImportPdf,
       required this.onImportHwp,
       required this.onSearch,
       required this.onOpenDocuments,
       super.key});
   final VoidCallback onQuickMemo;
+  final VoidCallback onCreate;
   final VoidCallback onImportPdf;
   final VoidCallback onImportHwp;
   final VoidCallback onSearch;
@@ -1755,6 +2221,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     if (useRefinedDesign) {
       return _RefinedHomeView(
         onQuickMemo: widget.onQuickMemo,
+        onCreate: widget.onCreate,
         onSearch: widget.onSearch,
         onOpenDocuments: widget.onOpenDocuments,
       );
@@ -2358,10 +2825,12 @@ class _DocumentLinesPainter extends CustomPainter {
 class _RefinedHomeView extends ConsumerStatefulWidget {
   const _RefinedHomeView({
     required this.onQuickMemo,
+    required this.onCreate,
     required this.onSearch,
     required this.onOpenDocuments,
   });
   final VoidCallback onQuickMemo;
+  final VoidCallback onCreate;
   final VoidCallback onSearch;
   final VoidCallback onOpenDocuments;
 
@@ -2370,16 +2839,28 @@ class _RefinedHomeView extends ConsumerStatefulWidget {
 }
 
 class _RefinedHomeViewState extends ConsumerState<_RefinedHomeView> {
+  HomeDocumentCategory category = HomeDocumentCategory.all;
+  bool grid = true;
+
   @override
   Widget build(BuildContext context) {
-    final documents = ref
+    final storedDocuments = ref
         .watch(documentsProvider)
         .where((document) => !document.trashed)
         .toList()
       ..sort((left, right) => right.modified.compareTo(left.modified));
-    final notebooks =
-        documents.where((document) => document.isNotebook).toList();
-    final recent = documents.take(4).toList();
+    final documents = storedDocuments;
+    final recent = documents.take(5).toList();
+    final library = documents
+        .where((document) => switch (category) {
+              HomeDocumentCategory.memo => document.isNotebook,
+              HomeDocumentCategory.pdf => document.type == DocumentType.pdf,
+              HomeDocumentCategory.hwp => document.type == DocumentType.hwp ||
+                  document.type == DocumentType.hwpx,
+              HomeDocumentCategory.folder => document.folderId != null,
+              HomeDocumentCategory.all => true,
+            })
+        .toList();
     return Scaffold(
       backgroundColor: const Color(0xfff5f6f9),
       body: SafeArea(
@@ -2387,80 +2868,67 @@ class _RefinedHomeViewState extends ConsumerState<_RefinedHomeView> {
         child: CustomScrollView(
           slivers: [
             SliverToBoxAdapter(
-                child: _RefinedHeader(onSearch: widget.onSearch)),
+              child: _RefinedHeader(
+                onSearch: widget.onSearch,
+              ),
+            ),
             SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: _RefinedHomeHero(
-                  onCreate: widget.onQuickMemo,
-                  onOpenDocuments: widget.onOpenDocuments,
+              child: _RecentLibrarySection(
+                documents: recent,
+                onCreate: widget.onCreate,
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: _LibraryControls(
+                category: category,
+                grid: grid,
+                onCategoryChanged: (value) => setState(() => category = value),
+                onGridChanged: () => setState(() => grid = !grid),
+              ),
+            ),
+            if (library.isEmpty)
+              SliverToBoxAdapter(
+                child: _LibraryEmptyState(
+                  category: category,
+                  onCreate: widget.onCreate,
                 ),
-              ),
-            ),
-            SliverToBoxAdapter(
-              child: _RefinedSection(
-                title: '내 노트북',
-                action: '모두 보기',
-                onAction: widget.onOpenDocuments,
-                child: SizedBox(
-                  height: 224,
-                  child: notebooks.isEmpty
-                      ? _RefinedCreateNotebook(onTap: widget.onQuickMemo)
-                      : LayoutBuilder(
-                          builder: (context, constraints) {
-                            final contentWidth = constraints.maxWidth - 32;
-                            final cardWidth = constraints.maxWidth >= 720
-                                ? (contentWidth - 24) / 3
-                                : (contentWidth * .42).clamp(140.0, 180.0);
-                            return ListView.separated(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 16),
-                              scrollDirection: Axis.horizontal,
-                              itemCount: notebooks.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(width: 12),
-                              itemBuilder: (_, index) => _RefinedNotebookCard(
-                                document: notebooks[index],
-                                index: index,
-                                width: cardWidth,
-                                compact: false,
-                              ),
-                            );
-                          },
+              )
+            else if (grid)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 112),
+                sliver: SliverLayoutBuilder(
+                  builder: (context, constraints) {
+                    final columns = constraints.crossAxisExtent >= 760 ? 4 : 2;
+                    return SliverGrid(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) => _LibraryDocumentCard(
+                          document: library[index],
+                          index: index,
                         ),
-                ),
-              ),
-            ),
-            SliverToBoxAdapter(
-              child: _RefinedSection(
-                title: '템플릿으로 시작',
-                action: '모두 보기',
-                onAction: widget.onQuickMemo,
-                child: _RefinedTemplateRow(onTap: widget.onQuickMemo),
-              ),
-            ),
-            SliverToBoxAdapter(
-              child: _RefinedSection(
-                title: '최근 문서',
-                action: '문서 보기',
-                onAction: widget.onOpenDocuments,
-                child: recent.isEmpty
-                    ? const EmptyState(
-                        title: '최근 문서가 없습니다',
-                        message: 'PDF 또는 HWP 문서를 가져오면 여기에 표시됩니다.',
-                        icon: Icons.description_outlined,
-                      )
-                    : Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Column(
-                          children: [
-                            for (final document in recent)
-                              _RefinedHomeDocumentTile(document: document),
-                          ],
-                        ),
+                        childCount: library.length,
                       ),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: columns,
+                        mainAxisSpacing: 18,
+                        crossAxisSpacing: 14,
+                        childAspectRatio: .64,
+                      ),
+                    );
+                  },
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 112),
+                sliver: SliverList.separated(
+                  itemCount: library.length,
+                  itemBuilder: (context, index) => _LibraryDocumentListItem(
+                    document: library[index],
+                    index: index,
+                  ),
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                ),
               ),
-            ),
             const SliverToBoxAdapter(child: SizedBox(height: 24)),
           ],
         ),
@@ -2477,7 +2945,7 @@ class _RefinedHeader extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox(
         height: 64,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -2490,25 +2958,431 @@ class _RefinedHeader extends StatelessWidget {
                       letterSpacing: 0,
                     ),
               ),
-              Material(
-                color: Colors.transparent,
-                borderRadius: BorderRadius.circular(22),
-                child: InkWell(
-                  onTap: onSearch,
-                  borderRadius: BorderRadius.circular(22),
-                  child: const SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: Icon(Icons.search_outlined, size: 20),
-                  ),
-                ),
-              ),
+              _HeaderIconButton(
+                  tooltip: '검색', icon: Icons.search_outlined, onTap: onSearch),
             ],
           ),
         ),
       );
 }
 
+class _HeaderIconButton extends StatelessWidget {
+  const _HeaderIconButton(
+      {required this.tooltip, required this.icon, required this.onTap});
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: tooltip,
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(22),
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(22),
+            child: SizedBox(width: 42, height: 44, child: Icon(icon, size: 21)),
+          ),
+        ),
+      );
+}
+
+class _RecentLibrarySection extends StatelessWidget {
+  const _RecentLibrarySection(
+      {required this.documents, required this.onCreate});
+  final List<DocumentItem> documents;
+  final VoidCallback onCreate;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20),
+            child: Text('최근 작업',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 170,
+            child: documents.isEmpty
+                ? _RecentLibraryEmpty(onCreate: onCreate)
+                : ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    scrollDirection: Axis.horizontal,
+                    itemCount: documents.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 12),
+                    itemBuilder: (_, index) => _RecentLibraryItem(
+                      document: documents[index],
+                      index: index,
+                    ),
+                  ),
+          ),
+        ]),
+      );
+}
+
+class _RecentLibraryEmpty extends StatelessWidget {
+  const _RecentLibraryEmpty({required this.onCreate});
+  final VoidCallback onCreate;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: onCreate,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('첫 노트 만들기'),
+          ),
+        ),
+      );
+}
+
+class _RecentLibraryItem extends ConsumerWidget {
+  const _RecentLibraryItem({required this.document, required this.index});
+  final DocumentItem document;
+  final int index;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => SizedBox(
+        width: 116,
+        child: InkWell(
+          onTap: () => openDocument(context, document, ref),
+          borderRadius: BorderRadius.circular(8),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(
+                height: 141,
+                child: _LibraryVisual(
+                    document: document, index: index, compact: true)),
+            const SizedBox(height: 6),
+            Text(_documentTitle(document),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    const TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+          ]),
+        ),
+      );
+}
+
+class _LibraryControls extends StatelessWidget {
+  const _LibraryControls({
+    required this.category,
+    required this.grid,
+    required this.onCategoryChanged,
+    required this.onGridChanged,
+  });
+  final HomeDocumentCategory category;
+  final bool grid;
+  final ValueChanged<HomeDocumentCategory> onCategoryChanged;
+  final VoidCallback onGridChanged;
+
+  static const labels = <HomeDocumentCategory, String>{
+    HomeDocumentCategory.all: '전체',
+    HomeDocumentCategory.memo: '노트',
+    HomeDocumentCategory.pdf: 'PDF',
+    HomeDocumentCategory.hwp: 'HWP',
+    HomeDocumentCategory.folder: '폴더',
+  };
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(top: 30),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(children: [
+              const Text('내 라이브러리',
+                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () {},
+                iconAlignment: IconAlignment.end,
+                icon: const Icon(Icons.keyboard_arrow_down, size: 17),
+                label: const Text('최근 수정'),
+                style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.onSurface,
+                    textStyle: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600)),
+              ),
+              IconButton(
+                onPressed: onGridChanged,
+                tooltip: grid ? '목록 보기' : '격자 보기',
+                icon: Icon(
+                    grid ? Icons.view_list_outlined : Icons.grid_view_outlined,
+                    size: 20),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 4),
+          SizedBox(
+            height: 42,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              scrollDirection: Axis.horizontal,
+              itemCount: HomeDocumentCategory.values.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 9),
+              itemBuilder: (_, index) {
+                final value = HomeDocumentCategory.values[index];
+                final selected = value == category;
+                return ChoiceChip(
+                  label: Text(labels[value]!),
+                  selected: selected,
+                  onSelected: (_) => onCategoryChanged(value),
+                  showCheckmark: false,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  labelStyle: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: selected
+                        ? const Color(0xff1f4668)
+                        : Theme.of(context).colorScheme.onSurface,
+                  ),
+                  selectedColor: const Color(0xffc9dcec),
+                  backgroundColor: const Color(0xffeceef1),
+                  side: BorderSide.none,
+                );
+              },
+            ),
+          ),
+        ]),
+      );
+}
+
+class _LibraryEmptyState extends StatelessWidget {
+  const _LibraryEmptyState({required this.category, required this.onCreate});
+  final HomeDocumentCategory category;
+  final VoidCallback onCreate;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 36, 24, 48),
+        child: Column(children: [
+          Icon(Icons.auto_stories_outlined,
+              size: 32, color: Theme.of(context).colorScheme.onSurfaceVariant),
+          const SizedBox(height: 10),
+          Text(
+              category == HomeDocumentCategory.all
+                  ? '아직 문서가 없습니다'
+                  : '표시할 문서가 없습니다',
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          TextButton(onPressed: onCreate, child: const Text('새 노트 만들기')),
+        ]),
+      );
+}
+
+class _LibraryDocumentCard extends ConsumerWidget {
+  const _LibraryDocumentCard({required this.document, required this.index});
+  final DocumentItem document;
+  final int index;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => InkWell(
+        onTap: () => openDocument(context, document, ref),
+        borderRadius: BorderRadius.circular(8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: AspectRatio(
+                aspectRatio: .82,
+                child: _LibraryVisual(document: document, index: index)),
+          ),
+          const SizedBox(height: 7),
+          Text(_documentTitle(document),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 3),
+          Text(_libraryDetail(document),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurfaceVariant
+                      .withValues(alpha: .82))),
+        ]),
+      );
+}
+
+class _LibraryDocumentListItem extends ConsumerWidget {
+  const _LibraryDocumentListItem({required this.document, required this.index});
+  final DocumentItem document;
+  final int index;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => InkWell(
+        onTap: () => openDocument(context, document, ref),
+        borderRadius: BorderRadius.circular(10),
+        child: SizedBox(
+          height: 82,
+          child: Row(children: [
+            SizedBox(
+                width: 56,
+                height: 68,
+                child: _LibraryVisual(
+                    document: document, index: index, compact: true)),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_documentTitle(document),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 4),
+                Text(_libraryDetail(document),
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              ],
+            )),
+          ]),
+        ),
+      );
+}
+
+class _LibraryVisual extends StatelessWidget {
+  const _LibraryVisual(
+      {required this.document, required this.index, this.compact = false});
+  final DocumentItem document;
+  final int index;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final notebook = document.isNotebook;
+    final (icon, color, label) = _documentVisualStyle(document, context);
+    return Semantics(
+      label: notebook
+          ? '${_documentTitle(document)} ${_coverStyleName(_resolveCoverStyle(document.coverId))} 표지'
+          : '${_documentTitle(document)} $label 미리보기',
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(notebook ? 5 : 4),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: notebook ? .12 : .08),
+              blurRadius: notebook ? 8 : 5,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(notebook ? 5 : 4),
+          child: Stack(children: [
+            Positioned.fill(
+              child: notebook
+                  ? _NotebookCoverArt(
+                      coverId: document.coverId,
+                      title: _documentTitle(document),
+                      template: document.pageStyle,
+                      compact: compact,
+                    )
+                  : DocumentThumbnail(
+                      document: document,
+                      icon: icon,
+                      color: color,
+                      label: label,
+                      compact: compact),
+            ),
+            if (notebook)
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                child: Container(
+                    width: 3, color: Colors.black.withValues(alpha: .05)),
+              ),
+            if (!notebook)
+              Positioned(
+                left: 7,
+                bottom: 7,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                      color: color, borderRadius: BorderRadius.circular(4)),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    child: Text(label,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800)),
+                  ),
+                ),
+              ),
+            if (document.folderId != null)
+              Positioned(
+                right: 7,
+                top: 7,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: .92),
+                      borderRadius: BorderRadius.circular(4)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(Icons.folder_outlined,
+                        size: 13, color: Theme.of(context).colorScheme.primary),
+                  ),
+                ),
+              ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+(IconData, Color, String) _documentVisualStyle(
+    DocumentItem document, BuildContext context) {
+  final scheme = Theme.of(context).colorScheme;
+  return switch (document.type) {
+    DocumentType.pdf => (Icons.picture_as_pdf_outlined, scheme.error, 'PDF'),
+    DocumentType.hwp => (
+        Icons.description_outlined,
+        const Color(0xff43835a),
+        'HWP'
+      ),
+    DocumentType.hwpx => (
+        Icons.description_outlined,
+        const Color(0xff43835a),
+        'HWPX'
+      ),
+    DocumentType.drawingNote => (Icons.draw_outlined, scheme.primary, '노트'),
+    DocumentType.textNote => (Icons.note_alt_outlined, scheme.secondary, '메모'),
+  };
+}
+
+String _documentTitle(DocumentItem document) =>
+    document.title.trim().isEmpty ? '새 노트' : document.title.trim();
+
+String _libraryDetail(DocumentItem document) {
+  if (document.isNotebook) {
+    return '${_templateLabel(document.pageStyle)} · ${document.pageCount}페이지';
+  }
+  final label = document.type == DocumentType.pdf
+      ? 'PDF'
+      : document.type == DocumentType.hwpx
+          ? 'HWPX'
+          : 'HWP';
+  return '$label · ${document.pageCount}페이지';
+}
+
+// ignore: unused_element
 class _RefinedHomeHero extends StatelessWidget {
   const _RefinedHomeHero(
       {required this.onCreate, required this.onOpenDocuments});
@@ -2585,7 +3459,7 @@ class _HomeActionButton extends StatelessWidget {
         child: SizedBox(
           height: 44,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Center(
               child: Text(label,
                   style: TextStyle(
@@ -2601,6 +3475,7 @@ class _HomeActionButton extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _RefinedSection extends StatelessWidget {
   const _RefinedSection({
     required this.title,
@@ -2620,7 +3495,7 @@ class _RefinedSection extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
                   Text(title,
@@ -2654,6 +3529,7 @@ class _RefinedSection extends StatelessWidget {
       );
 }
 
+// ignore: unused_element
 class _RefinedHomeDocumentTile extends ConsumerWidget {
   const _RefinedHomeDocumentTile({required this.document});
   final DocumentItem document;
@@ -2803,12 +3679,15 @@ class _RefinedHomeDocumentTile extends ConsumerWidget {
   }
 }
 
+// ignore: unused_element
 class _RefinedNotebookCard extends ConsumerWidget {
   // ignore: unused_element_parameter
   const _RefinedNotebookCard(
       {required this.document,
       required this.index,
+      // ignore: unused_element_parameter
       this.width = 150,
+      // ignore: unused_element_parameter
       this.compact = false});
   final DocumentItem document;
   final int index;
@@ -2882,6 +3761,7 @@ class _RefinedNotebookCard extends ConsumerWidget {
       );
 }
 
+// ignore: unused_element
 class _RefinedCreateNotebook extends StatelessWidget {
   const _RefinedCreateNotebook({required this.onTap});
   final VoidCallback onTap;
@@ -2978,6 +3858,7 @@ class _RefinedNotebookCover extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _RefinedTemplateRow extends StatelessWidget {
   const _RefinedTemplateRow({required this.onTap});
   final VoidCallback onTap;
@@ -2991,7 +3872,7 @@ class _RefinedTemplateRow extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox(
         height: 136,
         child: ListView.separated(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 20),
           scrollDirection: Axis.horizontal,
           itemCount: templates.length,
           separatorBuilder: (_, __) => const SizedBox(width: 8),
@@ -3462,6 +4343,7 @@ class _DocumentsPageState extends ConsumerState<DocumentsPage> {
         HomeDocumentCategory.pdf => d.type == DocumentType.pdf,
         HomeDocumentCategory.hwp =>
           d.type == DocumentType.hwp || d.type == DocumentType.hwpx,
+        HomeDocumentCategory.folder => d.folderId != null,
       };
     }).toList();
     return Scaffold(
@@ -3541,6 +4423,8 @@ class _DocumentsPageState extends ConsumerState<DocumentsPage> {
       );
 }
 
+enum _DocumentsLibraryCategory { all, notebook, memo, pdf, hwp, folder }
+
 class _RefinedDocumentsView extends ConsumerStatefulWidget {
   const _RefinedDocumentsView();
 
@@ -3550,28 +4434,40 @@ class _RefinedDocumentsView extends ConsumerStatefulWidget {
 }
 
 class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
-  HomeDocumentCategory category = HomeDocumentCategory.all;
-  bool grid = false;
+  _DocumentsLibraryCategory category = _DocumentsLibraryCategory.all;
+  bool grid = true;
 
   @override
   Widget build(BuildContext context) {
     final docs = ref.watch(documentsProvider).where((document) {
       if (document.trashed) return false;
       return switch (category) {
-        HomeDocumentCategory.all => true,
-        HomeDocumentCategory.memo => document.type == DocumentType.textNote ||
-            document.type == DocumentType.drawingNote,
-        HomeDocumentCategory.pdf => document.type == DocumentType.pdf,
-        HomeDocumentCategory.hwp => document.type == DocumentType.hwp ||
+        _DocumentsLibraryCategory.all => true,
+        _DocumentsLibraryCategory.notebook =>
+          document.type == DocumentType.drawingNote,
+        _DocumentsLibraryCategory.memo =>
+          document.type == DocumentType.textNote,
+        _DocumentsLibraryCategory.pdf => document.type == DocumentType.pdf,
+        _DocumentsLibraryCategory.hwp => document.type == DocumentType.hwp ||
             document.type == DocumentType.hwpx,
+        _DocumentsLibraryCategory.folder => document.folderId != null,
       };
-    }).toList();
+    }).toList()
+      ..sort((left, right) => right.modified.compareTo(left.modified));
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: scheme.surfaceContainerLowest,
       appBar: AppBar(
         title: const Text('문서'),
         actions: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('최근 수정', style: TextStyle(fontSize: 12)),
+              SizedBox(width: 2),
+              Icon(Icons.keyboard_arrow_down, size: 17),
+            ]),
+          ),
           IconButton(
             onPressed: () => setState(() => grid = !grid),
             tooltip: grid ? '목록으로 보기' : '격자로 보기',
@@ -3585,44 +4481,49 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: Text('문서 보관함 · ${docs.length}개',
+            padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+            child: Text('${docs.length}개의 노트와 문서',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: scheme.onSurfaceVariant,
                     )),
           ),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
             child: Row(children: [
-              _refinedChip('전체', HomeDocumentCategory.all),
-              _refinedChip('메모', HomeDocumentCategory.memo),
-              _refinedChip('PDF', HomeDocumentCategory.pdf),
-              _refinedChip('HWP', HomeDocumentCategory.hwp),
+              _refinedChip('전체', _DocumentsLibraryCategory.all),
+              _refinedChip('노트', _DocumentsLibraryCategory.notebook),
+              _refinedChip('메모', _DocumentsLibraryCategory.memo),
+              _refinedChip('PDF', _DocumentsLibraryCategory.pdf),
+              _refinedChip('HWP', _DocumentsLibraryCategory.hwp),
+              _refinedChip('폴더', _DocumentsLibraryCategory.folder),
             ]),
           ),
           Expanded(
             child: docs.isEmpty
-                ? EmptyState.forCategory(category)
+                ? _DocumentsLibraryEmptyState(category: category)
                 : grid
-                    ? GridView.builder(
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                        gridDelegate:
-                            const SliverGridDelegateWithMaxCrossAxisExtent(
-                          maxCrossAxisExtent: 360,
-                          crossAxisSpacing: 8,
-                          mainAxisSpacing: 8,
-                          childAspectRatio: .9,
-                        ),
-                        itemCount: docs.length,
-                        itemBuilder: (_, index) =>
-                            DocumentGridTile(document: docs[index]),
-                      )
+                    ? LayoutBuilder(builder: (context, constraints) {
+                        final columns = constraints.maxWidth >= 760 ? 4 : 2;
+                        return GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(20, 14, 20, 112),
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: columns,
+                            crossAxisSpacing: 14,
+                            mainAxisSpacing: 18,
+                            childAspectRatio: .62,
+                          ),
+                          itemCount: docs.length,
+                          itemBuilder: (_, index) => _DocumentsLibraryGridItem(
+                              document: docs[index], index: index),
+                        );
+                      })
                     : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                        padding: const EdgeInsets.fromLTRB(20, 12, 20, 112),
                         itemCount: docs.length,
-                        itemBuilder: (_, index) =>
-                            _RefinedDocumentListCard(document: docs[index]),
+                        itemBuilder: (_, index) => _DocumentsLibraryListItem(
+                            document: docs[index], index: index),
                       ),
           ),
         ],
@@ -3630,24 +4531,191 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
     );
   }
 
-  Widget _refinedChip(String label, HomeDocumentCategory value) => Padding(
-        padding: const EdgeInsets.only(right: 8),
+  Widget _refinedChip(String label, _DocumentsLibraryCategory value) => Padding(
+        padding: const EdgeInsets.only(right: 9),
         child: ChoiceChip(
           label: Text(label),
           selected: category == value,
           onSelected: (_) => setState(() => category = value),
           showCheckmark: false,
-          side: BorderSide(
-            color: Theme.of(context).colorScheme.outlineVariant,
-          ),
-          backgroundColor: Colors.transparent,
-          selectedColor: Theme.of(context).colorScheme.onSurface,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          side: BorderSide.none,
+          backgroundColor: const Color(0xffeceef1),
+          selectedColor: const Color(0xffc9dcec),
           labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
                 color: category == value
-                    ? Theme.of(context).colorScheme.surface
-                    : Theme.of(context).colorScheme.onSurfaceVariant,
+                    ? const Color(0xff1f4668)
+                    : Theme.of(context).colorScheme.onSurface,
               ),
         ),
+      );
+}
+
+class _DocumentsLibraryGridItem extends ConsumerWidget {
+  const _DocumentsLibraryGridItem(
+      {required this.document, required this.index});
+  final DocumentItem document;
+  final int index;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => InkWell(
+        onTap: () => openDocument(context, document, ref),
+        borderRadius: BorderRadius.circular(8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: AspectRatio(
+              aspectRatio: .82,
+              child: _LibraryVisual(document: document, index: index),
+            ),
+          ),
+          const SizedBox(height: 7),
+          Row(children: [
+            Expanded(
+              child: Text(_documentTitle(document),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600)),
+            ),
+            _DocumentsOverflowMenu(document: document),
+          ]),
+          const SizedBox(height: 3),
+          Text(_documentsLibraryDetail(document),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurfaceVariant
+                      .withValues(alpha: .82))),
+        ]),
+      );
+}
+
+class _DocumentsLibraryListItem extends ConsumerWidget {
+  const _DocumentsLibraryListItem(
+      {required this.document, required this.index});
+  final DocumentItem document;
+  final int index;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => InkWell(
+        onTap: () => openDocument(context, document, ref),
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          height: 82,
+          child: Row(children: [
+            SizedBox(
+                width: 56,
+                height: 68,
+                child: _LibraryVisual(
+                    document: document, index: index, compact: true)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_documentTitle(document),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 3),
+                  Text(_documentsLibraryDetail(document),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 11,
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant)),
+                ],
+              ),
+            ),
+            _DocumentsOverflowMenu(document: document),
+          ]),
+        ),
+      );
+}
+
+class _DocumentsOverflowMenu extends ConsumerWidget {
+  const _DocumentsOverflowMenu({required this.document});
+  final DocumentItem document;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => PopupMenuButton<String>(
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.more_horiz, size: 20),
+        tooltip: '문서 메뉴',
+        onSelected: (value) async {
+          if (value == 'rename') {
+            final controller = TextEditingController(text: document.title);
+            final name = await showDialog<String>(
+              context: context,
+              builder: (dialogContext) => AlertDialog(
+                title: const Text('문서 이름 변경'),
+                content: TextField(
+                    controller: controller,
+                    autofocus: true,
+                    maxLines: 1,
+                    decoration: const InputDecoration(labelText: '문서 이름')),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      child: const Text('취소')),
+                  FilledButton(
+                      onPressed: () =>
+                          Navigator.of(dialogContext).pop(controller.text),
+                      child: const Text('저장')),
+                ],
+              ),
+            );
+            Future<void>.delayed(
+                const Duration(milliseconds: 300), controller.dispose);
+            final trimmed = name?.trim() ?? '';
+            if (trimmed.isEmpty || !context.mounted) return;
+            document.title = trimmed;
+            document.modified = DateTime.now();
+            await ref.read(documentsProvider.notifier).update(document);
+          } else if (value == 'favorite') {
+            document.favorite = !document.favorite;
+            document.modified = DateTime.now();
+            await ref.read(documentsProvider.notifier).update(document);
+          } else if (value == 'trash') {
+            await ref.read(documentsProvider.notifier).remove(document.id);
+          }
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(value: 'favorite', child: Text('즐겨찾기')),
+          PopupMenuItem(value: 'rename', child: Text('이름 변경')),
+          PopupMenuItem(value: 'trash', child: Text('휴지통으로 이동')),
+        ],
+      );
+}
+
+String _documentsLibraryDetail(DocumentItem document) =>
+    switch (document.type) {
+      DocumentType.drawingNote =>
+        '${_templateLabel(document.pageStyle)} · ${document.pageCount}페이지',
+      DocumentType.textNote =>
+        '메모 · ${document.modified.hour.toString().padLeft(2, '0')}:${document.modified.minute.toString().padLeft(2, '0')}',
+      DocumentType.pdf => 'PDF · ${document.pageCount}페이지',
+      DocumentType.hwp => 'HWP · ${document.pageCount}페이지',
+      DocumentType.hwpx => 'HWPX · ${document.pageCount}페이지',
+    };
+
+class _DocumentsLibraryEmptyState extends StatelessWidget {
+  const _DocumentsLibraryEmptyState({required this.category});
+  final _DocumentsLibraryCategory category;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Text(category == _DocumentsLibraryCategory.all
+            ? '아직 문서가 없습니다'
+            : '표시할 문서가 없습니다'),
       );
 }
 
@@ -3761,6 +4829,7 @@ class _RefinedSearchViewState extends ConsumerState<_RefinedSearchView> {
   String query = '';
   DocumentType? typeFilter;
   bool favoritesOnly = false;
+  bool hwpOnly = false;
   final _searchController = TextEditingController();
 
   @override
@@ -3776,7 +4845,10 @@ class _RefinedSearchViewState extends ConsumerState<_RefinedSearchView> {
         .where((document) => !document.trashed)
         .where((document) =>
             document.title.contains(query) || document.body.contains(query))
-        .where((document) => typeFilter == null || document.type == typeFilter)
+        .where((document) => hwpOnly
+            ? document.type == DocumentType.hwp ||
+                document.type == DocumentType.hwpx
+            : typeFilter == null || document.type == typeFilter)
         .where((document) => !favoritesOnly || document.favorite)
         .toList();
     final scheme = Theme.of(context).colorScheme;
@@ -3797,7 +4869,7 @@ class _RefinedSearchViewState extends ConsumerState<_RefinedSearchView> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
             child: TextField(
               controller: _searchController,
               onChanged: (value) => setState(() => query = value),
@@ -3816,17 +4888,17 @@ class _RefinedSearchViewState extends ConsumerState<_RefinedSearchView> {
                         icon: const Icon(Icons.close, size: 18),
                       ),
                 filled: true,
-                fillColor: scheme.surface,
+                fillColor: const Color(0xffeceef1),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
-                  borderSide: BorderSide(color: scheme.outlineVariant),
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
                 ),
                 enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
-                  borderSide: BorderSide(color: scheme.outlineVariant),
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
+                  borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide(color: scheme.primary, width: 1.4),
                 ),
               ),
@@ -3834,69 +4906,193 @@ class _RefinedSearchViewState extends ConsumerState<_RefinedSearchView> {
           ),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
             child: Row(children: [
               _searchChip('전체', null, false),
               _searchChip('즐겨찾기', null, true),
+              _searchChip('노트', DocumentType.drawingNote, false),
               _searchChip('메모', DocumentType.textNote, false),
               _searchChip('PDF', DocumentType.pdf, false),
-              _searchChip('필기', DocumentType.drawingNote, false),
+              _searchChip('HWP', null, false, hwp: true),
             ]),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
-            child: Row(
-              children: [
-                Text('최근 검색 결과',
-                    style: Theme.of(context).textTheme.titleMedium),
+          if (query.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 22, 20, 7),
+              child: Row(children: [
+                Text('검색 결과', style: Theme.of(context).textTheme.titleMedium),
                 const Spacer(),
                 Text('${docs.length}개',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: scheme.onSurfaceVariant,
                         )),
-              ],
+              ]),
             ),
-          ),
           Expanded(
-            child: docs.isEmpty
-                ? const EmptyState(
-                    title: '검색 결과가 없습니다',
-                    message: '다른 키워드로 다시 검색해 보세요.',
-                    icon: Icons.search_off_outlined,
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                    itemCount: docs.length,
-                    itemBuilder: (_, index) =>
-                        _RefinedDocumentListCard(document: docs[index]),
-                  ),
+            child: query.isEmpty
+                ? const _SearchReadyState()
+                : docs.isEmpty
+                    ? const EmptyState(
+                        title: '검색 결과가 없습니다',
+                        message: '다른 키워드로 다시 검색해 보세요.',
+                        icon: Icons.search_off_outlined,
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 112),
+                        itemCount: docs.length,
+                        itemBuilder: (_, index) => _SearchLibraryResult(
+                            document: docs[index], index: index, query: query),
+                        separatorBuilder: (_, __) => const SizedBox(height: 4),
+                      ),
           ),
         ],
       ),
     );
   }
 
-  Widget _searchChip(String label, DocumentType? type, bool favorite) =>
+  Widget _searchChip(String label, DocumentType? type, bool favorite,
+          {bool hwp = false}) =>
       Padding(
-        padding: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.only(right: 9),
         child: ChoiceChip(
           label: Text(label),
-          selected: typeFilter == type && favoritesOnly == favorite,
+          selected:
+              typeFilter == type && favoritesOnly == favorite && hwpOnly == hwp,
           onSelected: (_) => setState(() {
             typeFilter = type;
             favoritesOnly = favorite;
+            hwpOnly = hwp;
           }),
           showCheckmark: false,
-          side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-          backgroundColor: Colors.transparent,
-          selectedColor: Theme.of(context).colorScheme.onSurface,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          side: BorderSide.none,
+          backgroundColor: const Color(0xffeceef1),
+          selectedColor: const Color(0xffc9dcec),
           labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: typeFilter == type && favoritesOnly == favorite
-                    ? Theme.of(context).colorScheme.surface
-                    : Theme.of(context).colorScheme.onSurfaceVariant,
+                color: typeFilter == type &&
+                        favoritesOnly == favorite &&
+                        hwpOnly == hwp
+                    ? const Color(0xff1f4668)
+                    : Theme.of(context).colorScheme.onSurface,
               ),
         ),
       );
+}
+
+class _SearchReadyState extends StatelessWidget {
+  const _SearchReadyState();
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.search_outlined,
+              size: 32, color: Theme.of(context).colorScheme.onSurfaceVariant),
+          const SizedBox(height: 10),
+          const Text('노트와 문서를 검색해 보세요',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Text('제목 또는 메모 내용으로 찾을 수 있습니다.',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ]),
+      );
+}
+
+class _SearchLibraryResult extends ConsumerWidget {
+  const _SearchLibraryResult(
+      {required this.document, required this.index, required this.query});
+  final DocumentItem document;
+  final int index;
+  final String query;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final preview = _searchMatchPreview(document, query);
+    return InkWell(
+      onTap: () => openDocument(context, document, ref),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          SizedBox(
+              width: 52,
+              height: 64,
+              child: _LibraryVisual(
+                  document: document, index: index, compact: true)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SearchHighlightedText(
+                    text: _documentTitle(document), query: query),
+                const SizedBox(height: 3),
+                Text(_documentsLibraryDetail(document),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                if (preview != null) ...[
+                  const SizedBox(height: 3),
+                  Text(preview,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurfaceVariant
+                              .withValues(alpha: .82))),
+                ],
+              ],
+            ),
+          ),
+          _DocumentsOverflowMenu(document: document),
+        ]),
+      ),
+    );
+  }
+}
+
+String? _searchMatchPreview(DocumentItem document, String query) {
+  if (query.isEmpty || !document.body.contains(query)) return null;
+  final line = document.body
+      .split('\n')
+      .firstWhere((line) => line.contains(query), orElse: () => '');
+  return line.trim().isEmpty ? null : line.trim();
+}
+
+class _SearchHighlightedText extends StatelessWidget {
+  const _SearchHighlightedText({required this.text, required this.query});
+  final String text;
+  final String query;
+
+  @override
+  Widget build(BuildContext context) {
+    final index = text.indexOf(query);
+    final style = const TextStyle(fontSize: 14, fontWeight: FontWeight.w600);
+    if (index < 0 || query.isEmpty) {
+      return Text(text,
+          maxLines: 1, overflow: TextOverflow.ellipsis, style: style);
+    }
+    final accent = Theme.of(context).colorScheme.primary;
+    return Text.rich(
+      TextSpan(children: [
+        TextSpan(text: text.substring(0, index)),
+        TextSpan(
+            text: text.substring(index, index + query.length),
+            style: TextStyle(color: accent, fontWeight: FontWeight.w800)),
+        TextSpan(text: text.substring(index + query.length)),
+      ]),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: style,
+    );
+  }
 }
 
 class SettingsPage extends ConsumerWidget {
@@ -3906,7 +5102,7 @@ class SettingsPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final useRefinedDesign =
         Theme.of(context).platform != TargetPlatform.fuchsia;
-    if (useRefinedDesign) return _RefinedSettingsView(onClose: onClose);
+    if (useRefinedDesign) return const _RefinedSettingsView();
 
     // Legacy settings list retained below for a low-risk rollback.
     final settings = ref.watch(appSettingsProvider);
@@ -3974,8 +5170,7 @@ class SettingsPage extends ConsumerWidget {
 }
 
 class _RefinedSettingsView extends ConsumerWidget {
-  const _RefinedSettingsView({required this.onClose});
-  final VoidCallback onClose;
+  const _RefinedSettingsView();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -3990,40 +5185,24 @@ class _RefinedSettingsView extends ConsumerWidget {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 720),
             child: ListView(
-              padding: const EdgeInsets.only(bottom: 28),
+              padding: const EdgeInsets.only(bottom: 112),
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: SizedBox(
                     height: 64,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('설정',
-                            style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w700,
-                                height: 1.35)),
-                        Tooltip(
-                          message: '설정 닫기',
-                          child: InkWell(
-                            onTap: onClose,
-                            borderRadius: BorderRadius.circular(22),
-                            child: const SizedBox(
-                              width: 44,
-                              height: 44,
-                              child: Center(
-                                  child: Text('×',
-                                      style: TextStyle(fontSize: 22))),
-                            ),
-                          ),
-                        ),
-                      ],
+                    child: const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('설정',
+                          style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700,
+                              height: 1.35)),
                     ),
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
                   child: Text('DocNote를 사용하는 방식과 저장 환경을 관리합니다.',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                             color: scheme.onSurfaceVariant,
@@ -4032,12 +5211,12 @@ class _RefinedSettingsView extends ConsumerWidget {
                           )),
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: _RefinedSettingsGroup(
                     title: '사용 환경',
                     children: [
                       _RefinedSettingsRow(
-                        icon: '◐',
+                        icon: Icons.palette_outlined,
                         title: '화면 테마',
                         subtitle: '기기 설정에 맞춤',
                         trailing: Text(_refinedThemeLabel(settings.theme),
@@ -4051,7 +5230,7 @@ class _RefinedSettingsView extends ConsumerWidget {
                             context, settings.theme, controller),
                       ),
                       _RefinedSettingsRow(
-                        icon: '✓',
+                        icon: Icons.save_outlined,
                         title: '자동 저장',
                         subtitle: '변경 사항을 자동으로 저장합니다',
                         trailing: _DesignSwitch(
@@ -4064,15 +5243,27 @@ class _RefinedSettingsView extends ConsumerWidget {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: _RefinedSettingsGroup(
                     title: '문서 관리',
                     children: [
                       _RefinedSettingsRow(
-                        icon: '⌫',
+                        icon: Icons.delete_outline,
                         title: '휴지통',
                         subtitle: '삭제한 문서를 확인합니다',
-                        trailing: const _SettingsChevron(),
+                        trailing:
+                            Row(mainAxisSize: MainAxisSize.min, children: [
+                          Text(
+                              '${ref.watch(documentsProvider).where((d) => d.trashed).length}개',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelMedium
+                                  ?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                  )),
+                          const SizedBox(width: 4),
+                          const _SettingsChevron(),
+                        ]),
                         onTap: () => Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -4083,12 +5274,12 @@ class _RefinedSettingsView extends ConsumerWidget {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: _RefinedSettingsGroup(
                     title: 'DocNote 정보',
                     children: [
                       _RefinedSettingsRow(
-                        icon: 'i',
+                        icon: Icons.info_outline,
                         title: '앱 정보',
                         subtitle: 'DocNote 버전과 도움말',
                         trailing: const _SettingsChevron(),
@@ -4120,12 +5311,12 @@ class _RefinedSettingsView extends ConsumerWidget {
       AppSettingsController controller) async {
     final selected = await showDialog<AppThemeChoice>(
       context: context,
-      builder: (_) => SimpleDialog(
+      builder: (dialogContext) => SimpleDialog(
         title: const Text('화면 테마'),
         children: [
           for (final choice in AppThemeChoice.values)
             SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, choice),
+              onPressed: () => Navigator.of(dialogContext).pop(choice),
               child: Row(children: [
                 Icon(choice == current
                     ? Icons.radio_button_checked
@@ -4148,24 +5339,21 @@ class _RefinedSettingsGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(top: 32),
+        padding: const EdgeInsets.only(top: 28),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(title,
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontSize: 17,
+                      fontSize: 15,
                       height: 1.45,
                     )),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Container(
               clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: Theme.of(context).colorScheme.outlineVariant,
-                ),
+                color: const Color(0xfff8f9fb),
+                borderRadius: BorderRadius.circular(14),
               ),
               child: Column(
                 children: [
@@ -4175,7 +5363,10 @@ class _RefinedSettingsGroup extends StatelessWidget {
                       Divider(
                         height: 1,
                         thickness: 1,
-                        color: Theme.of(context).colorScheme.outlineVariant,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .outlineVariant
+                            .withValues(alpha: .55),
                       ),
                   ],
                 ],
@@ -4194,7 +5385,7 @@ class _RefinedSettingsRow extends StatelessWidget {
     required this.trailing,
     this.onTap,
   });
-  final String icon;
+  final IconData icon;
   final String title;
   final String subtitle;
   final Widget trailing;
@@ -4204,7 +5395,7 @@ class _RefinedSettingsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: scheme.surface,
+      color: const Color(0xfff8f9fb),
       child: InkWell(
         onTap: onTap,
         child: ConstrainedBox(
@@ -4218,14 +5409,10 @@ class _RefinedSettingsRow extends StatelessWidget {
                   height: 36,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: const Color(0xfff1f2f4),
-                    borderRadius: BorderRadius.circular(10),
+                    color: const Color(0xffeceff3),
+                    borderRadius: BorderRadius.circular(9),
                   ),
-                  child: Text(icon,
-                      style: TextStyle(
-                          color: scheme.onSurfaceVariant,
-                          fontSize: icon == 'i' ? 16 : 15,
-                          fontWeight: FontWeight.w600)),
+                  child: Icon(icon, size: 18, color: scheme.onSurfaceVariant),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -4262,11 +5449,21 @@ class _RefinedStorageRow extends StatelessWidget {
   const _RefinedStorageRow();
 
   @override
-  Widget build(BuildContext context) => _RefinedSettingsRow(
-        icon: '▤',
-        title: '저장 공간',
-        subtitle: '현재 기기에 저장된 문서',
-        trailing: const _SettingsChevron(),
+  Widget build(BuildContext context) => FutureBuilder<int>(
+        future: _storageBytes(),
+        builder: (context, snapshot) => _RefinedSettingsRow(
+          icon: Icons.storage_outlined,
+          title: '저장 공간',
+          subtitle: '현재 기기에 저장된 문서',
+          trailing: Text(
+            snapshot.hasData
+                ? _formatBytes(snapshot.data!).split(' 사용').first
+                : '',
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        ),
       );
 }
 
@@ -4274,11 +5471,8 @@ class _SettingsChevron extends StatelessWidget {
   const _SettingsChevron();
 
   @override
-  Widget build(BuildContext context) => Text('›',
-      style: TextStyle(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-          fontSize: 18,
-          fontWeight: FontWeight.w600));
+  Widget build(BuildContext context) => Icon(Icons.chevron_right,
+      size: 19, color: Theme.of(context).colorScheme.onSurfaceVariant);
 }
 
 class _DesignSwitch extends StatelessWidget {
@@ -4587,125 +5781,6 @@ class NotebookCard extends ConsumerWidget {
   }
 }
 
-class _RefinedDocumentListCard extends ConsumerWidget {
-  const _RefinedDocumentListCard({required this.document});
-  final DocumentItem document;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final (icon, color, label) = switch (document.type) {
-      DocumentType.pdf => (Icons.picture_as_pdf_outlined, scheme.error, 'PDF'),
-      DocumentType.hwp || DocumentType.hwpx => (
-          Icons.description_outlined,
-          scheme.primary,
-          document.type == DocumentType.hwpx ? 'HWPX' : 'HWP'
-        ),
-      DocumentType.drawingNote => (
-          Icons.draw_outlined,
-          scheme.tertiary,
-          '필기 노트'
-        ),
-      _ => (Icons.note_alt_outlined, scheme.secondary, '메모'),
-    };
-    final title = document.title.trim().isEmpty ? '새 메모' : document.title;
-    final time =
-        '${document.modified.hour.toString().padLeft(2, '0')}:${document.modified.minute.toString().padLeft(2, '0')}';
-    final meta = document.pageCount > 0
-        ? '$label · ${document.pageCount}페이지 · $time'
-        : '$label · $time';
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: scheme.surface.withValues(alpha: .88),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: .72)),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => openDocument(context, document, ref),
-          child: SizedBox(
-            height: 88,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 52,
-                    height: 64,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(7),
-                      child: DocumentThumbnail(
-                        document: document,
-                        icon: icon,
-                        color: color,
-                        label: label,
-                        compact: true,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 14,
-                                height: 1.45,
-                                fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 4),
-                        Text(meta,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                                fontSize: 12,
-                                height: 1.5,
-                                color: scheme.onSurfaceVariant)),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    width: 7,
-                    height: 7,
-                    decoration: BoxDecoration(
-                        color: scheme.tertiary, shape: BoxShape.circle),
-                  ),
-                  PopupMenuButton<String>(
-                    padding: EdgeInsets.zero,
-                    icon: const Icon(Icons.more_horiz, size: 20),
-                    tooltip: '문서 메뉴',
-                    onSelected: (value) {
-                      if (value == 'trash') {
-                        ref
-                            .read(documentsProvider.notifier)
-                            .remove(document.id);
-                      } else if (value == 'favorite') {
-                        document.favorite = !document.favorite;
-                        document.modified = DateTime.now();
-                        ref.read(documentsProvider.notifier).update(document);
-                      }
-                    },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'favorite', child: Text('즐겨찾기')),
-                      PopupMenuItem(value: 'trash', child: Text('휴지통으로 이동')),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class DocumentGridTile extends ConsumerWidget {
   const DocumentGridTile({required this.document, super.key});
   final DocumentItem document;
@@ -4862,10 +5937,6 @@ class _DocumentThumbnailState extends ConsumerState<DocumentThumbnail> {
   }
 
   Future<void> _ensureThumbnail() async {
-    if (defaultTargetPlatform != TargetPlatform.fuchsia) {
-      _finishLoading();
-      return;
-    }
     if (widget.document.thumbnailPath != null &&
         widget.document.thumbnailVersion >=
             DocumentThumbnailService.currentVersion) {
@@ -4900,12 +5971,6 @@ class _DocumentThumbnailState extends ConsumerState<DocumentThumbnail> {
 
   @override
   Widget build(BuildContext context) {
-    if (Theme.of(context).platform != TargetPlatform.fuchsia) {
-      return _FixedDocumentTypeCard(
-        type: widget.document.type,
-        compact: widget.compact,
-      );
-    }
     final path = widget.document.thumbnailPath;
     if (path != null && File(path).existsSync()) {
       if (path.toLowerCase().endsWith('.svg')) {
@@ -4916,9 +5981,12 @@ class _DocumentThumbnailState extends ConsumerState<DocumentThumbnail> {
               File(path),
               fit: BoxFit.contain,
               alignment: Alignment.center,
-              errorBuilder: (_, __, ___) => _ThumbnailError(
+              errorBuilder: (_, __, ___) => _DocumentPreview(
                 icon: widget.icon,
                 color: widget.color,
+                label: widget.label,
+                loading: false,
+                compact: widget.compact,
               ),
             ),
           ),
@@ -4931,9 +5999,12 @@ class _DocumentThumbnailState extends ConsumerState<DocumentThumbnail> {
             File(path),
             fit: BoxFit.contain,
             alignment: Alignment.center,
-            errorBuilder: (_, __, ___) => _ThumbnailError(
+            errorBuilder: (_, __, ___) => _DocumentPreview(
               icon: widget.icon,
               color: widget.color,
+              label: widget.label,
+              loading: false,
+              compact: widget.compact,
             ),
           ),
         ),
@@ -4944,7 +6015,7 @@ class _DocumentThumbnailState extends ConsumerState<DocumentThumbnail> {
         widget.document.coverId != null) {
       return widget.compact
           ? _NotebookCoverArt(
-              coverId: widget.document.coverId ?? 'simple',
+              coverId: widget.document.coverId,
               title: widget.document.title.trim().isEmpty
                   ? '새 노트'
                   : widget.document.title,
@@ -4971,6 +6042,7 @@ class _DocumentThumbnailState extends ConsumerState<DocumentThumbnail> {
   }
 }
 
+// ignore: unused_element
 class _FixedDocumentTypeCard extends StatelessWidget {
   const _FixedDocumentTypeCard({required this.type, required this.compact});
   final DocumentType type;
@@ -5040,17 +6112,6 @@ class _FixedDocumentTypeCard extends StatelessWidget {
   }
 }
 
-class _ThumbnailError extends StatelessWidget {
-  const _ThumbnailError({required this.icon, required this.color});
-  final IconData icon;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Center(
-        child: Icon(icon, size: 20, color: color.withValues(alpha: .65)),
-      );
-}
-
 class _MemoThumbnail extends StatelessWidget {
   const _MemoThumbnail({required this.document});
   final DocumentItem document;
@@ -5116,7 +6177,7 @@ class _NotebookCover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => _NotebookCoverArt(
-        coverId: document.coverId ?? 'simple',
+        coverId: document.coverId,
         title: document.title.trim().isEmpty ? '새 노트' : document.title,
         template: document.pageStyle,
       );
@@ -5129,150 +6190,166 @@ class _NotebookCoverArt extends StatelessWidget {
     this.template = 'blank',
     this.compact = false,
   });
-  final String coverId;
+  final String? coverId;
   final String title;
   final String template;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
-    final palette = switch (coverId) {
-      'work' => (
+    final style = _resolveCoverStyle(coverId);
+    final palette = switch (style) {
+      _CoverStyle.business => (
           const Color(0xffdce8f5),
           const Color(0xff27577f),
           const Color(0xffa9c6e4)
         ),
-      'study' => (
+      _CoverStyle.study => (
           const Color(0xffe9efd9),
           const Color(0xff4d6b42),
           const Color(0xffcbd9af)
         ),
-      'planner' => (
+      _CoverStyle.planner || _CoverStyle.coral => (
           const Color(0xffffe8dc),
           const Color(0xff9a5540),
           const Color(0xfff4c9b4)
         ),
-      'minimal' => (
-          const Color(0xffeeeeef),
-          const Color(0xff4c4f58),
-          const Color(0xffd5d6da)
+      _CoverStyle.ivory => (
+          const Color(0xfff4eddf),
+          const Color(0xff756343),
+          const Color(0xffdfcda4)
         ),
-      'dark' => (
+      _CoverStyle.navy => (
           const Color(0xff263243),
           Colors.white,
           const Color(0xff49617e)
         ),
-      'mood' => (
-          const Color(0xfff3e5ec),
-          const Color(0xff895b70),
-          const Color(0xffe5bfd0)
-        ),
-      'ocean' => (
-          const Color(0xffd9ebf8),
-          const Color(0xff27658d),
-          const Color(0xffaacfea)
-        ),
-      'rose' => (
-          const Color(0xfff5e1e9),
-          const Color(0xff94516c),
-          const Color(0xffe6bfd0)
-        ),
-      'forest' => (
+      _CoverStyle.sage => (
           const Color(0xffdcebdd),
           const Color(0xff456b47),
           const Color(0xffb9d7b9)
         ),
-      'sand' => (
-          const Color(0xfff4ebd4),
-          const Color(0xff886b37),
-          const Color(0xffe2cf9f)
-        ),
-      'violet' => (
+      _CoverStyle.lavender => (
           const Color(0xffe8e1f4),
           const Color(0xff6c528b),
           const Color(0xffcbbbe1)
         ),
-      _ => (
+      _CoverStyle.minimalBlue => (
           const Color(0xffe6eff9),
           const Color(0xff245b90),
           const Color(0xffb9d2ea)
         ),
-    };
-    final titleSize = compact ? 13.0 : 20.0;
-    if (compact) {
-      return ColoredBox(
-        color: palette.$1,
-        child: Stack(
-          clipBehavior: Clip.hardEdge,
-          children: [
-            Positioned(
-              left: 7,
-              top: 7,
-              child: Text('DOCNOTE',
-                  maxLines: 1,
-                  overflow: TextOverflow.clip,
-                  style: TextStyle(
-                      color: palette.$2,
-                      fontSize: 5,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: .35)),
-            ),
-            Positioned(
-              top: 22,
-              right: 7,
-              child: SizedBox(
-                width: 24,
-                height: 28,
-                child: Column(
-                  children: List.generate(
-                      4,
-                      (_) => Expanded(
-                            child: Align(
-                                alignment: Alignment.topCenter,
-                                child: Container(
-                                    height: 1,
-                                    color: palette.$2.withValues(alpha: .32))),
-                          )),
-                ),
-              ),
-            ),
-            Positioned(
-              left: 7,
-              right: 5,
-              bottom: 6,
-              child: Text(title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      color: palette.$2,
-                      fontSize: 8,
-                      height: 1.1,
-                      fontWeight: FontWeight.w700)),
-            ),
-          ],
+      _CoverStyle.neutral => (
+          const Color(0xfff0eee9),
+          const Color(0xff5a584f),
+          const Color(0xffd8d4c9)
         ),
-      );
-    }
+    };
+    final titleSize = compact ? 11.0 : 18.0;
+    final padding = compact ? 8.0 : 14.0;
+    final isPlanner =
+        style == _CoverStyle.planner || style == _CoverStyle.coral;
+    final isBusiness = style == _CoverStyle.business;
+    final isStudy =
+        style == _CoverStyle.study || style == _CoverStyle.minimalBlue;
+    final isSoft = style == _CoverStyle.lavender;
+    final isNavy = style == _CoverStyle.navy;
     return Container(
       color: palette.$1,
       child: Stack(children: [
-        Positioned(
-          right: -18,
-          bottom: -28,
-          child: Container(
-            width: compact ? 76 : 130,
-            height: compact ? 76 : 130,
-            decoration: BoxDecoration(
-                color: palette.$3.withValues(alpha: .55),
-                shape: BoxShape.circle),
+        if (style == _CoverStyle.minimalBlue)
+          Positioned(
+            right: compact ? 6 : 12,
+            bottom: compact ? 7 : 12,
+            child: Container(
+              width: compact ? 42 : 76,
+              height: compact ? 42 : 76,
+              decoration: BoxDecoration(
+                  color: palette.$3.withValues(alpha: .55),
+                  shape: BoxShape.circle),
+            ),
           ),
-        ),
-        if (coverId == 'study' || coverId == 'planner')
+        if (isPlanner)
+          Positioned(
+            left: 0,
+            top: 0,
+            right: 0,
+            child: Container(
+              height: compact ? 16 : 26,
+              color: palette.$3.withValues(alpha: .72),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: EdgeInsets.only(right: compact ? 8 : 14),
+                  child: Text(compact ? 'PLAN' : 'PLANNER',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: palette.$2.withValues(alpha: .8),
+                          fontSize: compact ? 6 : 7,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: compact ? .3 : .7)),
+                ),
+              ),
+            ),
+          ),
+        if (isBusiness)
+          Positioned(
+            top: compact ? 10 : 16,
+            right: compact ? 10 : 16,
+            child: SizedBox(
+              width: compact ? 24 : 42,
+              height: compact ? 24 : 42,
+              child: GridView.count(
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 3,
+                mainAxisSpacing: compact ? 2 : 4,
+                crossAxisSpacing: compact ? 2 : 4,
+                children: List.generate(
+                    9,
+                    (index) => ColoredBox(
+                        color: index.isEven
+                            ? palette.$2.withValues(alpha: .75)
+                            : palette.$3.withValues(alpha: .65))),
+              ),
+            ),
+          ),
+        if (isSoft)
+          Positioned(
+            top: 0,
+            left: 0,
+            child: Container(
+              width: compact ? 40 : 70,
+              height: compact ? 40 : 70,
+              decoration: BoxDecoration(
+                color: palette.$3.withValues(alpha: .8),
+                borderRadius: BorderRadius.only(
+                  bottomRight: Radius.circular(compact ? 28 : 48),
+                ),
+              ),
+            ),
+          ),
+        if (isStudy)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(painter: _CoverRulePainter(palette.$2)),
+            ),
+          ),
+        if (isNavy)
+          Positioned(
+            left: compact ? 10 : 16,
+            top: compact ? 26 : 42,
+            child: Container(
+                width: compact ? 28 : 52,
+                height: compact ? 3 : 5,
+                color: const Color(0xffffd371)),
+          ),
+        if (!compact && style == _CoverStyle.study)
           Positioned(
             top: compact ? 12 : 18,
             right: compact ? 10 : 16,
             child: Icon(
-              coverId == 'study'
+              style == _CoverStyle.study
                   ? Icons.auto_stories_outlined
                   : Icons.calendar_month_outlined,
               color: palette.$2.withValues(alpha: .48),
@@ -5280,54 +6357,77 @@ class _NotebookCoverArt extends StatelessWidget {
             ),
           ),
         Padding(
-          padding: EdgeInsets.all(compact ? 10 : 16),
+          padding: EdgeInsets.all(padding),
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
               Container(
                   width: compact ? 3 : 4,
                   height: compact ? 13 : 17,
-                  color: palette.$2),
+                  color: isNavy ? const Color(0xffffd371) : palette.$2),
               const SizedBox(width: 5),
-              Text('DocNote',
-                  style: TextStyle(
-                      color: palette.$2,
-                      fontSize: compact ? 7 : 10,
-                      fontWeight: FontWeight.w700)),
+              Expanded(
+                child: Text(isBusiness ? 'DOCNOTE / WORKSPACE' : 'DOCNOTE',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: palette.$2,
+                        fontSize: compact ? 6 : 9,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: isBusiness ? .35 : .2)),
+              ),
             ]),
             const Spacer(),
-            Flexible(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.bottomLeft,
-                child: Text(
-                  title,
-                  maxLines: compact ? 2 : 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      color: palette.$2,
-                      fontSize: titleSize,
-                      height: 1.08,
-                      fontWeight: FontWeight.w700),
+            Text(
+              title,
+              maxLines: compact ? 1 : 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: isNavy ? TextAlign.center : TextAlign.start,
+              style: TextStyle(
+                  color: palette.$2,
+                  fontSize: isNavy ? titleSize * .9 : titleSize,
+                  height: isBusiness ? 1.08 : 1.14,
+                  fontWeight: isBusiness ? FontWeight.w800 : FontWeight.w700),
+            ),
+            if (!compact) ...[
+              const SizedBox(height: 6),
+              Text(
+                _templateLabel(template).toUpperCase(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: palette.$2.withValues(alpha: .72),
+                  fontSize: 8,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-            ),
-            SizedBox(height: compact ? 6 : 10),
-            Text(
-              _templateLabel(template).toUpperCase(),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: palette.$2.withValues(alpha: .72),
-                fontSize: compact ? 6 : 9,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            ],
           ]),
         ),
       ]),
     );
   }
+}
+
+class _CoverRulePainter extends CustomPainter {
+  const _CoverRulePainter(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color.withValues(alpha: .14)
+      ..strokeWidth = 1;
+    final gap = (size.height / 8).clamp(12.0, 26.0);
+    for (double y = gap * 2; y < size.height; y += gap) {
+      canvas.drawLine(
+          Offset(size.width * .16, y), Offset(size.width * .86, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CoverRulePainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 String _templateLabel(String template) => switch (template) {
@@ -5490,9 +6590,14 @@ class _DocumentPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final background = label == 'PDF'
+        ? const Color(0xfffbfaf8)
+        : label == 'HWP' || label == 'HWPX'
+            ? const Color(0xfff1f6ef)
+            : Colors.white;
     if (compact) {
       return ColoredBox(
-        color: Colors.white,
+        color: background,
         child: Center(
           child: loading
               ? SizedBox(
@@ -5508,7 +6613,7 @@ class _DocumentPreview extends StatelessWidget {
       );
     }
     return Container(
-      color: Colors.white,
+      color: background,
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

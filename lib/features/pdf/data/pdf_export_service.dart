@@ -128,6 +128,8 @@ class PdfExportService {
                     math.sin(angle + wing) * length);
             canvas.drawLine(end, left, paint);
             canvas.drawLine(end, right, paint);
+          case StrokeTool.text:
+          case StrokeTool.image:
           case StrokeTool.pen:
           case StrokeTool.highlighter:
           case StrokeTool.eraser:

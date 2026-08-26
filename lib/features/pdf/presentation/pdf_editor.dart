@@ -293,6 +293,10 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
             widget.title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -.2,
+                ),
           ),
           actions: [
             IconButton(
@@ -568,30 +572,23 @@ class PdfDrawingToolbar extends StatelessWidget {
       ),
     ];
     return Material(
-      elevation: 0,
-      shadowColor: Colors.black26,
-      borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
       color: Theme.of(context).colorScheme.surface,
-      clipBehavior: Clip.none,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: .13),
-              blurRadius: 4,
-              offset: const Offset(0, 1),
+          border: Border(
+            bottom: BorderSide(
+              color: Theme.of(context).colorScheme.outlineVariant,
             ),
-          ],
+          ),
         ),
         child: SafeArea(
           top: false,
           bottom: false,
           child: SizedBox(
-            height: 56,
+            height: 60,
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Row(children: children),
             ),
           ),

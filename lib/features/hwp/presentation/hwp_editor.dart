@@ -133,12 +133,18 @@ class _HwpEditorPageState extends State<HwpEditorPage> {
           widget.title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                letterSpacing: -.2,
+              ),
         ),
         actions: [
           if (dirty)
             const Padding(
               padding: EdgeInsets.only(right: 4),
-              child: Center(child: Icon(Icons.circle, size: 8)),
+              child: Center(
+                  child: Icon(Icons.circle,
+                      size: 7, color: Color(0xff5c86aa))),
             ),
           IconButton(
               onPressed: saving ? null : _save,
@@ -148,7 +154,7 @@ class _HwpEditorPageState extends State<HwpEditorPage> {
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.save_outlined)),
+                  : const Icon(Icons.save_outlined, size: 22)),
           PopupMenuButton<String>(
             tooltip: '더보기',
             icon: const Icon(Icons.more_horiz),
