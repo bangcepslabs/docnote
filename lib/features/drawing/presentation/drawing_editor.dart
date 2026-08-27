@@ -2996,14 +2996,7 @@ class StrokePainter extends CustomPainter {
         }
         continue;
       }
-      for (var index = 0; index < stroke.points.length - 1; index++) {
-        final start = stroke.points[index];
-        final end = stroke.points[index + 1];
-        paint.strokeWidth =
-            (_widthFor(stroke, start) + _widthFor(stroke, end)) / 2;
-        canvas.drawLine(
-            restorePoint(start, size), restorePoint(end, size), paint);
-      }
+      _paintSmoothStroke(canvas, stroke, paint);
       if (stroke.points.length == 1) {
         final point = stroke.points.first;
         canvas.drawCircle(
@@ -3012,6 +3005,45 @@ class StrokePainter extends CustomPainter {
     }
     _paintLasso(canvas);
     _paintSelectionBounds(canvas);
+  }
+
+  /// Draws a stroke as a compact quadratic path. Pointer samples are often
+  /// uneven on Android, so joining every sample with a hard line can look
+  /// visibly jagged at normal writing speed. Midpoints keep the original
+  /// normalized coordinates while making the rendered path feel continuous.
+  void _paintSmoothStroke(Canvas canvas, Stroke stroke, Paint paint) {
+    final points = stroke.points;
+    if (points.length < 2) return;
+    if (points.length == 2) {
+      final start = points.first;
+      final end = points.last;
+      paint.strokeWidth = (_widthFor(stroke, start) + _widthFor(stroke, end)) / 2;
+      canvas.drawLine(restorePoint(start, size), restorePoint(end, size), paint);
+      return;
+    }
+
+    final first = restorePoint(points.first, size);
+    final path = Path()..moveTo(first.dx, first.dy);
+    for (var index = 1; index < points.length - 1; index++) {
+      final control = restorePoint(points[index], size);
+      final next = restorePoint(points[index + 1], size);
+      final nextMid = Offset(
+        (control.dx + next.dx) / 2,
+        (control.dy + next.dy) / 2,
+      );
+      path.quadraticBezierTo(
+        control.dx,
+        control.dy,
+        nextMid.dx,
+        nextMid.dy,
+      );
+      paint.strokeWidth =
+          (_widthFor(stroke, points[index]) + _widthFor(stroke, points[index + 1])) /
+              2;
+    }
+    final last = restorePoint(points.last, size);
+    path.quadraticBezierTo(last.dx, last.dy, last.dx, last.dy);
+    canvas.drawPath(path, paint);
   }
 
   void _paintText(Canvas canvas, DrawingText text) {
