@@ -212,6 +212,12 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     saveTimer?.cancel();
+    // Decoded page images are native resources; release them when leaving the
+    // editor so long editing sessions do not retain bitmap memory.
+    for (final image in imageCache.values) {
+      image.dispose();
+    }
+    imageCache.clear();
     textController.dispose();
     textFocus.dispose();
     _save();
