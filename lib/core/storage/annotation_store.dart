@@ -118,4 +118,28 @@ class AnnotationStore {
     final finalFile = File('${directory.path}/page_$pageCount.json');
     if (await finalFile.exists()) await finalFile.delete();
   }
+
+  /// Swaps two adjacent notebook pages while preserving their serialized
+  /// DrawingPageData (including legacy stroke-only pages).
+  Future<void> swapNotebookPages(
+    String documentId, {
+    required int firstPage,
+    required int secondPage,
+  }) async {
+    if (firstPage == secondPage) return;
+    final directory = await _documentDirectory(documentId);
+    final first = File('${directory.path}/page_$firstPage.json');
+    final second = File('${directory.path}/page_$secondPage.json');
+    if (!await first.exists() && !await second.exists()) return;
+    final temporary = File('${directory.path}/.page_swap_${DateTime.now().microsecondsSinceEpoch}.tmp');
+    if (await first.exists()) {
+      await first.rename(temporary.path);
+    }
+    if (await second.exists()) {
+      await second.rename(first.path);
+    }
+    if (await temporary.exists()) {
+      await temporary.rename(second.path);
+    }
+  }
 }

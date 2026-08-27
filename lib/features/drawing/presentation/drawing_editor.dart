@@ -423,8 +423,31 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
             Navigator.of(sheetContext).pop();
             await _deletePageAt(targetPage);
           },
+          onMovePage: (page, direction) async {
+            Navigator.of(sheetContext).pop();
+            await _movePage(page, direction);
+          },
         ),
       );
+
+  Future<void> _movePage(int sourcePage, int direction) async {
+    final targetPage = sourcePage + direction;
+    if (targetPage < 1 || targetPage > pageCount) return;
+    await _save();
+    await store.swapNotebookPages(widget.documentId,
+        firstPage: sourcePage, secondPage: targetPage);
+    if (pageIndex == sourcePage) {
+      pageIndex = targetPage;
+    } else if (pageIndex == targetPage) {
+      pageIndex = sourcePage;
+    }
+    _replaceLoadedPage(await store.loadPage(widget.documentId, pageId));
+    await _preloadImages(images);
+    undoHistory.clear();
+    redoHistory.clear();
+    _clearSelectionState();
+    if (mounted) setState(() {});
+  }
 
   Future<void> _duplicatePage(int sourcePage) async {
     await _save();
@@ -1467,6 +1490,7 @@ class _PageNavigatorSheet extends StatelessWidget {
     required this.onAddPage,
     required this.onDuplicatePage,
     required this.onDeletePage,
+    required this.onMovePage,
   });
 
   final String documentId;
@@ -1477,6 +1501,7 @@ class _PageNavigatorSheet extends StatelessWidget {
   final VoidCallback onAddPage;
   final ValueChanged<int> onDuplicatePage;
   final ValueChanged<int> onDeletePage;
+  final void Function(int page, int direction) onMovePage;
 
   @override
   Widget build(BuildContext context) {
@@ -1597,6 +1622,28 @@ class _PageNavigatorSheet extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
+              ListTile(
+                enabled: page > 1,
+                leading: const Icon(Icons.arrow_upward),
+                title: const Text('앞 페이지로 이동'),
+                onTap: page <= 1
+                    ? null
+                    : () {
+                        Navigator.of(sheetContext).pop();
+                        onMovePage(page, -1);
+                      },
+              ),
+              ListTile(
+                enabled: page < pageCount,
+                leading: const Icon(Icons.arrow_downward),
+                title: const Text('뒤 페이지로 이동'),
+                onTap: page >= pageCount
+                    ? null
+                    : () {
+                        Navigator.of(sheetContext).pop();
+                        onMovePage(page, 1);
+                      },
+              ),
               ListTile(
                 leading: const Icon(Icons.copy_outlined),
                 title: const Text('페이지 복제'),
