@@ -128,7 +128,12 @@ class DocNoteApp extends ConsumerWidget {
         title: 'DocNote',
         themeMode: themeMode,
         theme: DocNoteTheme.light(),
-        darkTheme: DocNoteTheme.dark(),
+        // DocNote's covers, paper, previews and document canvases are a
+        // deliberately light-first collection. Until every renderer has a
+        // dark palette, using a second dark Material scheme creates broken
+        // contrast when the device switches appearance. Keep all theme modes
+        // on the verified light document surface instead.
+        darkTheme: DocNoteTheme.light(),
         routerConfig: ref.watch(routerProvider));
   }
 }
