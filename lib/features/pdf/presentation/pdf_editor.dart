@@ -141,11 +141,66 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
   bool exporting = false;
   bool toolbarVisible = true;
   PdfExportProgress? progress;
+  final bookmarkedPages = <int>{};
+
+  String get _bookmarkKey => 'docnote.pdf.bookmarks.${widget.documentId}';
 
   @override
   void initState() {
     super.initState();
     _open();
+    _loadBookmarks();
+  }
+
+  Future<void> _loadBookmarks() async {
+    final prefs = await SharedPreferences.getInstance();
+    final values = prefs.getStringList(_bookmarkKey) ?? const [];
+    if (!mounted) return;
+    setState(() => bookmarkedPages
+      ..clear()
+      ..addAll(values.map(int.tryParse).whereType<int>()));
+  }
+
+  Future<void> _toggleBookmark() async {
+    final page = editing.selectedPageIndex + 1;
+    setState(() {
+      if (!bookmarkedPages.add(page)) bookmarkedPages.remove(page);
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+        _bookmarkKey, bookmarkedPages.map((value) => '$value').toList());
+  }
+
+  Future<void> _showBookmarks() async {
+    if (bookmarkedPages.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('저장된 북마크가 없습니다.')));
+      return;
+    }
+    final page = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: (bookmarkedPages.toList()..sort())
+              .map((value) => ListTile(
+                    leading: const Icon(Icons.bookmark_outline),
+                    title: Text('$value페이지'),
+                    onTap: () => Navigator.pop(context, value),
+                  ))
+              .toList(),
+        ),
+      ),
+    );
+    if (!mounted || page == null || document == null) return;
+    final index = page.clamp(1, document!.pagesCount) - 1;
+    _activatePage(index);
+    final targetContext = _keyFor(index).currentContext;
+    if (targetContext != null) {
+      await Scrollable.ensureVisible(targetContext,
+          duration: const Duration(milliseconds: 260), alignment: .12);
+    }
   }
 
   Future<void> _open() async {
@@ -346,6 +401,18 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
                 ),
           ),
           actions: [
+            IconButton(
+                onPressed: _toggleBookmark,
+                tooltip: bookmarkedPages.contains(editing.selectedPageIndex + 1)
+                    ? '현재 페이지 북마크 제거'
+                    : '현재 페이지 북마크',
+                icon: Icon(bookmarkedPages.contains(editing.selectedPageIndex + 1)
+                    ? Icons.bookmark
+                    : Icons.bookmark_border)),
+            IconButton(
+                onPressed: _showBookmarks,
+                tooltip: '북마크 목록',
+                icon: const Icon(Icons.bookmarks_outlined)),
             IconButton(
                 onPressed: _showPageJumpDialog,
                 tooltip: '페이지 이동',
