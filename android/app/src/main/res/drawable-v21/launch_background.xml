@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Modify this file to customize your launch splash screen -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="?android:colorBackground" />
+    <!-- Keep the launch surface aligned with DocNote's dark document canvas;
+         the platform default black makes startup look like a frozen screen. -->
+    <item android:drawable="#111417" />
 
     <!-- You can insert your own image assets here -->
     <!-- <item>
