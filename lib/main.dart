@@ -1746,7 +1746,7 @@ class _PickerScaffold extends StatelessWidget {
                           ),
                           const SizedBox(width: 12),
                           Text(title,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   color: ink,
                                   fontSize: 24,
                                   fontWeight: FontWeight.w700)),
@@ -1755,7 +1755,7 @@ class _PickerScaffold extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.only(left: 56, top: 8),
                         child: Text(subtitle,
-                            style: const TextStyle(color: muted, fontSize: 13)),
+                            style: TextStyle(color: muted, fontSize: 13)),
                       ),
                       const SizedBox(height: 24),
                       SizedBox(
