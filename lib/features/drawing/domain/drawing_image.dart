@@ -10,9 +10,13 @@ class DrawingImage {
     required this.imagePath,
     required this.position,
     required this.width,
-    required this.height,
-    this.rotationRadians = 0,
-    required this.order,
+      required this.height,
+      this.rotationRadians = 0,
+      this.cropLeft = 0,
+      this.cropTop = 0,
+      this.cropRight = 1,
+      this.cropBottom = 1,
+      required this.order,
     required this.createdAt,
   });
 
@@ -24,10 +28,14 @@ class DrawingImage {
   final double width;
   final double height;
   final double rotationRadians;
+  final double cropLeft;
+  final double cropTop;
+  final double cropRight;
+  final double cropBottom;
   final int order;
   final DateTime createdAt;
 
-  DrawingImage copyWith({StrokePoint? position, double? width, double? height, double? rotationRadians}) =>
+  DrawingImage copyWith({StrokePoint? position, double? width, double? height, double? rotationRadians, double? cropLeft, double? cropTop, double? cropRight, double? cropBottom}) =>
       DrawingImage(
         id: id,
         documentId: documentId,
@@ -37,6 +45,10 @@ class DrawingImage {
         width: width ?? this.width,
         height: height ?? this.height,
         rotationRadians: rotationRadians ?? this.rotationRadians,
+        cropLeft: cropLeft ?? this.cropLeft,
+        cropTop: cropTop ?? this.cropTop,
+        cropRight: cropRight ?? this.cropRight,
+        cropBottom: cropBottom ?? this.cropBottom,
         order: order,
         createdAt: createdAt,
       );
@@ -50,6 +62,10 @@ class DrawingImage {
         'width': width,
         'height': height,
         'rotationRadians': rotationRadians,
+        'cropLeft': cropLeft,
+        'cropTop': cropTop,
+        'cropRight': cropRight,
+        'cropBottom': cropBottom,
         'order': order,
         'createdAt': createdAt.toIso8601String(),
       };
@@ -64,6 +80,10 @@ class DrawingImage {
         width: (json['width'] as num).toDouble(),
         height: (json['height'] as num).toDouble(),
         rotationRadians: (json['rotationRadians'] as num?)?.toDouble() ?? 0,
+        cropLeft: (json['cropLeft'] as num?)?.toDouble() ?? 0,
+        cropTop: (json['cropTop'] as num?)?.toDouble() ?? 0,
+        cropRight: (json['cropRight'] as num?)?.toDouble() ?? 1,
+        cropBottom: (json['cropBottom'] as num?)?.toDouble() ?? 1,
         order: (json['order'] as num).toInt(),
         createdAt: DateTime.parse(json['createdAt'] as String),
       );

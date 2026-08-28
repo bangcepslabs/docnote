@@ -799,6 +799,45 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     }
   }
 
+  Future<void> _cropSelectedImage() async {
+    if (selectedImageIds.length != 1) return;
+    final id = selectedImageIds.first;
+    final image = images.firstWhere((value) => value.id == id);
+    var left = image.cropLeft;
+    var top = image.cropTop;
+    var right = image.cropRight;
+    var bottom = image.cropBottom;
+    final result = await showDialog<(double, double, double, double)>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('이미지 자르기'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            _CropSlider(label: '왼쪽', value: left, min: 0, max: right - .05,
+                onChanged: (value) => setDialogState(() => left = value)),
+            _CropSlider(label: '위쪽', value: top, min: 0, max: bottom - .05,
+                onChanged: (value) => setDialogState(() => top = value)),
+            _CropSlider(label: '오른쪽', value: right, min: left + .05, max: 1,
+                onChanged: (value) => setDialogState(() => right = value)),
+            _CropSlider(label: '아래쪽', value: bottom, min: top + .05, max: 1,
+                onChanged: (value) => setDialogState(() => bottom = value)),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소')),
+            FilledButton(onPressed: () => Navigator.pop(context, (left, top, right, bottom)), child: const Text('적용')),
+          ],
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    _recordHistory();
+    final updated = image.copyWith(cropLeft: result.$1, cropTop: result.$2,
+        cropRight: result.$3, cropBottom: result.$4);
+    images[images.indexWhere((value) => value.id == id)] = updated;
+    _scheduleSave();
+    setState(() {});
+  }
+
   void _undo() {
     if (undoHistory.isEmpty) return;
     redoHistory.add(_snapshot());
@@ -1099,6 +1138,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         width: image.width,
         height: image.height,
         rotationRadians: image.rotationRadians,
+        cropLeft: image.cropLeft,
+        cropTop: image.cropTop,
+        cropRight: image.cropRight,
+        cropBottom: image.cropBottom,
         order: images.length + copiedImageIds.length - 1,
         createdAt: DateTime.now(),
       );
@@ -1370,9 +1413,11 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
             selectedTextIds.isNotEmpty ||
             selectedImageIds.isNotEmpty,
         hasShapeSelection: selectedShapeIds.isNotEmpty,
+        hasSingleImageSelection: selectedImageIds.length == 1,
         onDeleteSelection: _deleteSelection,
         onDuplicateSelection: _duplicateSelection,
         onShapeStyleRequested: _showSelectedShapeStyle,
+        onCropRequested: _cropSelectedImage,
       );
 }
 
@@ -1794,9 +1839,11 @@ class EditorToolbar extends StatelessWidget {
     required this.onShapeTypeChanged,
     required this.hasSelection,
     required this.hasShapeSelection,
+    required this.hasSingleImageSelection,
     required this.onDeleteSelection,
     required this.onDuplicateSelection,
     required this.onShapeStyleRequested,
+    required this.onCropRequested,
     super.key,
   });
   final StrokeTool selectedTool;
@@ -1809,9 +1856,11 @@ class EditorToolbar extends StatelessWidget {
   final ValueChanged<DrawingShapeType> onShapeTypeChanged;
   final bool hasSelection;
   final bool hasShapeSelection;
+  final bool hasSingleImageSelection;
   final VoidCallback onDeleteSelection;
   final VoidCallback onDuplicateSelection;
   final VoidCallback onShapeStyleRequested;
+  final VoidCallback onCropRequested;
 
   @override
   Widget build(BuildContext context) {
@@ -1842,9 +1891,11 @@ class EditorToolbar extends StatelessWidget {
                 onShapeTypeChanged: onShapeTypeChanged,
                 hasSelection: hasSelection,
                 hasShapeSelection: hasShapeSelection,
+                hasSingleImageSelection: hasSingleImageSelection,
                 onDeleteSelection: onDeleteSelection,
                 onDuplicateSelection: onDuplicateSelection,
                 onShapeStyleRequested: onShapeStyleRequested,
+                onCropRequested: onCropRequested,
               ),
             ),
           ]),
@@ -2105,9 +2156,11 @@ class _EditorToolOptions extends StatelessWidget {
       required this.onShapeTypeChanged,
       required this.hasSelection,
       required this.hasShapeSelection,
+      required this.hasSingleImageSelection,
       required this.onDeleteSelection,
       required this.onDuplicateSelection,
-      required this.onShapeStyleRequested});
+      required this.onShapeStyleRequested,
+      required this.onCropRequested});
   final StrokeTool selectedTool;
   final double width;
   final Color color;
@@ -2117,12 +2170,25 @@ class _EditorToolOptions extends StatelessWidget {
   final ValueChanged<DrawingShapeType> onShapeTypeChanged;
   final bool hasSelection;
   final bool hasShapeSelection;
+  final bool hasSingleImageSelection;
   final VoidCallback onDeleteSelection;
   final VoidCallback onDuplicateSelection;
   final VoidCallback onShapeStyleRequested;
+  final VoidCallback onCropRequested;
   @override
   Widget build(BuildContext context) {
-    if (selectedTool == StrokeTool.image) return const SizedBox.shrink();
+    if (selectedTool == StrokeTool.image) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: IconButton(
+          onPressed: hasSingleImageSelection
+              ? onCropRequested
+              : null,
+          tooltip: '이미지 자르기',
+          icon: const Icon(Icons.crop_outlined),
+        ),
+      );
+    }
     if (_isShapeTool(selectedTool)) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -2226,6 +2292,21 @@ class _EditorToolOptions extends StatelessWidget {
       tool == StrokeTool.shapeRectangle ||
       tool == StrokeTool.shapeEllipse ||
       tool == StrokeTool.shapeArrow;
+}
+
+class _CropSlider extends StatelessWidget {
+  const _CropSlider({required this.label, required this.value, required this.min, required this.max, required this.onChanged});
+  final String label;
+  final double value;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        SizedBox(width: 42, child: Text(label, style: Theme.of(context).textTheme.bodySmall)),
+        Expanded(child: Slider(value: value.clamp(min, max), min: min, max: max, onChanged: onChanged)),
+      ]);
 }
 
 class _ShapeTypeButton extends StatelessWidget {
@@ -3144,7 +3225,10 @@ class StrokePainter extends CustomPainter {
     canvas.drawImageRect(
         decoded,
         Rect.fromLTWH(
-            0, 0, decoded.width.toDouble(), decoded.height.toDouble()),
+            decoded.width * image.cropLeft,
+            decoded.height * image.cropTop,
+            decoded.width * (image.cropRight - image.cropLeft),
+            decoded.height * (image.cropBottom - image.cropTop)),
         destination,
         Paint()..filterQuality = FilterQuality.medium);
     canvas.restore();
