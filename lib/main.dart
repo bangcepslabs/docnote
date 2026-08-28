@@ -3142,11 +3142,12 @@ class _LibraryControls extends StatelessWidget {
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     color: selected
-                        ? const Color(0xff1f4668)
+                        ? Theme.of(context).colorScheme.onPrimaryContainer
                         : Theme.of(context).colorScheme.onSurface,
                   ),
-                  selectedColor: const Color(0xffc9dcec),
-                  backgroundColor: const Color(0xffeceef1),
+                  selectedColor: Theme.of(context).colorScheme.primaryContainer,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.surfaceContainerHighest,
                   side: BorderSide.none,
                 );
               },
@@ -4542,11 +4543,11 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           side: BorderSide.none,
-          backgroundColor: const Color(0xffeceef1),
-          selectedColor: const Color(0xffc9dcec),
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          selectedColor: Theme.of(context).colorScheme.primaryContainer,
           labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
                 color: category == value
-                    ? const Color(0xff1f4668)
+                    ? Theme.of(context).colorScheme.onPrimaryContainer
                     : Theme.of(context).colorScheme.onSurface,
               ),
         ),
@@ -4889,7 +4890,7 @@ class _RefinedSearchViewState extends ConsumerState<_RefinedSearchView> {
                         icon: const Icon(Icons.close, size: 18),
                       ),
                 filled: true,
-                fillColor: const Color(0xffeceef1),
+                fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
@@ -4968,13 +4969,13 @@ class _RefinedSearchViewState extends ConsumerState<_RefinedSearchView> {
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           side: BorderSide.none,
-          backgroundColor: const Color(0xffeceef1),
-          selectedColor: const Color(0xffc9dcec),
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          selectedColor: Theme.of(context).colorScheme.primaryContainer,
           labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
                 color: typeFilter == type &&
                         favoritesOnly == favorite &&
                         hwpOnly == hwp
-                    ? const Color(0xff1f4668)
+                    ? Theme.of(context).colorScheme.onPrimaryContainer
                     : Theme.of(context).colorScheme.onSurface,
               ),
         ),

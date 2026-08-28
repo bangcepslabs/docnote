@@ -3,7 +3,7 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Keep the launch surface aligned with DocNote's dark document canvas;
          the platform default black makes startup look like a frozen screen. -->
-    <item android:drawable="#111417" />
+    <item android:drawable="@color/docnote_launch_background" />
 
     <!-- You can insert your own image assets here -->
     <!-- <item>
