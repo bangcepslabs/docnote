@@ -188,6 +188,53 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
     });
   }
 
+  Future<void> _showPageJumpDialog() async {
+    final pdf = document;
+    if (pdf == null) return;
+    final controller = TextEditingController(
+        text: '${editing.selectedPageIndex + 1}');
+    final target = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('페이지 이동'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: '페이지 (1–${pdf.pagesCount})',
+            border: const OutlineInputBorder(),
+          ),
+          onSubmitted: (_) => Navigator.of(dialogContext)
+              .pop(int.tryParse(controller.text)),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.of(dialogContext)
+                  .pop(int.tryParse(controller.text)),
+              child: const Text('이동')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!mounted || target == null) return;
+    final page = target.clamp(1, pdf.pagesCount) - 1;
+    final key = _keyFor(page);
+    _activatePage(page);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final targetContext = key.currentContext;
+      if (targetContext != null) {
+        Scrollable.ensureVisible(targetContext,
+            duration: const Duration(milliseconds: 260),
+            alignment: .12,
+            curve: Curves.easeOut);
+      }
+    });
+  }
+
   void _refreshUndoState() {
     final state = pageKeys[editing.selectedPageIndex]?.currentState;
     editing.canUndo = state?.canUndo ?? false;
@@ -299,6 +346,10 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
                 ),
           ),
           actions: [
+            IconButton(
+                onPressed: _showPageJumpDialog,
+                tooltip: '페이지 이동',
+                icon: const Icon(Icons.find_in_page_outlined)),
             IconButton(
                 onPressed: () =>
                     setState(() => toolbarVisible = !toolbarVisible),
