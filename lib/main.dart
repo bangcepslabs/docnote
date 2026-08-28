@@ -2863,7 +2863,7 @@ class _RefinedHomeViewState extends ConsumerState<_RefinedHomeView> {
             })
         .toList();
     return Scaffold(
-      backgroundColor: const Color(0xfff5f6f9),
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
       body: SafeArea(
         bottom: false,
         child: CustomScrollView(
