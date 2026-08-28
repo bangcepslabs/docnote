@@ -128,12 +128,7 @@ class DocNoteApp extends ConsumerWidget {
         title: 'DocNote',
         themeMode: themeMode,
         theme: DocNoteTheme.light(),
-        // DocNote's covers, paper, previews and document canvases are a
-        // deliberately light-first collection. Until every renderer has a
-        // dark palette, using a second dark Material scheme creates broken
-        // contrast when the device switches appearance. Keep all theme modes
-        // on the verified light document surface instead.
-        darkTheme: DocNoteTheme.light(),
+        darkTheme: DocNoteTheme.dark(),
         routerConfig: ref.watch(routerProvider));
   }
 }
@@ -1715,9 +1710,10 @@ class _PickerScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const bg = Color(0xfff5f7f8);
-    const ink = Color(0xff26313e);
-    const muted = Color(0xff6c7682);
+    final scheme = Theme.of(context).colorScheme;
+    final bg = scheme.surface;
+    final ink = scheme.onSurface;
+    final muted = scheme.onSurfaceVariant;
     return Scaffold(
       backgroundColor: bg,
       body: SafeArea(
@@ -5183,7 +5179,7 @@ class _RefinedSettingsView extends ConsumerWidget {
     final controller = ref.read(appSettingsProvider.notifier);
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: DocNoteTheme.page,
+      backgroundColor: scheme.surface,
       body: SafeArea(
         bottom: false,
         child: Center(
