@@ -11,6 +11,7 @@ class DrawingImage {
     required this.position,
     required this.width,
     required this.height,
+    this.rotationRadians = 0,
     required this.order,
     required this.createdAt,
   });
@@ -22,10 +23,11 @@ class DrawingImage {
   final StrokePoint position;
   final double width;
   final double height;
+  final double rotationRadians;
   final int order;
   final DateTime createdAt;
 
-  DrawingImage copyWith({StrokePoint? position, double? width, double? height}) =>
+  DrawingImage copyWith({StrokePoint? position, double? width, double? height, double? rotationRadians}) =>
       DrawingImage(
         id: id,
         documentId: documentId,
@@ -34,6 +36,7 @@ class DrawingImage {
         position: position ?? this.position,
         width: width ?? this.width,
         height: height ?? this.height,
+        rotationRadians: rotationRadians ?? this.rotationRadians,
         order: order,
         createdAt: createdAt,
       );
@@ -46,6 +49,7 @@ class DrawingImage {
         'position': position.toJson(),
         'width': width,
         'height': height,
+        'rotationRadians': rotationRadians,
         'order': order,
         'createdAt': createdAt.toIso8601String(),
       };
@@ -59,6 +63,7 @@ class DrawingImage {
             StrokePoint.fromJson(json['position'] as Map<String, dynamic>),
         width: (json['width'] as num).toDouble(),
         height: (json['height'] as num).toDouble(),
+        rotationRadians: (json['rotationRadians'] as num?)?.toDouble() ?? 0,
         order: (json['order'] as num).toInt(),
         createdAt: DateTime.parse(json['createdAt'] as String),
       );

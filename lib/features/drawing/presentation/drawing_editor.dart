@@ -829,7 +829,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         _resizeHandleHit(bounds, normalized);
     final touchesRotateHandle = bounds != null &&
         selectedStrokeIds.isEmpty &&
-        selectedShapeIds.isNotEmpty &&
+        ((selectedShapeIds.isNotEmpty && selectedTextIds.isEmpty && selectedImageIds.isEmpty) ||
+            (selectedShapeIds.isEmpty && selectedTextIds.isEmpty && selectedImageIds.length == 1)) &&
         _rotationHandleHit(bounds, normalized);
     if (bounds != null &&
         (bounds.contains(Offset(normalized.x, normalized.y)) ||
@@ -873,7 +874,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
           return _rotatedShape(shape, pivot, delta);
         }).toList(),
         texts: baseline.texts,
-        images: baseline.images,
+        images: baseline.images.map((image) {
+          if (!selectedImageIds.contains(image.id)) return image;
+          return image.copyWith(rotationRadians: image.rotationRadians + delta);
+        }).toList(),
       ));
       setState(() {});
       return;
@@ -1094,6 +1098,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         position: _translatedPoint(image.position, dx, dy),
         width: image.width,
         height: image.height,
+        rotationRadians: image.rotationRadians,
         order: images.length + copiedImageIds.length - 1,
         createdAt: DateTime.now(),
       );
@@ -3118,6 +3123,11 @@ class StrokePainter extends CustomPainter {
         rect.width * size.width,
         rect.height * size.height);
     final decoded = imageCache[image.imagePath];
+    final center = destination.center;
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(image.rotationRadians);
+    canvas.translate(-center.dx, -center.dy);
     if (decoded == null) {
       final paint = Paint()..color = const Color(0xffeef1f4);
       canvas.drawRect(destination, paint);
@@ -3128,6 +3138,7 @@ class StrokePainter extends CustomPainter {
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: destination.width - 12);
       icon.paint(canvas, destination.topLeft + const Offset(6, 6));
+      canvas.restore();
       return;
     }
     canvas.drawImageRect(
@@ -3136,6 +3147,7 @@ class StrokePainter extends CustomPainter {
             0, 0, decoded.width.toDouble(), decoded.height.toDouble()),
         destination,
         Paint()..filterQuality = FilterQuality.medium);
+    canvas.restore();
   }
 
   void _paintShape(Canvas canvas, DrawingShape shape) {
