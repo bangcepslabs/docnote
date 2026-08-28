@@ -249,7 +249,7 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
                     button: true,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                          color: const Color(0xfff3f5f6),
+                          color: scheme.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(11)),
                       child: items[index],
                     ),
