@@ -1647,11 +1647,22 @@ class _PageNavigatorSheet extends StatelessWidget {
                             ),
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(4),
-                              child: _PageThumbnail(
-                                documentId: documentId,
-                                pageId: 'page_$page',
-                                templateId: templateId,
-                              ),
+                              child: Stack(children: [
+                                Positioned.fill(
+                                  child: _PageThumbnail(
+                                    documentId: documentId,
+                                    pageId: 'page_$page',
+                                    templateId: templateId,
+                                  ),
+                                ),
+                                Positioned(
+                                  right: 3,
+                                  top: 3,
+                                  child: Icon(Icons.drag_indicator,
+                                      size: 14,
+                                      color: scheme.onSurfaceVariant.withValues(alpha: .5)),
+                                ),
+                              ]),
                             ),
                           ),
                         ),

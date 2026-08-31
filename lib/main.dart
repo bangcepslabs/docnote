@@ -3199,21 +3199,48 @@ class _LibraryDocumentCard extends ConsumerWidget {
                 child: _LibraryVisual(document: document, index: index)),
           ),
           const SizedBox(height: 7),
-          Text(_documentTitle(document),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style:
-                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 3),
-          Text(_libraryDetail(document),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: 11,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurfaceVariant
-                      .withValues(alpha: .82))),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(_documentTitle(document),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 3),
+                Text(_libraryDetail(document),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: .82))),
+              ]),
+            ),
+            SizedBox(
+              width: 28,
+              height: 28,
+              child: PopupMenuButton<String>(
+                padding: EdgeInsets.zero,
+                tooltip: '문서 메뉴',
+                onSelected: (value) {
+                  if (value == 'favorite') {
+                    document.favorite = !document.favorite;
+                    document.modified = DateTime.now();
+                    ref.read(documentsProvider.notifier).update(document);
+                  } else if (value == 'trash') {
+                    ref.read(documentsProvider.notifier).remove(document.id);
+                  }
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: 'favorite',
+                    child: Text(document.favorite ? '즐겨찾기 해제' : '즐겨찾기'),
+                  ),
+                  const PopupMenuItem(value: 'trash', child: Text('휴지통으로 이동')),
+                ],
+                icon: const Icon(Icons.more_horiz, size: 18),
+              ),
+            ),
+          ]),
         ]),
       );
 }
