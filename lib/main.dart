@@ -674,7 +674,9 @@ class _RefinedNavigationItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: selected ? const Color(0xffe6eff7) : Colors.transparent,
+      color: selected
+          ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: .72)
+          : Colors.transparent,
       borderRadius: BorderRadius.circular(10),
       child: InkWell(
         onTap: onTap,
@@ -690,8 +692,8 @@ class _RefinedNavigationItem extends StatelessWidget {
                   color: index == 2
                       ? DocNoteTheme.accent
                       : selected
-                          ? DocNoteTheme.ink
-                          : const Color(0xff737a83)),
+                          ? Theme.of(context).colorScheme.onPrimaryContainer
+                          : Theme.of(context).colorScheme.onSurfaceVariant),
               const SizedBox(height: 3),
               SizedBox(
                 width: double.infinity,
@@ -5722,20 +5724,16 @@ class NotebookCard extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final title = document.title.trim().isEmpty ? '새 노트' : document.title;
     return Material(
-      color: scheme.surface,
-      elevation: 1,
-      shadowColor: Colors.black.withValues(alpha: .10),
-      borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
+      color: Colors.transparent,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () => openDocument(context, document, ref),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+              padding: EdgeInsets.zero,
               child: ClipRRect(
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(14)),
+                borderRadius: BorderRadius.circular(DocNoteTheme.radiusMd),
                 child: _NotebookCover(document: document),
               ),
             ),
