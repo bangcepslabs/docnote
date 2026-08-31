@@ -5393,7 +5393,7 @@ class _RefinedSettingsGroup extends StatelessWidget {
             Container(
               clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
-                color: const Color(0xfff8f9fb),
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Column(
@@ -5436,7 +5436,7 @@ class _RefinedSettingsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: const Color(0xfff8f9fb),
+      color: scheme.surfaceContainerHighest,
       child: InkWell(
         onTap: onTap,
         child: ConstrainedBox(
@@ -5450,7 +5450,7 @@ class _RefinedSettingsRow extends StatelessWidget {
                   height: 36,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: const Color(0xffeceff3),
+                    color: scheme.surface,
                     borderRadius: BorderRadius.circular(9),
                   ),
                   child: Icon(icon, size: 18, color: scheme.onSurfaceVariant),
