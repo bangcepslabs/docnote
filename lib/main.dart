@@ -143,11 +143,8 @@ void openDocument(BuildContext context, DocumentItem document, WidgetRef ref) {
           .showSnackBar(const SnackBar(content: Text('원본 PDF 파일을 찾을 수 없습니다.')));
       return;
     }
-    Navigator.push(
-        context,
-        MaterialPageRoute(
-            builder: (_) => PdfEditorPage(
-                documentId: document.id, title: document.title, path: path)));
+    _pushDocNotePage(context, PdfEditorPage(
+        documentId: document.id, title: document.title, path: path));
     return;
   }
   if (document.type == DocumentType.hwp || document.type == DocumentType.hwpx) {
@@ -157,18 +154,12 @@ void openDocument(BuildContext context, DocumentItem document, WidgetRef ref) {
           .showSnackBar(const SnackBar(content: Text('원본 HWP 파일을 찾을 수 없습니다.')));
       return;
     }
-    Navigator.push(
-        context,
-        MaterialPageRoute(
-            builder: (_) => HwpEditorPage(
-                documentId: document.id, title: document.title, path: path)));
+    _pushDocNotePage(context, HwpEditorPage(
+        documentId: document.id, title: document.title, path: path));
     return;
   }
   if (document.type == DocumentType.drawingNote) {
-    Navigator.push(
-        context,
-        MaterialPageRoute(
-            builder: (_) => DrawingEditorPage(
+    _pushDocNotePage(context, DrawingEditorPage(
                 documentId: document.id,
                 title: document.title,
                 initialPageCount: document.pageCount,
@@ -182,16 +173,32 @@ void openDocument(BuildContext context, DocumentItem document, WidgetRef ref) {
                   document.title = title;
                   document.modified = DateTime.now();
                   await ref.read(documentsProvider.notifier).update(document);
-                })));
+                }));
     return;
   }
-  Navigator.push(
-      context,
-      MaterialPageRoute(
-          builder: (_) => UnifiedNoteEditor(
+  _pushDocNotePage(context, UnifiedNoteEditor(
               document: document,
               onSave: ref.read(documentsProvider.notifier).update,
-              onDelete: ref.read(documentsProvider.notifier).remove)));
+              onDelete: ref.read(documentsProvider.notifier).remove));
+}
+
+void _pushDocNotePage(BuildContext context, Widget page) {
+  Navigator.of(context).push(PageRouteBuilder<void>(
+    pageBuilder: (_, __, ___) => page,
+    transitionDuration: const Duration(milliseconds: 220),
+    reverseTransitionDuration: const Duration(milliseconds: 180),
+    transitionsBuilder: (_, animation, __, child) {
+      final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+      return FadeTransition(
+        opacity: curved,
+        child: SlideTransition(
+          position: Tween<Offset>(begin: const Offset(.025, 0), end: Offset.zero)
+              .animate(curved),
+          child: child,
+        ),
+      );
+    },
+  ));
 }
 
 class AppShell extends ConsumerStatefulWidget {
@@ -6792,22 +6799,35 @@ class EmptyState extends StatelessWidget {
   final IconData icon;
 
   @override
-  Widget build(BuildContext context) => Center(
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon,
-                  size: 72, color: Theme.of(context).colorScheme.primary),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: scheme.primaryContainer.withValues(alpha: .65),
+                  shape: BoxShape.circle,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Icon(icon, size: 40, color: scheme.primary),
+                ),
+              ),
               const SizedBox(height: 16),
               Text(title,
-                  style: const TextStyle(
-                      fontSize: 20, fontWeight: FontWeight.bold)),
+                  style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
-              Text(message, textAlign: TextAlign.center),
+              Text(message,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      )),
             ],
           ),
-        ),
-      );
+        ));
+  }
 }
