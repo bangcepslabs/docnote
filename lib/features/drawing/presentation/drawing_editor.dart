@@ -813,6 +813,17 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         builder: (context, setDialogState) => AlertDialog(
           title: const Text('이미지 자르기'),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
+            _CropPreview(
+              path: image.imagePath,
+              crop: Rect.fromLTRB(left, top, right, bottom),
+              onChanged: (crop) => setDialogState(() {
+                left = crop.left;
+                top = crop.top;
+                right = crop.right;
+                bottom = crop.bottom;
+              }),
+            ),
+            const SizedBox(height: 12),
             _CropSlider(label: '왼쪽', value: left, min: 0, max: right - .05,
                 onChanged: (value) => setDialogState(() => left = value)),
             _CropSlider(label: '위쪽', value: top, min: 0, max: bottom - .05,
@@ -2292,6 +2303,80 @@ class _EditorToolOptions extends StatelessWidget {
       tool == StrokeTool.shapeRectangle ||
       tool == StrokeTool.shapeEllipse ||
       tool == StrokeTool.shapeArrow;
+}
+
+class _CropPreview extends StatefulWidget {
+  const _CropPreview({required this.path, required this.crop, required this.onChanged});
+  final String path;
+  final Rect crop;
+  final ValueChanged<Rect> onChanged;
+
+  @override
+  State<_CropPreview> createState() => _CropPreviewState();
+}
+
+class _CropPreviewState extends State<_CropPreview> {
+  String? edge;
+
+  @override
+  Widget build(BuildContext context) => AspectRatio(
+        aspectRatio: 1.55,
+        child: LayoutBuilder(builder: (context, constraints) {
+          final crop = widget.crop;
+          return GestureDetector(
+            onPanStart: (details) {
+              final p = Offset(details.localPosition.dx / constraints.maxWidth,
+                  details.localPosition.dy / constraints.maxHeight);
+              final distances = <String, double>{
+                'left': (p.dx - crop.left).abs(),
+                'right': (p.dx - crop.right).abs(),
+                'top': (p.dy - crop.top).abs(),
+                'bottom': (p.dy - crop.bottom).abs(),
+              };
+              edge = distances.entries.reduce((a, b) => a.value < b.value ? a : b).key;
+            },
+            onPanUpdate: (details) {
+              if (edge == null) return;
+              final dx = details.delta.dx / constraints.maxWidth;
+              final dy = details.delta.dy / constraints.maxHeight;
+              var next = crop;
+              switch (edge) {
+                case 'left': next = Rect.fromLTRB((crop.left + dx).clamp(0, crop.right - .05), crop.top, crop.right, crop.bottom);
+                case 'right': next = Rect.fromLTRB(crop.left, crop.top, (crop.right + dx).clamp(crop.left + .05, 1), crop.bottom);
+                case 'top': next = Rect.fromLTRB(crop.left, (crop.top + dy).clamp(0, crop.bottom - .05), crop.right, crop.bottom);
+                case 'bottom': next = Rect.fromLTRB(crop.left, crop.top, crop.right, (crop.bottom + dy).clamp(crop.top + .05, 1));
+              }
+              widget.onChanged(next);
+            },
+            onPanEnd: (_) => edge = null,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Stack(fit: StackFit.expand, children: [
+                Image.file(File(widget.path), fit: BoxFit.cover),
+                CustomPaint(painter: _CropOverlayPainter(crop)),
+              ]),
+            ),
+          );
+        }),
+      );
+}
+
+class _CropOverlayPainter extends CustomPainter {
+  const _CropOverlayPainter(this.crop);
+  final Rect crop;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTRB(crop.left * size.width, crop.top * size.height,
+        crop.right * size.width, crop.bottom * size.height);
+    final shade = Paint()..color = Colors.black45;
+    canvas.drawRect(Rect.fromLTRB(0, 0, size.width, rect.top), shade);
+    canvas.drawRect(Rect.fromLTRB(0, rect.bottom, size.width, size.height), shade);
+    canvas.drawRect(Rect.fromLTRB(0, rect.top, rect.left, rect.bottom), shade);
+    canvas.drawRect(Rect.fromLTRB(rect.right, rect.top, size.width, rect.bottom), shade);
+    canvas.drawRect(rect, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 2);
+  }
+  @override
+  bool shouldRepaint(covariant _CropOverlayPainter oldDelegate) => oldDelegate.crop != crop;
 }
 
 class _CropSlider extends StatelessWidget {
