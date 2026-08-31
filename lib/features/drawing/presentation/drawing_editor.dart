@@ -1700,10 +1700,10 @@ class _PageNavigatorSheet extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-              ListTile(
+              _PageActionButton(
                 enabled: page > 1,
-                leading: const Icon(Icons.arrow_upward),
-                title: const Text('앞 페이지로 이동'),
+                icon: Icons.arrow_upward,
+                label: '앞 페이지로 이동',
                 onTap: page <= 1
                     ? null
                     : () {
@@ -1711,10 +1711,10 @@ class _PageNavigatorSheet extends StatelessWidget {
                         onMovePage(page, -1);
                       },
               ),
-              ListTile(
+              _PageActionButton(
                 enabled: page < pageCount,
-                leading: const Icon(Icons.arrow_downward),
-                title: const Text('뒤 페이지로 이동'),
+                icon: Icons.arrow_downward,
+                label: '뒤 페이지로 이동',
                 onTap: page >= pageCount
                     ? null
                     : () {
@@ -1722,20 +1722,19 @@ class _PageNavigatorSheet extends StatelessWidget {
                         onMovePage(page, 1);
                       },
               ),
-              ListTile(
-                leading: const Icon(Icons.copy_outlined),
-                title: const Text('페이지 복제'),
+              _PageActionButton(
+                icon: Icons.copy_outlined,
+                label: '페이지 복제',
                 onTap: () {
                   Navigator.of(sheetContext).pop();
                   onDuplicatePage(page);
                 },
               ),
-              ListTile(
+              _PageActionButton(
                 enabled: pageCount > 1,
-                leading: Icon(Icons.delete_outline,
-                    color: Theme.of(context).colorScheme.error),
-                title: Text('페이지 삭제',
-                    style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                icon: Icons.delete_outline,
+                label: '페이지 삭제',
+                destructive: true,
                 onTap: pageCount <= 1
                     ? null
                     : () {
@@ -1747,6 +1746,46 @@ class _PageNavigatorSheet extends StatelessWidget {
           ),
         ),
       );
+}
+
+class _PageActionButton extends StatelessWidget {
+  const _PageActionButton({required this.icon, required this.label, required this.onTap, this.enabled = true, this.destructive = false});
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+  final bool enabled;
+  final bool destructive;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = !enabled
+        ? scheme.onSurface.withValues(alpha: .38)
+        : destructive
+            ? scheme.error
+            : scheme.onSurface;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          child: Row(children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: .10),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Padding(padding: const EdgeInsets.all(8), child: Icon(icon, size: 18, color: color)),
+            ),
+            const SizedBox(width: 12),
+            Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+          ]),
+        ),
+      ),
+    );
+  }
 }
 
 /// A compact, read-only version of the page canvas.  It deliberately uses the
