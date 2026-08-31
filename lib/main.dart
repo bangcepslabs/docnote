@@ -736,6 +736,7 @@ class _RefinedCreateSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return SafeArea(
       child: Container(
         constraints: BoxConstraints(
@@ -743,7 +744,7 @@ class _RefinedCreateSheet extends StatelessWidget {
         ),
         padding: const EdgeInsets.fromLTRB(20, 10, 20, 18),
         decoration: BoxDecoration(
-          color: const Color(0xfff8f9fb),
+          color: scheme.surface,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           boxShadow: [
             BoxShadow(
@@ -762,13 +763,13 @@ class _RefinedCreateSheet extends StatelessWidget {
                   child: Text('새로 만들기',
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                           fontWeight: FontWeight.w700,
-                          color: const Color(0xff1f252d)))),
+                          color: scheme.onSurface))),
               IconButton(
                 onPressed: () => Navigator.of(context).pop(),
                 tooltip: '닫기',
                 visualDensity: VisualDensity.compact,
                 icon:
-                    const Icon(Icons.close_outlined, color: Color(0xff505862)),
+                    Icon(Icons.close_outlined, color: scheme.onSurfaceVariant),
               ),
             ]),
             const SizedBox(height: 10),
@@ -850,8 +851,10 @@ class _CreateHeroCard extends StatelessWidget {
   const _CreateHeroCard({required this.onTap});
   final VoidCallback onTap;
   @override
-  Widget build(BuildContext context) => Material(
-        color: const Color(0xffe5f1f8),
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+        color: scheme.primaryContainer.withValues(alpha: .72),
         borderRadius: BorderRadius.circular(18),
         child: InkWell(
           onTap: onTap,
@@ -872,14 +875,14 @@ class _CreateHeroCard extends StatelessWidget {
                               .titleLarge
                               ?.copyWith(
                                   fontWeight: FontWeight.w700,
-                                  color: const Color(0xff203847))),
+                                  color: scheme.onPrimaryContainer)),
                       const SizedBox(height: 6),
                       Text('표지와 속지를 골라\n나만의 노트를 만들어보세요',
                           style: Theme.of(context)
                               .textTheme
                               .bodySmall
                               ?.copyWith(
-                                  color: const Color(0xff587080),
+                                  color: scheme.onPrimaryContainer.withValues(alpha: .72),
                                   height: 1.35)),
                     ])),
                 SizedBox(
@@ -895,6 +898,7 @@ class _CreateHeroCard extends StatelessWidget {
           ),
         ),
       );
+  }
 }
 
 class _CreateQuickCard extends StatelessWidget {
@@ -908,8 +912,10 @@ class _CreateQuickCard extends StatelessWidget {
   final String subtitle;
   final VoidCallback onTap;
   @override
-  Widget build(BuildContext context) => Material(
-        color: const Color(0xffeef2f5),
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+        color: scheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(15),
         child: InkWell(
             onTap: onTap,
@@ -919,7 +925,7 @@ class _CreateQuickCard extends StatelessWidget {
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(icon, size: 22, color: const Color(0xff506170)),
+                      Icon(icon, size: 22, color: scheme.onSurfaceVariant),
                       const SizedBox(height: 12),
                       Text(title,
                           style: Theme.of(context)
@@ -933,9 +939,10 @@ class _CreateQuickCard extends StatelessWidget {
                           style: Theme.of(context)
                               .textTheme
                               .bodySmall
-                              ?.copyWith(color: const Color(0xff6b7680))),
+                              ?.copyWith(color: scheme.onSurfaceVariant)),
                     ]))),
       );
+  }
 }
 
 class _CreateImportTile extends StatelessWidget {
@@ -945,8 +952,10 @@ class _CreateImportTile extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
   @override
-  Widget build(BuildContext context) => Material(
-        color: const Color(0xfff0f2f4),
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+        color: scheme.surfaceContainerHighest.withValues(alpha: .72),
         borderRadius: BorderRadius.circular(13),
         child: InkWell(
             onTap: onTap,
@@ -954,7 +963,7 @@ class _CreateImportTile extends StatelessWidget {
             child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 13),
                 child: Column(children: [
-                  Icon(icon, size: 20, color: const Color(0xff63707c)),
+                  Icon(icon, size: 20, color: scheme.onSurfaceVariant),
                   const SizedBox(height: 5),
                   Text(label,
                       style: Theme.of(context)
@@ -963,6 +972,7 @@ class _CreateImportTile extends StatelessWidget {
                           ?.copyWith(fontWeight: FontWeight.w600)),
                 ]))),
       );
+  }
 }
 
 Future<void> _deleteDocumentFiles(String documentId) async {
