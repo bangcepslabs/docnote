@@ -3241,31 +3241,7 @@ class _LibraryDocumentCard extends ConsumerWidget {
                         color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: .82))),
               ]),
             ),
-            SizedBox(
-              width: 28,
-              height: 28,
-              child: PopupMenuButton<String>(
-                padding: EdgeInsets.zero,
-                tooltip: '문서 메뉴',
-                onSelected: (value) {
-                  if (value == 'favorite') {
-                    document.favorite = !document.favorite;
-                    document.modified = DateTime.now();
-                    ref.read(documentsProvider.notifier).update(document);
-                  } else if (value == 'trash') {
-                    ref.read(documentsProvider.notifier).remove(document.id);
-                  }
-                },
-                itemBuilder: (_) => [
-                  PopupMenuItem(
-                    value: 'favorite',
-                    child: Text(document.favorite ? '즐겨찾기 해제' : '즐겨찾기'),
-                  ),
-                  const PopupMenuItem(value: 'trash', child: Text('휴지통으로 이동')),
-                ],
-                icon: const Icon(Icons.more_horiz, size: 18),
-              ),
-            ),
+            _DocumentsOverflowMenu(document: document),
           ]),
           ]),
         ),
@@ -4770,10 +4746,16 @@ class _DocumentsLibraryEmptyState extends StatelessWidget {
   final _DocumentsLibraryCategory category;
 
   @override
-  Widget build(BuildContext context) => Center(
-        child: Text(category == _DocumentsLibraryCategory.all
+  Widget build(BuildContext context) => EmptyState(
+        title: category == _DocumentsLibraryCategory.all
             ? '아직 문서가 없습니다'
-            : '표시할 문서가 없습니다'),
+            : '표시할 문서가 없습니다',
+        message: category == _DocumentsLibraryCategory.all
+            ? '새 노트를 만들거나 문서를 가져오면 이곳에 표시됩니다.'
+            : '다른 필터를 선택해 보세요.',
+        icon: category == _DocumentsLibraryCategory.all
+            ? Icons.folder_open_outlined
+            : Icons.filter_alt_off_outlined,
       );
 }
 
