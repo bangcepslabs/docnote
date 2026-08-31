@@ -433,6 +433,15 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
             Navigator.of(sheetContext).pop();
             await _movePage(page, direction);
           },
+          onMovePageTo: (source, target) async {
+            Navigator.of(sheetContext).pop();
+            final direction = source < target ? 1 : -1;
+            var current = source;
+            while (current != target) {
+              await _movePage(current, direction);
+              current += direction;
+            }
+          },
         ),
       );
 
@@ -1558,6 +1567,7 @@ class _PageNavigatorSheet extends StatelessWidget {
     required this.onDuplicatePage,
     required this.onDeletePage,
     required this.onMovePage,
+    required this.onMovePageTo,
   });
 
   final String documentId;
@@ -1569,6 +1579,7 @@ class _PageNavigatorSheet extends StatelessWidget {
   final ValueChanged<int> onDuplicatePage;
   final ValueChanged<int> onDeletePage;
   final void Function(int page, int direction) onMovePage;
+  final void Function(int source, int target) onMovePageTo;
 
   @override
   Widget build(BuildContext context) {
@@ -1615,11 +1626,14 @@ class _PageNavigatorSheet extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final page = index + 1;
                   final selected = page == selectedPage;
-                  return Semantics(
-                    button: true,
-                    selected: selected,
-                    label: '$page페이지',
-                    child: InkWell(
+                  return DragTarget<int>(
+                    onWillAcceptWithDetails: (details) => details.data != page,
+                    onAcceptWithDetails: (details) => onMovePageTo(details.data, page),
+                    builder: (context, candidates, rejected) => Semantics(
+                      button: true,
+                      selected: selected,
+                      label: '$page페이지',
+                      child: InkWell(
                       onTap: () => onPageSelected(page),
                       onLongPress: () => _showPageActions(context, page),
                       borderRadius: BorderRadius.circular(6),
@@ -1658,9 +1672,22 @@ class _PageNavigatorSheet extends StatelessWidget {
                                 Positioned(
                                   right: 3,
                                   top: 3,
-                                  child: Icon(Icons.drag_indicator,
-                                      size: 14,
-                                      color: scheme.onSurfaceVariant.withValues(alpha: .5)),
+                                  child: LongPressDraggable<int>(
+                                    data: page,
+                                    feedback: Material(
+                                      color: scheme.surface,
+                                      elevation: 4,
+                                      borderRadius: BorderRadius.circular(6),
+                                      child: SizedBox(
+                                        width: 72,
+                                        height: 96,
+                                        child: Center(child: Text('$page페이지')),
+                                      ),
+                                    ),
+                                    child: Icon(Icons.drag_indicator,
+                                        size: 14,
+                                        color: scheme.onSurfaceVariant.withValues(alpha: .5)),
+                                  ),
                                 ),
                               ]),
                             ),
@@ -1680,6 +1707,7 @@ class _PageNavigatorSheet extends StatelessWidget {
                                       : FontWeight.w400,
                                 )),
                       ]),
+                      ),
                     ),
                   );
                 },
