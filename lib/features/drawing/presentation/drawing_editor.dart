@@ -2111,13 +2111,18 @@ class _EditorToolButton extends StatelessWidget {
           width: 32,
           height: 60,
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            SizedBox(
-              width: 22,
-              height: 22,
-              child: CustomPaint(
-                painter: _EditorToolGlyphPainter(
-                  glyph,
-                  selected ? scheme.primary : scheme.onSurfaceVariant,
+            AnimatedScale(
+              scale: selected ? 1.08 : 1,
+              duration: const Duration(milliseconds: 160),
+              curve: Curves.easeOutCubic,
+              child: SizedBox(
+                width: 22,
+                height: 22,
+                child: CustomPaint(
+                  painter: _EditorToolGlyphPainter(
+                    glyph,
+                    selected ? scheme.primary : scheme.onSurfaceVariant,
+                  ),
                 ),
               ),
             ),
