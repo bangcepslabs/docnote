@@ -6257,6 +6257,11 @@ class _NotebookCoverArt extends StatelessWidget {
     return Container(
       color: palette.$1,
       child: Stack(children: [
+        Positioned.fill(
+          child: IgnorePointer(
+            child: CustomPaint(painter: _CoverTexturePainter(palette.$2)),
+          ),
+        ),
         if (style == _CoverStyle.minimalBlue)
           Positioned(
             right: compact ? 6 : 12,
@@ -6287,7 +6292,7 @@ class _NotebookCoverArt extends StatelessWidget {
                       style: TextStyle(
                           color: palette.$2.withValues(alpha: .8),
                           fontSize: compact ? 6 : 7,
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w700,
                           letterSpacing: compact ? .3 : .7)),
                 ),
               ),
@@ -6387,7 +6392,7 @@ class _NotebookCoverArt extends StatelessWidget {
                   color: palette.$2,
                   fontSize: isNavy ? titleSize * .9 : titleSize,
                   height: isBusiness ? 1.08 : 1.14,
-                  fontWeight: isBusiness ? FontWeight.w800 : FontWeight.w700),
+                  fontWeight: FontWeight.w700),
             ),
             if (!compact) ...[
               const SizedBox(height: 6),
@@ -6428,6 +6433,31 @@ class _CoverRulePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _CoverRulePainter oldDelegate) =>
       oldDelegate.color != color;
+}
+
+class _CoverTexturePainter extends CustomPainter {
+  const _CoverTexturePainter(this.accent);
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final line = Paint()
+      ..color = accent.withValues(alpha: .035)
+      ..strokeWidth = 1;
+    for (var x = -size.height; x < size.width; x += 18) {
+      canvas.drawLine(Offset(x, 0), Offset(x + size.height, size.height), line);
+    }
+    final dot = Paint()..color = accent.withValues(alpha: .045);
+    for (var y = 12.0; y < size.height; y += 22) {
+      for (var x = 12.0; x < size.width; x += 22) {
+        canvas.drawCircle(Offset(x, y), 0.8, dot);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CoverTexturePainter oldDelegate) =>
+      oldDelegate.accent != accent;
 }
 
 String _templateLabel(String template) => switch (template) {
