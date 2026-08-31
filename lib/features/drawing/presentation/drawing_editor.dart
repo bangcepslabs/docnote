@@ -1942,7 +1942,22 @@ class EditorToolbar extends StatelessWidget {
             ),
             Container(width: 1, height: 28, color: scheme.outlineVariant),
             Expanded(
-              child: _EditorToolOptions(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 180),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(.04, 0),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                ),
+                child: _EditorToolOptions(
+                  key: ValueKey(selectedTool),
                 selectedTool: selectedTool,
                 width: width,
                 color: color,
@@ -1957,6 +1972,7 @@ class EditorToolbar extends StatelessWidget {
                 onDuplicateSelection: onDuplicateSelection,
                 onShapeStyleRequested: onShapeStyleRequested,
                 onCropRequested: onCropRequested,
+                ),
               ),
             ),
           ]),
@@ -2226,7 +2242,8 @@ class _EditorToolOptions extends StatelessWidget {
       required this.onDeleteSelection,
       required this.onDuplicateSelection,
       required this.onShapeStyleRequested,
-      required this.onCropRequested});
+      required this.onCropRequested,
+      super.key});
   final StrokeTool selectedTool;
   final double width;
   final Color color;

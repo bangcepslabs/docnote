@@ -3198,10 +3198,19 @@ class _LibraryDocumentCard extends ConsumerWidget {
   final int index;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => InkWell(
-        onTap: () => openDocument(context, document, ref),
-        borderRadius: BorderRadius.circular(8),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+  Widget build(BuildContext context, WidgetRef ref) => TweenAnimationBuilder<double>(
+        tween: Tween(begin: .96, end: 1),
+        duration: Duration(milliseconds: 220 + (index.clamp(0, 5) * 35)),
+        curve: Curves.easeOutCubic,
+        builder: (context, scale, child) => Transform.scale(
+          scale: scale,
+          alignment: Alignment.topCenter,
+          child: child,
+        ),
+        child: InkWell(
+          onTap: () => openDocument(context, document, ref),
+          borderRadius: BorderRadius.circular(8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: AspectRatio(
@@ -3251,7 +3260,8 @@ class _LibraryDocumentCard extends ConsumerWidget {
               ),
             ),
           ]),
-        ]),
+          ]),
+        ),
       );
 }
 
