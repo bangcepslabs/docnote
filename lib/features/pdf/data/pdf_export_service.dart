@@ -100,7 +100,8 @@ class PdfExportService {
       if (stroke.tool == StrokeTool.shapeLine ||
           stroke.tool == StrokeTool.shapeRectangle ||
           stroke.tool == StrokeTool.shapeEllipse ||
-          stroke.tool == StrokeTool.shapeArrow) {
+          stroke.tool == StrokeTool.shapeArrow ||
+          stroke.tool == StrokeTool.shapeTriangle) {
         final start = ui.Offset(
             stroke.points.first.x * width, stroke.points.first.y * height);
         final end = ui.Offset(
@@ -128,6 +129,13 @@ class PdfExportService {
                     math.sin(angle + wing) * length);
             canvas.drawLine(end, left, paint);
             canvas.drawLine(end, right, paint);
+          case StrokeTool.shapeTriangle:
+            final triangle = ui.Path()
+              ..moveTo(rect.center.dx, rect.top)
+              ..lineTo(rect.right, rect.bottom)
+              ..lineTo(rect.left, rect.bottom)
+              ..close();
+            canvas.drawPath(triangle, paint);
           case StrokeTool.text:
           case StrokeTool.image:
           case StrokeTool.pen:

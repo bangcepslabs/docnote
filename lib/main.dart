@@ -9,10 +9,12 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'core/database/document_model.dart';
 import 'core/settings/app_settings.dart';
 import 'core/storage/annotation_store.dart';
+import 'core/storage/backup_service.dart';
 import 'core/storage/document_thumbnail_service.dart';
 import 'core/theme/docnote_theme.dart';
 import 'features/notes/presentation/unified_note_editor.dart';
@@ -27,6 +29,9 @@ final repositoryProvider = Provider((ref) => DocumentRepository());
 final documentsProvider =
     StateNotifierProvider<DocumentsController, List<DocumentItem>>(
         (ref) => DocumentsController(ref.read(repositoryProvider)));
+final foldersProvider =
+    StateNotifierProvider<FoldersController, List<FolderItem>>(
+        (ref) => FoldersController(const FolderRepository()));
 
 class DocumentsController extends StateNotifier<List<DocumentItem>> {
   DocumentsController(this.repo) : super([]) {
@@ -44,6 +49,12 @@ class DocumentsController extends StateNotifier<List<DocumentItem>> {
     state = [...state.where((x) => x.id != d.id), d]
       ..sort((a, b) => b.modified.compareTo(a.modified));
     await repo.save(state);
+  }
+
+  Future<void> replaceAll(List<DocumentItem> documents) async {
+    final next = [...documents]..sort((a, b) => b.modified.compareTo(a.modified));
+    state = next;
+    await repo.save(next);
   }
 
   Future<void> remove(String id) async {
@@ -110,6 +121,29 @@ class DocumentsController extends StateNotifier<List<DocumentItem>> {
   }
 }
 
+class FoldersController extends StateNotifier<List<FolderItem>> {
+  FoldersController(this.repo) : super([]) {
+    restore();
+  }
+  final FolderRepository repo;
+  Future<void> restore() async => state = await repo.load();
+  Future<void> add(String name) async {
+    final folder = FolderItem(id: const Uuid().v4(), name: name.trim());
+    state = [...state, folder];
+    await repo.save(state);
+  }
+  Future<void> rename(FolderItem folder, String name) async {
+    folder.name = name.trim();
+    folder.modified = DateTime.now();
+    state = [...state];
+    await repo.save(state);
+  }
+  Future<void> remove(FolderItem folder) async {
+    state = state.where((item) => item.id != folder.id).toList();
+    await repo.save(state);
+  }
+}
+
 final routerProvider = Provider((ref) => GoRouter(
     routes: [GoRoute(path: '/', builder: (_, __) => const AppShell())]));
 void main() => runApp(const ProviderScope(child: DocNoteApp()));
@@ -143,8 +177,10 @@ void openDocument(BuildContext context, DocumentItem document, WidgetRef ref) {
           .showSnackBar(const SnackBar(content: Text('원본 PDF 파일을 찾을 수 없습니다.')));
       return;
     }
-    _pushDocNotePage(context, PdfEditorPage(
-        documentId: document.id, title: document.title, path: path));
+    _pushDocNotePage(
+        context,
+        PdfEditorPage(
+            documentId: document.id, title: document.title, path: path));
     return;
   }
   if (document.type == DocumentType.hwp || document.type == DocumentType.hwpx) {
@@ -154,32 +190,38 @@ void openDocument(BuildContext context, DocumentItem document, WidgetRef ref) {
           .showSnackBar(const SnackBar(content: Text('원본 HWP 파일을 찾을 수 없습니다.')));
       return;
     }
-    _pushDocNotePage(context, HwpEditorPage(
-        documentId: document.id, title: document.title, path: path));
+    _pushDocNotePage(
+        context,
+        HwpEditorPage(
+            documentId: document.id, title: document.title, path: path));
     return;
   }
   if (document.type == DocumentType.drawingNote) {
-    _pushDocNotePage(context, DrawingEditorPage(
-                documentId: document.id,
-                title: document.title,
-                initialPageCount: document.pageCount,
-                pageTemplateId: document.pageStyle,
-                onPageCountChanged: (count) {
-                  document.pageCount = count;
-                  document.modified = DateTime.now();
-                  ref.read(documentsProvider.notifier).update(document);
-                },
-                onTitleChanged: (title) async {
-                  document.title = title;
-                  document.modified = DateTime.now();
-                  await ref.read(documentsProvider.notifier).update(document);
-                }));
+    _pushDocNotePage(
+        context,
+        DrawingEditorPage(
+            documentId: document.id,
+            title: document.title,
+            initialPageCount: document.pageCount,
+            pageTemplateId: document.pageStyle,
+            onPageCountChanged: (count) {
+              document.pageCount = count;
+              document.modified = DateTime.now();
+              ref.read(documentsProvider.notifier).update(document);
+            },
+            onTitleChanged: (title) async {
+              document.title = title;
+              document.modified = DateTime.now();
+              await ref.read(documentsProvider.notifier).update(document);
+            }));
     return;
   }
-  _pushDocNotePage(context, UnifiedNoteEditor(
-              document: document,
-              onSave: ref.read(documentsProvider.notifier).update,
-              onDelete: ref.read(documentsProvider.notifier).remove));
+  _pushDocNotePage(
+      context,
+      UnifiedNoteEditor(
+          document: document,
+          onSave: ref.read(documentsProvider.notifier).update,
+          onDelete: ref.read(documentsProvider.notifier).remove));
 }
 
 void _pushDocNotePage(BuildContext context, Widget page) {
@@ -188,12 +230,14 @@ void _pushDocNotePage(BuildContext context, Widget page) {
     transitionDuration: const Duration(milliseconds: 220),
     reverseTransitionDuration: const Duration(milliseconds: 180),
     transitionsBuilder: (_, animation, __, child) {
-      final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+      final curved =
+          CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
       return FadeTransition(
         opacity: curved,
         child: SlideTransition(
-          position: Tween<Offset>(begin: const Offset(.025, 0), end: Offset.zero)
-              .animate(curved),
+          position:
+              Tween<Offset>(begin: const Offset(.025, 0), end: Offset.zero)
+                  .animate(curved),
           child: child,
         ),
       );
@@ -232,7 +276,10 @@ class _AppShellState extends ConsumerState<AppShell> {
           ),
         1 => const DocumentsPage(),
         3 => SearchPage(onClose: () => _selectPage(0)),
-        4 => SettingsPage(onClose: () => _selectPage(0)),
+        4 => SettingsPage(
+            onClose: () => _selectPage(0),
+            onBackup: _createBackup,
+            onRestore: _restoreBackup),
         _ => const SizedBox.shrink(),
       };
 
@@ -305,6 +352,104 @@ class _AppShellState extends ConsumerState<AppShell> {
           onScanDocument: _scanDocument,
         ),
       );
+
+  Future<void> _createBackup() async {
+    final documents = ref.read(documentsProvider);
+    try {
+      final file = await const BackupService().createBackup(documents);
+      await SharePlus.instance.share(
+          ShareParams(files: [XFile(file.path)], text: 'DocNote 백업'));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('백업을 만들지 못했습니다: $error')));
+      }
+    }
+  }
+
+  Future<void> _restoreBackup() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+          type: FileType.custom, allowedExtensions: ['docnote'], withData: true);
+      if (result == null || result.files.single.path == null) return;
+      final restored = await const BackupService()
+          .restoreBackup(File(result.files.single.path!), writeFiles: false);
+      if (!mounted) return;
+      final selectedIds = restored.map((document) => document.id).toSet();
+      final replace = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('백업 복원'),
+            content: SizedBox(
+              width: 340,
+              child: restored.isEmpty
+                  ? const Text('복원할 문서가 없습니다.')
+                  : ListView(
+                      shrinkWrap: true,
+                      children: [
+                        Text('${selectedIds.length}/${restored.length}개 선택',
+                            style: Theme.of(context).textTheme.bodySmall),
+                        for (final document in restored)
+                          CheckboxListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            value: selectedIds.contains(document.id),
+                            title: Text(document.title.isEmpty
+                                ? '제목 없음'
+                                : document.title),
+                            subtitle: Text(document.type.name),
+                            onChanged: (checked) => setDialogState(() {
+                              if (checked == true) {
+                                selectedIds.add(document.id);
+                              } else {
+                                selectedIds.remove(document.id);
+                              }
+                            }),
+                          ),
+                      ],
+                    ),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('취소')),
+              FilledButton(
+                  onPressed: selectedIds.isEmpty
+                      ? null
+                      : () => Navigator.pop(dialogContext, true),
+                  child: const Text('복원')),
+            ],
+          ),
+        ),
+      );
+      if (replace != true) return;
+      await const BackupService()
+          .restoreBackup(File(result.files.single.path!),
+              documentIds: selectedIds);
+      final controller = ref.read(documentsProvider.notifier);
+      final existing = [...ref.read(documentsProvider)];
+      for (final document in restored
+          .where((item) => selectedIds.contains(item.id))) {
+        final index = existing.indexWhere((item) => item.id == document.id);
+        if (index >= 0) {
+          existing[index] = document;
+        } else {
+          existing.add(document);
+        }
+      }
+      await controller.replaceAll(existing);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('백업을 복원했습니다.')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('백업을 복원하지 못했습니다: $error')));
+      }
+    }
+  }
   Future<void> _quickMemo() async {
     if (creating) return;
     final draft = await showModalBottomSheet<NotebookDraft>(
@@ -345,9 +490,6 @@ class _AppShellState extends ConsumerState<AppShell> {
           type: FileType.custom, allowedExtensions: ['pdf'], withData: true);
       if (result == null) return;
       final picked = result.files.single;
-      developer.log(
-          'picker name=${picked.name} path=${picked.path} bytes=${picked.bytes?.length}',
-          name: 'docnote.pdf');
       final selectedBytes = picked.bytes ??
           (picked.path == null ? null : await File(picked.path!).readAsBytes());
       if (selectedBytes == null) {
@@ -372,21 +514,14 @@ class _AppShellState extends ConsumerState<AppShell> {
       final directory = Directory('${root.path}/documents/$id/original');
       await directory.create(recursive: true);
       final target = File('${directory.path}/${picked.name}');
-      developer.log('copy start id=$id target=${target.path}',
-          name: 'docnote.pdf');
       if (picked.path != null) {
         await File(picked.path!).copy(target.path);
       } else {
         await target.writeAsBytes(selectedBytes, flush: true);
       }
-      developer.log(
-          'copy done exists=${await target.exists()} size=${await target.length()}',
-          name: 'docnote.pdf');
       await PdfFileValidator.validate(target, documentId: id);
       final pdf = await PdfDocument.openFile(target.path);
       final pages = pdf.pagesCount;
-      developer.log('pdf opened pages=$pages path=${target.path}',
-          name: 'docnote.pdf');
       await pdf.close();
       final d = DocumentItem(
           id: id,
@@ -644,7 +779,10 @@ class _RefinedBottomNavigation extends StatelessWidget {
       padding:
           EdgeInsets.fromLTRB(14, 10, 14, MediaQuery.paddingOf(context).bottom),
       decoration: BoxDecoration(
-        color: scheme.surface.withValues(alpha: .96),
+        color: (scheme.brightness == Brightness.dark
+                ? scheme.surfaceContainerLow
+                : scheme.surface)
+            .withValues(alpha: .98),
         border: Border(top: BorderSide(color: scheme.outlineVariant)),
       ),
       child: Row(
@@ -682,7 +820,10 @@ class _RefinedNavigationItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: selected
-          ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: .72)
+          ? Theme.of(context)
+              .colorScheme
+              .primaryContainer
+              .withValues(alpha: .72)
           : Colors.transparent,
       borderRadius: BorderRadius.circular(10),
       child: InkWell(
@@ -713,8 +854,12 @@ class _RefinedNavigationItem extends StatelessWidget {
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
                       color: selected
-                          ? DocNoteTheme.ink
-                          : const Color(0xff737a83)),
+                          ? (Theme.of(context).brightness == Brightness.dark
+                              ? Theme.of(context).colorScheme.onPrimaryContainer
+                              : DocNoteTheme.ink)
+                          : (Theme.of(context).brightness == Brightness.dark
+                              ? Theme.of(context).colorScheme.onSurfaceVariant
+                              : const Color(0xff737a83))),
                 ),
               ),
             ],
@@ -861,50 +1006,45 @@ class _CreateHeroCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Material(
-        color: scheme.primaryContainer.withValues(alpha: .72),
+      color: scheme.primaryContainer.withValues(alpha: .72),
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(18),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(18),
-          child: SizedBox(
-            height: 136,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 16, 14, 14),
-              child: Row(children: [
-                Expanded(
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                      Text('새 노트',
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleLarge
-                              ?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                  color: scheme.onPrimaryContainer)),
-                      const SizedBox(height: 6),
-                      Text('표지와 속지를 골라\n나만의 노트를 만들어보세요',
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(
-                                  color: scheme.onPrimaryContainer.withValues(alpha: .72),
-                                  height: 1.35)),
-                    ])),
-                SizedBox(
-                    width: 82,
-                    height: 108,
-                    child: _NotebookCoverArt(
-                        coverId: 'simple',
-                        title: '새 노트',
-                        template: 'ruled',
-                        compact: true)),
-              ]),
-            ),
+        child: SizedBox(
+          height: 136,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 14, 14),
+            child: Row(children: [
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                    Text('새 노트',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: scheme.onPrimaryContainer)),
+                    const SizedBox(height: 6),
+                    Text('표지와 속지를 골라\n나만의 노트를 만들어보세요',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: scheme.onPrimaryContainer
+                                .withValues(alpha: .72),
+                            height: 1.35)),
+                  ])),
+              SizedBox(
+                  width: 82,
+                  height: 108,
+                  child: _NotebookCoverArt(
+                      coverId: 'simple',
+                      title: '새 노트',
+                      template: 'ruled',
+                      compact: true)),
+            ]),
           ),
         ),
-      );
+      ),
+    );
   }
 }
 
@@ -922,33 +1062,33 @@ class _CreateQuickCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Material(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(15),
-        child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(15),
-            child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(icon, size: 22, color: scheme.onSurfaceVariant),
-                      const SizedBox(height: 12),
-                      Text(title,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 3),
-                      Text(subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant)),
-                    ]))),
-      );
+      color: scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(15),
+      child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(15),
+          child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(icon, size: 22, color: scheme.onSurfaceVariant),
+                    const SizedBox(height: 12),
+                    Text(title,
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 3),
+                    Text(subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: scheme.onSurfaceVariant)),
+                  ]))),
+    );
   }
 }
 
@@ -962,23 +1102,23 @@ class _CreateImportTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Material(
-        color: scheme.surfaceContainerHighest.withValues(alpha: .72),
-        borderRadius: BorderRadius.circular(13),
-        child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(13),
-            child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                child: Column(children: [
-                  Icon(icon, size: 20, color: scheme.onSurfaceVariant),
-                  const SizedBox(height: 5),
-                  Text(label,
-                      style: Theme.of(context)
-                          .textTheme
-                          .labelMedium
-                          ?.copyWith(fontWeight: FontWeight.w600)),
-                ]))),
-      );
+      color: scheme.surfaceContainerHighest.withValues(alpha: .72),
+      borderRadius: BorderRadius.circular(13),
+      child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(13),
+          child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              child: Column(children: [
+                Icon(icon, size: 20, color: scheme.onSurfaceVariant),
+                const SizedBox(height: 5),
+                Text(label,
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelMedium
+                        ?.copyWith(fontWeight: FontWeight.w600)),
+              ]))),
+    );
   }
 }
 
@@ -3205,7 +3345,8 @@ class _LibraryDocumentCard extends ConsumerWidget {
   final int index;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => TweenAnimationBuilder<double>(
+  Widget build(BuildContext context, WidgetRef ref) =>
+      TweenAnimationBuilder<double>(
         tween: Tween(begin: .96, end: 1),
         duration: Duration(milliseconds: 220 + (index.clamp(0, 5) * 35)),
         curve: Curves.easeOutCubic,
@@ -3217,32 +3358,39 @@ class _LibraryDocumentCard extends ConsumerWidget {
         child: InkWell(
           onTap: () => openDocument(context, document, ref),
           borderRadius: BorderRadius.circular(8),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: AspectRatio(
-                aspectRatio: .82,
-                child: _LibraryVisual(document: document, index: index)),
-          ),
-          const SizedBox(height: 7),
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(_documentTitle(document),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 3),
-                Text(_libraryDetail(document),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: .82))),
-              ]),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: AspectRatio(
+                  aspectRatio: .82,
+                  child: _LibraryVisual(document: document, index: index)),
             ),
-            _DocumentsOverflowMenu(document: document),
-          ]),
+            const SizedBox(height: 7),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_documentTitle(document),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 3),
+                      Text(_libraryDetail(document),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant
+                                  .withValues(alpha: .82))),
+                    ]),
+              ),
+              _DocumentsOverflowMenu(document: document),
+            ]),
           ]),
         ),
       );
@@ -4470,11 +4618,17 @@ class _RefinedDocumentsView extends ConsumerStatefulWidget {
 class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
   _DocumentsLibraryCategory category = _DocumentsLibraryCategory.all;
   bool grid = true;
+  String? selectedFolderId;
+  final selectedDocumentIds = <String>{};
 
   @override
   Widget build(BuildContext context) {
+    final folders = ref.watch(foldersProvider);
     final docs = ref.watch(documentsProvider).where((document) {
       if (document.trashed) return false;
+      if (selectedFolderId != null && document.folderId != selectedFolderId) {
+        return false;
+      }
       return switch (category) {
         _DocumentsLibraryCategory.all => true,
         _DocumentsLibraryCategory.notebook =>
@@ -4492,8 +4646,22 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
     return Scaffold(
       backgroundColor: scheme.surfaceContainerLowest,
       appBar: AppBar(
-        title: const Text('문서'),
+        title: selectedDocumentIds.isEmpty
+            ? const Text('문서')
+            : Text('${selectedDocumentIds.length}개 선택'),
         actions: [
+          if (selectedDocumentIds.isNotEmpty) ...[
+            IconButton(
+              onPressed: () => _moveSelected(context),
+              tooltip: '폴더로 이동',
+              icon: const Icon(Icons.drive_file_move_outlined),
+            ),
+            IconButton(
+              onPressed: () => setState(selectedDocumentIds.clear),
+              tooltip: '선택 취소',
+              icon: const Icon(Icons.close),
+            ),
+          ],
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 8),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -4507,6 +4675,11 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
             tooltip: grid ? '목록으로 보기' : '격자로 보기',
             icon: Icon(
                 grid ? Icons.view_list_outlined : Icons.grid_view_outlined),
+          ),
+          IconButton(
+            onPressed: () => _createFolder(context),
+            tooltip: '폴더 만들기',
+            icon: const Icon(Icons.create_new_folder_outlined),
           ),
           const SizedBox(width: 8),
         ],
@@ -4533,6 +4706,37 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
               _refinedChip('폴더', _DocumentsLibraryCategory.folder),
             ]),
           ),
+          if (folders.isNotEmpty)
+            SizedBox(
+              height: 54,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+                itemCount: folders.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  final folder = folders[index];
+                  final count = ref
+                      .watch(documentsProvider)
+                      .where((d) => !d.trashed && d.folderId == folder.id)
+                      .length;
+                  return GestureDetector(
+                    onLongPress: () => _renameFolder(context, folder),
+                    child: InputChip(
+                      avatar: const Icon(Icons.folder_outlined, size: 17),
+                      label: Text('${folder.name} $count'),
+                      selected: selectedFolderId == folder.id,
+                      onSelected: (_) => setState(() {
+                        selectedFolderId = selectedFolderId == folder.id
+                            ? null
+                            : folder.id;
+                      }),
+                      onDeleted: () => _deleteFolder(context, folder),
+                    ),
+                  );
+                },
+              ),
+            ),
           Expanded(
             child: docs.isEmpty
                 ? _DocumentsLibraryEmptyState(category: category)
@@ -4550,19 +4754,142 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
                           ),
                           itemCount: docs.length,
                           itemBuilder: (_, index) => _DocumentsLibraryGridItem(
-                              document: docs[index], index: index),
+                              document: docs[index],
+                              index: index,
+                              selected: selectedDocumentIds.contains(docs[index].id),
+                              onLongPress: () => _toggleSelection(docs[index].id),
+                              onSelectionTap: () => _toggleSelection(docs[index].id),
+                              selectionMode: selectedDocumentIds.isNotEmpty),
                         );
                       })
                     : ListView.builder(
                         padding: const EdgeInsets.fromLTRB(20, 12, 20, 112),
                         itemCount: docs.length,
                         itemBuilder: (_, index) => _DocumentsLibraryListItem(
-                            document: docs[index], index: index),
+                            document: docs[index],
+                            index: index,
+                            selected: selectedDocumentIds.contains(docs[index].id),
+                            onLongPress: () => _toggleSelection(docs[index].id),
+                            onSelectionTap: () => _toggleSelection(docs[index].id),
+                            selectionMode: selectedDocumentIds.isNotEmpty),
                       ),
           ),
         ],
       ),
     );
+  }
+
+  void _toggleSelection(String id) => setState(() {
+        if (!selectedDocumentIds.add(id)) selectedDocumentIds.remove(id);
+      });
+
+  Future<void> _moveSelected(BuildContext context) async {
+    final folders = ref.read(foldersProvider);
+    if (folders.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('먼저 폴더를 만들어 주세요.')));
+      }
+      return;
+    }
+    final folder = await showDialog<FolderItem>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('선택한 문서를 폴더로 이동'),
+        children: [
+          for (final item in folders)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(dialogContext, item),
+              child: Text(item.name),
+            ),
+        ],
+      ),
+    );
+    if (folder == null) return;
+    final selected = ref
+        .read(documentsProvider)
+        .where((document) => selectedDocumentIds.contains(document.id));
+    for (final document in selected) {
+      document.folderId = folder.id;
+      document.modified = DateTime.now();
+      await ref.read(documentsProvider.notifier).update(document);
+    }
+    if (mounted) setState(selectedDocumentIds.clear);
+  }
+
+  Future<void> _createFolder(BuildContext context) async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('새 폴더'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 40,
+          decoration: const InputDecoration(hintText: '폴더 이름'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('취소')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, controller.text), child: const Text('만들기')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!context.mounted || name == null || name.trim().isEmpty) return;
+    await ref.read(foldersProvider.notifier).add(name);
+  }
+
+  Future<void> _deleteFolder(BuildContext context, FolderItem folder) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('폴더 삭제'),
+        content: Text('“${folder.name}” 폴더를 삭제할까요? 문서는 유지됩니다.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('취소')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('삭제')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final documents = ref.read(documentsProvider);
+    for (final document in documents.where((d) => d.folderId == folder.id)) {
+      document.folderId = null;
+      document.modified = DateTime.now();
+      await ref.read(documentsProvider.notifier).update(document);
+    }
+    await ref.read(foldersProvider.notifier).remove(folder);
+    if (selectedFolderId == folder.id && mounted) {
+      setState(() => selectedFolderId = null);
+    }
+  }
+
+  Future<void> _renameFolder(BuildContext context, FolderItem folder) async {
+    final controller = TextEditingController(text: folder.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('폴더 이름 변경'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 40,
+          decoration: const InputDecoration(hintText: '폴더 이름'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, controller.text),
+              child: const Text('저장')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!context.mounted || name == null || name.trim().isEmpty) return;
+    await ref.read(foldersProvider.notifier).rename(folder, name);
   }
 
   Widget _refinedChip(String label, _DocumentsLibraryCategory value) => Padding(
@@ -4575,7 +4902,8 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           side: BorderSide.none,
-          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          backgroundColor:
+              Theme.of(context).colorScheme.surfaceContainerHighest,
           selectedColor: Theme.of(context).colorScheme.primaryContainer,
           labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
                 color: category == value
@@ -4588,15 +4916,34 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
 
 class _DocumentsLibraryGridItem extends ConsumerWidget {
   const _DocumentsLibraryGridItem(
-      {required this.document, required this.index});
+      {required this.document,
+      required this.index,
+      required this.selected,
+      required this.selectionMode,
+      required this.onLongPress,
+      required this.onSelectionTap});
   final DocumentItem document;
   final int index;
+  final bool selected;
+  final bool selectionMode;
+  final VoidCallback onLongPress;
+  final VoidCallback onSelectionTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => InkWell(
-        onTap: () => openDocument(context, document, ref),
+        onTap: () => selectionMode
+            ? onSelectionTap()
+            : openDocument(context, document, ref),
+        onLongPress: onLongPress,
         borderRadius: BorderRadius.circular(8),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: selected
+                ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: .35)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: AspectRatio(
@@ -4625,21 +4972,41 @@ class _DocumentsLibraryGridItem extends ConsumerWidget {
                       .colorScheme
                       .onSurfaceVariant
                       .withValues(alpha: .82))),
-        ]),
+          ]),
+        ),
       );
 }
 
 class _DocumentsLibraryListItem extends ConsumerWidget {
   const _DocumentsLibraryListItem(
-      {required this.document, required this.index});
+      {required this.document,
+      required this.index,
+      required this.selected,
+      required this.selectionMode,
+      required this.onLongPress,
+      required this.onSelectionTap});
   final DocumentItem document;
   final int index;
+  final bool selected;
+  final bool selectionMode;
+  final VoidCallback onLongPress;
+  final VoidCallback onSelectionTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => InkWell(
-        onTap: () => openDocument(context, document, ref),
+        onTap: () => selectionMode
+            ? onSelectionTap()
+            : openDocument(context, document, ref),
+        onLongPress: onLongPress,
         borderRadius: BorderRadius.circular(8),
-        child: SizedBox(
+        child: Container(
+          decoration: BoxDecoration(
+            color: selected
+                ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: .35)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: SizedBox(
           height: 82,
           child: Row(children: [
             SizedBox(
@@ -4671,6 +5038,7 @@ class _DocumentsLibraryListItem extends ConsumerWidget {
             ),
             _DocumentsOverflowMenu(document: document),
           ]),
+          ),
         ),
       );
 }
@@ -4720,11 +5088,32 @@ class _DocumentsOverflowMenu extends ConsumerWidget {
             await ref.read(documentsProvider.notifier).update(document);
           } else if (value == 'trash') {
             await ref.read(documentsProvider.notifier).remove(document.id);
+          } else if (value == 'move') {
+            final folders = ref.read(foldersProvider);
+            if (folders.isEmpty || !context.mounted) return;
+            final folder = await showDialog<FolderItem>(
+              context: context,
+              builder: (dialogContext) => SimpleDialog(
+                title: const Text('폴더로 이동'),
+                children: [
+                  for (final folder in folders)
+                    SimpleDialogOption(
+                      onPressed: () => Navigator.pop(dialogContext, folder),
+                      child: Text(folder.name),
+                    ),
+                ],
+              ),
+            );
+            if (folder == null) return;
+            document.folderId = folder.id;
+            document.modified = DateTime.now();
+            await ref.read(documentsProvider.notifier).update(document);
           }
         },
         itemBuilder: (_) => const [
           PopupMenuItem(value: 'favorite', child: Text('즐겨찾기')),
           PopupMenuItem(value: 'rename', child: Text('이름 변경')),
+          PopupMenuItem(value: 'move', child: Text('폴더로 이동')),
           PopupMenuItem(value: 'trash', child: Text('휴지통으로 이동')),
         ],
       );
@@ -4928,7 +5317,8 @@ class _RefinedSearchViewState extends ConsumerState<_RefinedSearchView> {
                         icon: const Icon(Icons.close, size: 18),
                       ),
                 filled: true,
-                fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                fillColor:
+                    Theme.of(context).colorScheme.surfaceContainerHighest,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
@@ -5007,7 +5397,8 @@ class _RefinedSearchViewState extends ConsumerState<_RefinedSearchView> {
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           side: BorderSide.none,
-          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          backgroundColor:
+              Theme.of(context).colorScheme.surfaceContainerHighest,
           selectedColor: Theme.of(context).colorScheme.primaryContainer,
           labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
                 color: typeFilter == type &&
@@ -5136,13 +5527,17 @@ class _SearchHighlightedText extends StatelessWidget {
 }
 
 class SettingsPage extends ConsumerWidget {
-  const SettingsPage({required this.onClose, super.key});
+  const SettingsPage({required this.onClose, this.onBackup, this.onRestore, super.key});
   final VoidCallback onClose;
+  final VoidCallback? onBackup;
+  final VoidCallback? onRestore;
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final useRefinedDesign =
         Theme.of(context).platform != TargetPlatform.fuchsia;
-    if (useRefinedDesign) return const _RefinedSettingsView();
+    if (useRefinedDesign) {
+      return _RefinedSettingsView(onBackup: onBackup, onRestore: onRestore);
+    }
 
     // Legacy settings list retained below for a low-risk rollback.
     final settings = ref.watch(appSettingsProvider);
@@ -5210,7 +5605,9 @@ class SettingsPage extends ConsumerWidget {
 }
 
 class _RefinedSettingsView extends ConsumerWidget {
-  const _RefinedSettingsView();
+  const _RefinedSettingsView({this.onBackup, this.onRestore});
+  final VoidCallback? onBackup;
+  final VoidCallback? onRestore;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -5313,6 +5710,31 @@ class _RefinedSettingsView extends ConsumerWidget {
                     ],
                   ),
                 ),
+                if (onBackup != null || onRestore != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _RefinedSettingsGroup(
+                      title: '데이터 관리',
+                      children: [
+                        if (onBackup != null)
+                          _RefinedSettingsRow(
+                            icon: Icons.backup_outlined,
+                            title: '백업 만들기',
+                            subtitle: '문서와 첨부 파일을 하나의 파일로 저장합니다',
+                            trailing: const _SettingsChevron(),
+                            onTap: onBackup!,
+                          ),
+                        if (onRestore != null)
+                          _RefinedSettingsRow(
+                            icon: Icons.restore_outlined,
+                            title: '백업 복원',
+                            subtitle: '다른 기기의 DocNote 백업을 가져옵니다',
+                            trailing: const _SettingsChevron(),
+                            onTap: onRestore!,
+                          ),
+                      ],
+                    ),
+                  ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: _RefinedSettingsGroup(
@@ -6192,16 +6614,53 @@ class _CompactMemoThumbnail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasContent =
-        document.title.trim().isNotEmpty || document.body.trim().isNotEmpty;
+    final title = document.title.trim().isEmpty ? '메모' : document.title.trim();
+    final body = document.body.trim();
+    final hasContent = title != '메모' || body.isNotEmpty;
+    final scheme = Theme.of(context).colorScheme;
     return ColoredBox(
-      color: Colors.white,
-      child: Center(
-        child: Icon(
-          hasContent ? Icons.notes_outlined : Icons.note_add_outlined,
-          size: 20,
-          color: Theme.of(context).colorScheme.primary.withValues(alpha: .68),
-        ),
+      color: const Color(0xfffffbf2),
+      child: Padding(
+        padding: const EdgeInsets.all(9),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(hasContent ? Icons.notes_outlined : Icons.note_add_outlined,
+                size: 14, color: scheme.primary.withValues(alpha: .7)),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 8, fontWeight: FontWeight.w700)),
+            ),
+          ]),
+          const Spacer(),
+          if (body.isNotEmpty)
+            Text(body,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 8,
+                    height: 1.45,
+                    color: scheme.onSurfaceVariant.withValues(alpha: .8)))
+          else ...[
+            Container(
+                height: 2,
+                width: 44,
+                color: scheme.primary.withValues(alpha: .28)),
+            const SizedBox(height: 7),
+            Container(
+                height: 2,
+                width: double.infinity,
+                color: scheme.primary.withValues(alpha: .12)),
+            const SizedBox(height: 6),
+            Container(
+                height: 2,
+                width: 54,
+                color: scheme.primary.withValues(alpha: .12)),
+          ],
+        ]),
       ),
     );
   }
@@ -6664,17 +7123,38 @@ class _DocumentPreview extends StatelessWidget {
     if (compact) {
       return ColoredBox(
         color: background,
-        child: Center(
-          child: loading
-              ? SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1.5,
-                    color: color.withValues(alpha: .7),
-                  ),
-                )
-              : Icon(icon, size: 20, color: color.withValues(alpha: .65)),
+        child: Padding(
+          padding: const EdgeInsets.all(9),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Icon(icon, size: 14, color: color.withValues(alpha: .78)),
+              const SizedBox(width: 4),
+              Text(label,
+                  style: TextStyle(
+                      color: color, fontSize: 8, fontWeight: FontWeight.w700)),
+            ]),
+            const Spacer(),
+            if (loading)
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.5, color: color.withValues(alpha: .7)),
+              )
+            else ...[
+              Container(
+                  height: 2, width: 42, color: color.withValues(alpha: .45)),
+              const SizedBox(height: 7),
+              Container(
+                  height: 2,
+                  width: double.infinity,
+                  color: color.withValues(alpha: .16)),
+              const SizedBox(height: 6),
+              Container(
+                  height: 2, width: 54, color: color.withValues(alpha: .16)),
+            ],
+          ]),
         ),
       );
     }
@@ -6785,31 +7265,30 @@ class EmptyState extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Center(
         child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: scheme.primaryContainer.withValues(alpha: .65),
-                  shape: BoxShape.circle,
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Icon(icon, size: 40, color: scheme.primary),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(title,
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              Text(message,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      )),
-            ],
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer.withValues(alpha: .65),
+              shape: BoxShape.circle,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Icon(icon, size: 40, color: scheme.primary),
+            ),
           ),
-        ));
+          const SizedBox(height: 16),
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Text(message,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  )),
+        ],
+      ),
+    ));
   }
 }

@@ -36,8 +36,6 @@ class _HwpEditorPageState extends State<HwpEditorPage> {
 
   Future<void> _open() async {
     try {
-      final engineVersion = await Rhwp.version();
-      developer.log('rhwp engine version=$engineVersion', name: 'docnote.hwp');
       final file = File(widget.path);
       if (!await file.exists()) {
         throw StateError('HWP 파일을 찾을 수 없습니다.');
@@ -63,9 +61,6 @@ class _HwpEditorPageState extends State<HwpEditorPage> {
       final baseName = originalName.replaceFirst(RegExp(r'\.[^.]+$'), '');
       final parserName = '$baseName.${isHwpx ? 'hwpx' : 'hwp'}';
       detectedFormat = isHwpx ? 'HWPX' : 'HWP';
-      developer.log(
-          'HWP bytes loaded id=${widget.documentId} size=${bytes.length} format=${isHwpx ? 'HWPX' : 'HWP'}',
-          name: 'docnote.hwp');
       document = await Rhwp.open(bytes, fileName: parserName);
     } catch (e, stack) {
       developer.log('HWP open failed id=${widget.documentId}: $e',

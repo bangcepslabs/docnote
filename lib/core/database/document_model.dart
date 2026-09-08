@@ -104,6 +104,50 @@ class DocumentItem {
       lastOpened: DateTime.tryParse(json['lastOpened'] as String? ?? ''));
 }
 
+class FolderItem {
+  FolderItem({required this.id, required this.name, DateTime? created, DateTime? modified})
+      : created = created ?? DateTime.now(),
+        modified = modified ?? DateTime.now();
+  final String id;
+  String name;
+  DateTime created;
+  DateTime modified;
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'created': created.toIso8601String(),
+        'modified': modified.toIso8601String(),
+      };
+  factory FolderItem.fromJson(Map<String, dynamic> json) => FolderItem(
+        id: json['id'] as String,
+        name: json['name'] as String? ?? '폴더',
+        created: DateTime.tryParse(json['created'] as String? ?? ''),
+        modified: DateTime.tryParse(json['modified'] as String? ?? ''),
+      );
+}
+
+class FolderRepository {
+  const FolderRepository();
+  static const key = 'docnote.folders';
+  Future<List<FolderItem>> load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(key);
+      if (raw == null) return [];
+      return (jsonDecode(raw) as List)
+          .map((item) => FolderItem.fromJson(item as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> save(List<FolderItem> folders) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(key, jsonEncode(folders.map((folder) => folder.toJson()).toList()));
+  }
+}
+
 class DocumentRepository {
   static const key = 'docnote.documents';
   Future<List<DocumentItem>> load() async {

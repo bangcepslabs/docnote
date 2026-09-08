@@ -26,11 +26,29 @@ abstract final class DocNoteTheme {
   }
 
   static ThemeData dark() {
-    final scheme = ColorScheme.fromSeed(
+    final seeded = ColorScheme.fromSeed(
       seedColor: accent,
       brightness: Brightness.dark,
     );
-    return _base(scheme, const Color(0xff111417));
+    // Keep dark surfaces deliberately stepped instead of collapsing every
+    // layer to OLED black. This gives the library, sheets and navigation a
+    // quiet but readable depth without changing any layout.
+    final scheme = seeded.copyWith(
+      surface: const Color(0xff20242a),
+      surfaceContainerLowest: const Color(0xff15171b),
+      surfaceContainerLow: const Color(0xff1b1e23),
+      surfaceContainer: const Color(0xff20242a),
+      surfaceContainerHigh: const Color(0xff272c33),
+      surfaceContainerHighest: const Color(0xff2d333b),
+      outline: const Color(0xff383e47),
+      outlineVariant: const Color(0xff323841),
+      onSurface: const Color(0xfff3f4f6),
+      onSurfaceVariant: const Color(0xffb3b8c0),
+      primary: accent,
+      primaryContainer: const Color(0xff294b68),
+      onPrimaryContainer: const Color(0xffd7eaff),
+    );
+    return _base(scheme, const Color(0xff15171b));
   }
 
   static ThemeData _base(ColorScheme scheme, Color background) {
@@ -52,7 +70,9 @@ abstract final class DocNoteTheme {
         labelSmall: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
       ),
       appBarTheme: AppBarTheme(
-        backgroundColor: background,
+        backgroundColor: scheme.brightness == Brightness.dark
+            ? scheme.surfaceContainerLow
+            : background,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         centerTitle: false,
@@ -78,11 +98,44 @@ abstract final class DocNoteTheme {
         backgroundColor: scheme.surface,
         surfaceTintColor: Colors.transparent,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(radiusSheet)),
+          borderRadius:
+              BorderRadius.vertical(top: Radius.circular(radiusSheet)),
+        ),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: scheme.inverseSurface,
+        contentTextStyle: TextStyle(
+          color: scheme.onInverseSurface,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(radiusMd),
+        ),
+        insetPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        actionTextColor: scheme.inversePrimary,
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: scheme.brightness == Brightness.dark
+            ? scheme.surfaceContainerHigh
+            : scheme.surface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(radiusMd),
+        ),
+        menuPadding: const EdgeInsets.symmetric(vertical: 6),
+        textStyle: TextStyle(
+          color: scheme.onSurface,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
         ),
       ),
       navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: scheme.surface,
+        backgroundColor: scheme.brightness == Brightness.dark
+            ? scheme.surfaceContainerLow
+            : scheme.surface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         height: 76,
@@ -94,9 +147,12 @@ abstract final class DocNoteTheme {
       cardTheme: CardThemeData(
         elevation: 0,
         margin: EdgeInsets.zero,
-        color: scheme.surface,
+        color: scheme.brightness == Brightness.dark
+            ? scheme.surfaceContainerHigh
+            : scheme.surface,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusLg)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(radiusLg)),
       ),
       chipTheme: ChipThemeData(
         shape: const StadiumBorder(),

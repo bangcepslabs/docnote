@@ -4,7 +4,7 @@ import 'stroke.dart';
 import 'drawing_text.dart';
 import 'drawing_image.dart';
 
-enum DrawingShapeType { line, rectangle, ellipse, arrow }
+enum DrawingShapeType { line, rectangle, ellipse, arrow, triangle }
 
 /// A page-bound, editable outline object. Points use the same normalized page
 /// coordinate system as [Stroke], so existing canvas scaling remains intact.

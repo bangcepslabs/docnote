@@ -12,7 +12,6 @@ import '../data/pdf_export_service.dart';
 import '../data/pdf_file_validator.dart';
 import '../../drawing/domain/stroke.dart';
 import '../../drawing/presentation/drawing_editor.dart';
-import '../../../core/theme/docnote_theme.dart';
 
 enum PdfInteractionMode { view, draw }
 

@@ -1,10 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,6 +15,12 @@ import '../domain/drawing_shape.dart';
 import '../domain/drawing_text.dart';
 import '../domain/drawing_image.dart';
 import '../domain/stroke.dart';
+
+enum EraserMode { partial, wholeStroke }
+
+enum LassoMode { freeform, rectangle }
+
+const _drawingPerfEnabled = kDebugMode || kProfileMode;
 
 class DrawingEditorPage extends StatefulWidget {
   const DrawingEditorPage(
@@ -36,6 +43,8 @@ class DrawingEditorPage extends StatefulWidget {
 
 class _DrawingEditorPageState extends State<DrawingEditorPage>
     with WidgetsBindingObserver {
+  bool get _perfEnabled => kDebugMode || kProfileMode;
+  bool _instrumentationEnabled = true;
   final store = AnnotationStore();
   final strokes = <Stroke>[];
   final shapes = <DrawingShape>[];
@@ -50,6 +59,58 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   final selectedShapeIds = <String>{};
   final selectedTextIds = <String>{};
   final selectedImageIds = <String>{};
+  final canvasRevision = ValueNotifier<int>(0);
+  final staticRevisionNotifier = ValueNotifier<int>(0);
+  int staticRevision = 0;
+  int _editorBuilds = 0;
+  int _pointerMoves = 0;
+  int _painterRepaints = 0;
+  int _staticPainterRepaints = 0;
+  int _activePainterRepaints = 0;
+  int _activeRevisionUpdates = 0;
+  // Pointer moves can arrive faster than Flutter can present a frame. Keep
+  // collecting points immediately, but coalesce active-layer invalidations to
+  // at most one notifier update per frame.
+  bool _activeRevisionScheduled = false;
+  int _activeRevisionGeneration = 0;
+  int _undoEstimatedBytes = 0;
+  int _redoEstimatedBytes = 0;
+  int _staticObjectPaintCount = 0;
+  int _rawMoveEvents = 0;
+  int _acceptedPoints = 0;
+  int _rejectedNearPoints = 0;
+  double _totalPointDistancePx = 0;
+  double _minPointDistancePx = double.infinity;
+  double _maxPointDistancePx = 0;
+  int _pathBuildCount = 0;
+  int _pathBuildTotalUs = 0;
+  int _pathBuildMaxUs = 0;
+  int _fullPathRebuildCount = 0;
+  int _incrementalSegmentBuildCount = 0;
+  int _incrementalBuildTotalUs = 0;
+  int _incrementalBuildMaxUs = 0;
+  int _activePaintTotalUs = 0;
+  int _activePaintMaxUs = 0;
+  int _activePaintSamples = 0;
+  int _overlayPaintTotalUs = 0;
+  int _overlayPaintMaxUs = 0;
+  int _overlayPaintSamples = 0;
+  int _pictureDrawTotalUs = 0;
+  int _pictureDrawMaxUs = 0;
+  int _pictureDrawSamples = 0;
+  int _activePathDrawTotalUs = 0;
+  int _activePathDrawMaxUs = 0;
+  int _activePathDrawSamples = 0;
+  Stopwatch? _strokeClock;
+  Duration _frameTotal = Duration.zero;
+  Duration _frameMax = Duration.zero;
+  int _frameSamples = 0;
+  final _frameDurationsUs = <int>[];
+  final _buildDurationsUs = <int>[];
+  final _rasterDurationsUs = <int>[];
+  _PerfSample? _lastPerfSample;
+  bool _benchmarkReplayActive = false;
+  bool _useIncrementalActivePath = true;
   bool pickingImage = false;
   DrawingText? editingText;
   _PageSnapshot? textEditBaseline;
@@ -62,6 +123,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   Rect? selectionMoveBounds;
   bool movingSelection = false;
   bool resizingSelection = false;
+  _ResizeHandle? activeResizeHandle;
   bool rotatingSelection = false;
   double rotationStartAngle = 0;
   DrawingShapeType shapeType = DrawingShapeType.line;
@@ -72,7 +134,13 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   Color highlighterColor = const Color(0xffd58b3a);
   double penWidth = 3;
   double highlighterWidth = 8;
+  double highlighterOpacity = .35;
   double eraserWidth = 10;
+  EraserMode eraserMode = EraserMode.partial;
+  LassoMode lassoMode = LassoMode.freeform;
+  bool lassoIncludeStrokes = true;
+  bool lassoIncludeTexts = true;
+  bool lassoIncludeImages = true;
   bool loaded = false;
   bool toolbarVisible = true;
   late int pageCount = widget.initialPageCount;
@@ -87,6 +155,54 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       };
   Color get activeColor =>
       tool == StrokeTool.highlighter ? highlighterColor : penColor;
+
+  void _bumpCanvas({bool staticLayer = false}) {
+    canvasRevision.value++;
+    if (_perfEnabled && !staticLayer) {
+      _activeRevisionUpdates++;
+    }
+    if (staticLayer) {
+      staticRevision++;
+      staticRevisionNotifier.value++;
+    }
+  }
+
+  void _bumpActiveCanvas() {
+    if (_activeRevisionScheduled) return;
+    _activeRevisionScheduled = true;
+    final generation = ++_activeRevisionGeneration;
+    SchedulerBinding.instance.scheduleFrameCallback((_) {
+      if (generation != _activeRevisionGeneration) return;
+      _activeRevisionScheduled = false;
+      if (!mounted) return;
+      canvasRevision.value++;
+      if (_perfEnabled) _activeRevisionUpdates++;
+    });
+  }
+
+  void _flushActiveCanvas() {
+    if (!_activeRevisionScheduled) return;
+    // The scheduled callback may still run later in this frame. Mark it as
+    // consumed and publish the latest active points now so pointer-up never
+    // commits a stroke before its final segment is visible.
+    _activeRevisionScheduled = false;
+    _activeRevisionGeneration++;
+    canvasRevision.value++;
+    if (_perfEnabled) _activeRevisionUpdates++;
+  }
+
+  void _onFrameTimings(List<FrameTiming> timings) {
+    if (!_perfEnabled || _strokeClock == null) return;
+    for (final timing in timings) {
+      final frame = timing.buildDuration + timing.rasterDuration;
+      _frameTotal += frame;
+      if (frame > _frameMax) _frameMax = frame;
+      _frameSamples++;
+      _frameDurationsUs.add(frame.inMicroseconds);
+      _buildDurationsUs.add(timing.buildDuration.inMicroseconds);
+      _rasterDurationsUs.add(timing.rasterDuration.inMicroseconds);
+    }
+  }
 
   void _setTool(StrokeTool next) {
     if (next != StrokeTool.text) _finishTextEdit();
@@ -103,6 +219,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     active.clear();
     activeShape = null;
     lassoPath.clear();
+    _bumpCanvas();
     setState(() {});
   }
 
@@ -177,6 +294,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    SchedulerBinding.instance.addTimingsCallback(_onFrameTimings);
     _load();
   }
 
@@ -211,6 +329,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    SchedulerBinding.instance.removeTimingsCallback(_onFrameTimings);
+    _activeRevisionScheduled = false;
+    canvasRevision.dispose();
+    staticRevisionNotifier.dispose();
     saveTimer?.cancel();
     // Decoded page images are native resources; release them when leaving the
     // editor so long editing sessions do not retain bitmap memory.
@@ -252,10 +374,330 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       texts: List.of(texts),
       images: List.of(images));
 
+  /// Creates an in-memory workload for profiling. It is debug-only and never
+  /// scheduled for persistence, so user documents are not modified on disk.
+  void _loadDebugBenchmark(int count) {
+    if (!_perfEnabled) return;
+    strokes
+      ..clear()
+      ..addAll(List.generate(count, (index) {
+        final y = .08 + (index % 80) * .0105;
+        final x = .06 + ((index * 37) % 88) / 1000;
+        return Stroke(
+          id: 'benchmark-$count-$index',
+          documentId: widget.documentId,
+          pageId: pageId,
+          tool: StrokeTool.pen,
+          points: [
+            StrokePoint(x, y, 1),
+            StrokePoint((x + .08).clamp(.0, .98), (y + .018).clamp(.0, .98), 1),
+            StrokePoint((x + .16).clamp(.0, .98), (y + .006).clamp(.0, .98), 1),
+          ],
+          color: const Color(0xff263238),
+          width: 3,
+          opacity: 1,
+          order: index,
+          createdAt: DateTime.now(),
+        );
+      }));
+    shapes.clear();
+    images.clear();
+    _clearSelectionState();
+    _bumpCanvas(staticLayer: true);
+    setState(() {});
+  }
+
+  List<Offset> _debugReplayPath(String preset) {
+    switch (preset) {
+      case 'straightSlow':
+        return [
+          for (var i = 0; i < 80; i++) Offset(.12 + i * .009, .18 + i * .002)
+        ];
+      case 'straightFast':
+        return [
+          for (var i = 0; i < 24; i++) Offset(.12 + i * .03, .28 + i * .004)
+        ];
+      case 'circle':
+        return [
+          for (var i = 0; i <= 96; i++)
+            Offset(.5 + .28 * math.cos(i * 2 * math.pi / 96),
+                .42 + .18 * math.sin(i * 2 * math.pi / 96)),
+        ];
+      case 'zigzag':
+        return [
+          for (var i = 0; i < 80; i++)
+            Offset(.12 + i * .009, .25 + (i.isEven ? .08 : -.08)),
+        ];
+      case 'handwritingLike':
+        return [
+          for (var i = 0; i < 120; i++)
+            Offset(.12 + i * .0065,
+                .42 + .035 * math.sin(i * .28) + .012 * math.sin(i * .83)),
+        ];
+      case 'longCurve250':
+      case 'longCurve500':
+      case 'longCurve1000':
+        final count = int.parse(preset.replaceAll('longCurve', ''));
+        return [
+          for (var i = 0; i < count; i++)
+            Offset(.08 + .84 * i / (count - 1),
+                .42 + .22 * math.sin(i * 2 * math.pi / 110)),
+        ];
+      default:
+        return _debugReplayPath('straightSlow');
+    }
+  }
+
+  Future<void> _runDebugReplay(String preset,
+      {bool pressureReplay = false}) async {
+    if (!_perfEnabled || !mounted) return;
+    final renderSize = MediaQuery.sizeOf(context).width;
+    final size = Size(renderSize, renderSize / .7);
+    final points = _debugReplayPath(preset);
+    final previousTool = tool;
+    tool = StrokeTool.pen;
+    _benchmarkReplayActive = true;
+    try {
+      double pressureAt(int index) => pressureReplay
+          ? (.5 + .5 * math.sin(index * 2 * math.pi / 37)).clamp(.1, 1.0)
+          : 1.0;
+      _start(
+          Offset(points.first.dx * size.width, points.first.dy * size.height),
+          pressureAt(0),
+          size);
+      for (var index = 1; index < points.length; index++) {
+        final point = points[index];
+        await Future<void>.delayed(const Duration(milliseconds: 8));
+        _move(Offset(point.dx * size.width, point.dy * size.height),
+            pressureAt(index), size);
+      }
+      _end();
+      await SchedulerBinding.instance.endOfFrame;
+    } finally {
+      _benchmarkReplayActive = false;
+      tool = previousTool;
+    }
+  }
+
+  Future<void> _runDebugReplayBenchmark() async {
+    if (!_perfEnabled || !mounted) return;
+    final originalPage = _snapshot();
+    final originalUndo = List<_PageSnapshot>.of(undoHistory);
+    final originalRedo = List<_PageSnapshot>.of(redoHistory);
+    const workloads = kProfileMode ? [500, 1000] : [100, 500, 1000];
+    const presets = kProfileMode
+        ? ['circle', 'handwritingLike']
+        : [
+            'straightSlow',
+            'straightFast',
+            'circle',
+            'zigzag',
+            'handwritingLike'
+          ];
+    debugPrint(
+        '[DrawingBenchmark] begin mode=${kProfileMode ? 'profile' : 'debug'} runs=5 warmup=1');
+    try {
+      for (final workload in workloads) {
+        for (final preset in presets) {
+          // Reset before every preset so each series has exactly the same
+          // committed-object workload and never includes prior replay strokes.
+          _loadDebugBenchmark(workload);
+          await SchedulerBinding.instance.endOfFrame;
+          final samples = <_PerfSample>[];
+          for (var run = 0; run < 6; run++) {
+            await _runDebugReplay(preset);
+            if (run == 0) {
+              debugPrint(
+                  '[DrawingBenchmark] warmup workload=$workload replay=$preset');
+            } else {
+              final sample = _lastPerfSample;
+              if (sample != null) {
+                samples.add(sample);
+                debugPrint(
+                    '[DrawingBenchmark] workload=$workload replay=$preset run=$run '
+                    'raw=${sample.rawMoveEvents} accepted=${sample.acceptedPoints} '
+                    'rejected=${sample.rejectedNearPoints} reduction=${sample.reductionRate.toStringAsFixed(1)}% '
+                    'avgDistance=${sample.avgPointDistance.toStringAsFixed(2)} '
+                    'minDistance=${sample.minPointDistance.toStringAsFixed(2)} '
+                    'maxDistance=${sample.maxPointDistance.toStringAsFixed(2)} '
+                    'totalDistance=${sample.totalStrokeDistance.toStringAsFixed(2)} '
+                    'pathCount=${sample.pathBuildCount} pathAvgUs=${sample.pathBuildAvgUs} pathMaxUs=${sample.pathBuildMaxUs} '
+                    'editorBuilds=${sample.editorBuilds} staticRepaints=${sample.staticPainterRepaints} '
+                    'activeRepaints=${sample.activePainterRepaints} staticObjects=${sample.staticObjectPaintCount} '
+                    'avgFrame=${sample.avgFrameMs.toStringAsFixed(2)} p95=${sample.p95FrameMs.toStringAsFixed(2)} '
+                    'maxFrame=${sample.maxFrameMs.toStringAsFixed(2)} elapsed=${sample.strokeElapsedMs}');
+              }
+            }
+          }
+          _logReplayAggregate(workload, preset, samples);
+        }
+      }
+      debugPrint('[DrawingBenchmark] end');
+    } finally {
+      _replacePage(originalPage);
+      undoHistory
+        ..clear()
+        ..addAll(originalUndo);
+      redoHistory
+        ..clear()
+        ..addAll(originalRedo);
+      active.clear();
+      activeShape = null;
+      _refreshHistoryMemoryEstimate();
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _runLongStrokeBenchmark({bool pressureReplay = false}) async {
+    if (!_perfEnabled || !mounted) return;
+    final originalPage = _snapshot();
+    final originalUndo = List<_PageSnapshot>.of(undoHistory);
+    final originalRedo = List<_PageSnapshot>.of(redoHistory);
+    const workloads = [250, 500, 1000];
+    try {
+      debugPrint('[DrawingBenchmark] long-stroke begin runs=5 warmup=1');
+      for (final workload in workloads) {
+        final preset = 'longCurve$workload';
+        _loadDebugBenchmark(workload);
+        await SchedulerBinding.instance.endOfFrame;
+        final samples = <_PerfSample>[];
+        for (var run = 0; run < 6; run++) {
+          await _runDebugReplay(preset, pressureReplay: pressureReplay);
+          final sample = _lastPerfSample;
+          if (run > 0 && sample != null) samples.add(sample);
+        }
+        _logReplayAggregate(workload, preset, samples,
+            label: pressureReplay
+                ? 'long-pressure-incremental'
+                : (_useIncrementalActivePath
+                    ? 'long-incremental'
+                    : 'long-legacy'));
+      }
+      debugPrint('[DrawingBenchmark] long-stroke end');
+    } finally {
+      _replacePage(originalPage);
+      undoHistory
+        ..clear()
+        ..addAll(originalUndo);
+      redoHistory
+        ..clear()
+        ..addAll(originalRedo);
+      active.clear();
+      activeShape = null;
+      _refreshHistoryMemoryEstimate();
+      if (mounted) setState(() {});
+    }
+  }
+
+  /// Runs the small matrix used to attribute frame spikes. It deliberately
+  /// changes no drawing behavior; only the runtime cache and instrumentation
+  /// switches are toggled around the same replay input.
+  Future<void> _runFrameDiagnosisBenchmark() async {
+    if (!_perfEnabled || !mounted) return;
+    const workloads = [500, 1000];
+    const presets = ['circle', 'handwritingLike'];
+    final oldIncremental = _useIncrementalActivePath;
+    final oldInstrumentation = _instrumentationEnabled;
+    const configs = [
+      ('incremental+on', true, true),
+      ('incremental+off', true, false),
+      ('legacy+off', false, false),
+    ];
+    debugPrint(
+        '[DrawingDiagnosis] begin mode=${kProfileMode ? 'profile' : 'debug'}');
+    try {
+      for (final config in configs) {
+        _useIncrementalActivePath = config.$2;
+        _instrumentationEnabled = config.$3;
+        for (final workload in workloads) {
+          for (final preset in presets) {
+            _loadDebugBenchmark(workload);
+            await SchedulerBinding.instance.endOfFrame;
+            final samples = <_PerfSample>[];
+            for (var run = 0; run < 6; run++) {
+              await _runDebugReplay(preset);
+              final sample = _lastPerfSample;
+              if (run > 0 && sample != null) {
+                samples.add(sample);
+              }
+            }
+            _logReplayAggregate(workload, preset, samples, label: config.$1);
+          }
+        }
+      }
+    } finally {
+      _useIncrementalActivePath = oldIncremental;
+      _instrumentationEnabled = oldInstrumentation;
+    }
+    debugPrint('[DrawingDiagnosis] end');
+  }
+
+  void _logReplayAggregate(
+      int workload, String preset, List<_PerfSample> samples,
+      {String label = 'incremental+instrumentation'}) {
+    if (samples.isEmpty) return;
+    double avg(num Function(_PerfSample) value) =>
+        samples
+            .map((sample) => value(sample).toDouble())
+            .reduce((a, b) => a + b) /
+        samples.length;
+    double max(num Function(_PerfSample) value) =>
+        samples.map((sample) => value(sample).toDouble()).reduce(math.max);
+    debugPrint(
+        '[DrawingBenchmarkAggregate] mode=$label workload=$workload replay=$preset '
+        'runs=${samples.length} '
+        'rawAvg=${avg((s) => s.rawMoveEvents).toStringAsFixed(1)} rawMax=${max((s) => s.rawMoveEvents).round()} '
+        'acceptedAvg=${avg((s) => s.acceptedPoints).toStringAsFixed(1)} acceptedMax=${max((s) => s.acceptedPoints).round()} '
+        'rejectedAvg=${avg((s) => s.rejectedNearPoints).toStringAsFixed(1)} rejectedMax=${max((s) => s.rejectedNearPoints).round()} '
+        'reductionAvg=${avg((s) => s.reductionRate).toStringAsFixed(1)}% reductionMax=${max((s) => s.reductionRate).toStringAsFixed(1)}% '
+        'distanceAvg=${avg((s) => s.avgPointDistance).toStringAsFixed(2)} totalDistanceAvg=${avg((s) => s.totalStrokeDistance).toStringAsFixed(2)} '
+        'pathAvgUs=${avg((s) => s.pathBuildAvgUs).round()} pathMaxUs=${max((s) => s.pathBuildMaxUs).round()} '
+        'fullRebuildAvg=${avg((s) => s.fullPathRebuildCount).toStringAsFixed(1)} '
+        'incrementalSegmentsAvg=${avg((s) => s.incrementalSegmentBuildCount).toStringAsFixed(1)} '
+        'incrementalAvgUs=${avg((s) => s.incrementalBuildAvgUs).round()} incrementalMaxUs=${max((s) => s.incrementalBuildMaxUs).round()} '
+        'activePaintAvgUs=${avg((s) => s.activePaintAvgUs).round()} activePaintMaxUs=${max((s) => s.activePaintMaxUs).round()} '
+        'pictureDrawAvgUs=${avg((s) => s.pictureDrawAvgUs).round()} pictureDrawMaxUs=${max((s) => s.pictureDrawMaxUs).round()} '
+        'activePathDrawAvgUs=${avg((s) => s.activePathDrawAvgUs).round()} activePathDrawMaxUs=${max((s) => s.activePathDrawMaxUs).round()} '
+        'overlayPaintAvgUs=${avg((s) => s.overlayPaintAvgUs).round()} overlayPaintMaxUs=${max((s) => s.overlayPaintMaxUs).round()} '
+        'buildAvg=${avg((s) => s.buildAvgMs).toStringAsFixed(2)} buildP95=${avg((s) => s.buildP95Ms).toStringAsFixed(2)} buildMax=${max((s) => s.buildMaxMs).toStringAsFixed(2)} '
+        'rasterAvg=${avg((s) => s.rasterAvgMs).toStringAsFixed(2)} rasterP95=${avg((s) => s.rasterP95Ms).toStringAsFixed(2)} rasterMax=${max((s) => s.rasterMaxMs).toStringAsFixed(2)} '
+        'editorBuildsAvg=${avg((s) => s.editorBuilds).toStringAsFixed(1)} staticRepaintsAvg=${avg((s) => s.staticPainterRepaints).toStringAsFixed(1)} '
+        'activeRepaintsAvg=${avg((s) => s.activePainterRepaints).toStringAsFixed(1)} activeRevisionAvg=${avg((s) => s.activeRevisionUpdates).toStringAsFixed(1)} '
+        'staticObjectsAvg=${avg((s) => s.staticObjectPaintCount).toStringAsFixed(1)} '
+        'frameAvg=${avg((s) => s.avgFrameMs).toStringAsFixed(2)} frameP95Avg=${avg((s) => s.p95FrameMs).toStringAsFixed(2)} '
+        'frameMax=${max((s) => s.maxFrameMs).toStringAsFixed(2)} elapsedAvg=${avg((s) => s.strokeElapsedMs).round()} elapsedMax=${max((s) => s.strokeElapsedMs).round()}');
+  }
+
   void _recordHistory([_PageSnapshot? before]) {
-    undoHistory.add(before ?? _snapshot());
+    final snapshot = before ?? _snapshot();
+    undoHistory.add(snapshot);
     if (undoHistory.length > 80) undoHistory.removeAt(0);
     redoHistory.clear();
+    _refreshHistoryMemoryEstimate();
+  }
+
+  int _estimateSnapshotBytes(_PageSnapshot snapshot) {
+    // Runtime estimate only: domain objects remain shared between snapshots,
+    // so count the list/point payload that a snapshot keeps reachable. This
+    // does not affect the persisted format or undo semantics.
+    var points = 0;
+    for (final stroke in snapshot.strokes) {
+      points += stroke.points.length;
+    }
+    return 256 +
+        snapshot.strokes.length * 160 +
+        snapshot.shapes.length * 160 +
+        snapshot.texts.length * 192 +
+        snapshot.images.length * 192 +
+        points * 32;
+  }
+
+  void _refreshHistoryMemoryEstimate() {
+    if (!_perfEnabled) return;
+    _undoEstimatedBytes = undoHistory.fold<int>(
+        0, (total, snapshot) => total + _estimateSnapshotBytes(snapshot));
+    _redoEstimatedBytes = redoHistory.fold<int>(
+        0, (total, snapshot) => total + _estimateSnapshotBytes(snapshot));
   }
 
   void _replacePage(_PageSnapshot snapshot) {
@@ -271,6 +713,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     images
       ..clear()
       ..addAll(snapshot.images);
+    _bumpCanvas(staticLayer: true);
   }
 
   void _replaceLoadedPage(DrawingPageData page) => _replacePage(_PageSnapshot(
@@ -290,8 +733,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     selectionMoveBounds = null;
     movingSelection = false;
     resizingSelection = false;
+    activeResizeHandle = null;
     rotatingSelection = false;
     rotationStartAngle = 0;
+    _bumpCanvas();
   }
 
   Rect? _selectedBounds() {
@@ -512,10 +957,52 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   }
 
   void _start(Offset p, double pressure, Size size) {
+    if (_perfEnabled) {
+      _editorBuilds = 0;
+      _painterRepaints = 0;
+      _staticPainterRepaints = 0;
+      _activePainterRepaints = 0;
+      _activeRevisionUpdates = 0;
+      _staticObjectPaintCount = 0;
+      _pointerMoves = 0;
+      _strokeClock = Stopwatch()..start();
+      _frameTotal = Duration.zero;
+      _frameMax = Duration.zero;
+      _frameSamples = 0;
+      _frameDurationsUs.clear();
+      _buildDurationsUs.clear();
+      _rasterDurationsUs.clear();
+      _pathBuildCount = 0;
+      _pathBuildTotalUs = 0;
+      _pathBuildMaxUs = 0;
+      _fullPathRebuildCount = 0;
+      _incrementalSegmentBuildCount = 0;
+      _incrementalBuildTotalUs = 0;
+      _incrementalBuildMaxUs = 0;
+      _activePaintTotalUs = 0;
+      _activePaintMaxUs = 0;
+      _activePaintSamples = 0;
+      _overlayPaintTotalUs = 0;
+      _overlayPaintMaxUs = 0;
+      _overlayPaintSamples = 0;
+      _pictureDrawTotalUs = 0;
+      _pictureDrawMaxUs = 0;
+      _pictureDrawSamples = 0;
+      _activePathDrawTotalUs = 0;
+      _activePathDrawMaxUs = 0;
+      _activePathDrawSamples = 0;
+      _rawMoveEvents = 0;
+      _acceptedPoints = 1;
+      _rejectedNearPoints = 0;
+      _totalPointDistancePx = 0;
+      _minPointDistancePx = double.infinity;
+      _maxPointDistancePx = 0;
+    }
     if (tool == StrokeTool.shapeLine ||
         tool == StrokeTool.shapeRectangle ||
         tool == StrokeTool.shapeEllipse ||
-        tool == StrokeTool.shapeArrow) {
+        tool == StrokeTool.shapeArrow ||
+        tool == StrokeTool.shapeTriangle) {
       _shapeStart(p, size);
       return;
     }
@@ -527,14 +1014,17 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     active
       ..clear()
       ..add(normalizePoint(p, size, pressure: pressure));
-    setState(() {});
+    _bumpCanvas();
   }
 
   void _move(Offset p, double pressure, Size size) {
+    _pointerMoves++;
+    _rawMoveEvents++;
     if (tool == StrokeTool.shapeLine ||
         tool == StrokeTool.shapeRectangle ||
         tool == StrokeTool.shapeEllipse ||
-        tool == StrokeTool.shapeArrow) {
+        tool == StrokeTool.shapeArrow ||
+        tool == StrokeTool.shapeTriangle) {
       _shapeMove(p, size);
       return;
     }
@@ -548,21 +1038,45 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     // Keep the latest pressure sample but avoid storing near-identical move
     // events. This reduces stroke size and repaint work without changing the
     // normalized coordinate model or the visible path.
-    if ((next.x - previous.x) * (next.x - previous.x) +
-            (next.y - previous.y) * (next.y - previous.y) <
-        .0000015) {
+    // Compare movement in physical canvas pixels rather than normalized
+    // coordinates so sampling stays consistent across phone/tablet sizes.
+    final dxPixels = (next.x - previous.x) * size.width;
+    final dyPixels = (next.y - previous.y) * size.height;
+    final distance = math.sqrt(dxPixels * dxPixels + dyPixels * dyPixels);
+    _totalPointDistancePx += distance;
+    _minPointDistancePx = math.min(_minPointDistancePx, distance);
+    _maxPointDistancePx = math.max(_maxPointDistancePx, distance);
+    // Keep the pre-optimization normalized threshold for this baseline. The
+    // physical pixel distance above is instrumentation only at this stage.
+    final normalizedDx = next.x - previous.x;
+    final normalizedDy = next.y - previous.y;
+    final normalizedDistanceSquared =
+        normalizedDx * normalizedDx + normalizedDy * normalizedDy;
+    if (normalizedDistanceSquared < .0000015) {
       active[active.length - 1] = next;
+      _rejectedNearPoints++;
     } else {
       active.add(next);
+      _acceptedPoints++;
     }
-    setState(() {});
+    _bumpActiveCanvas();
+  }
+
+  List<double> _timingStats(List<int> values) {
+    if (values.isEmpty) return [0, 0, 0];
+    final sorted = List<int>.of(values)..sort();
+    final average = sorted.reduce((a, b) => a + b) / sorted.length / 1000.0;
+    final p95 = sorted[((sorted.length - 1) * .95).round()] / 1000.0;
+    final max = sorted.last / 1000.0;
+    return [average, p95, max];
   }
 
   void _end() {
     if (tool == StrokeTool.shapeLine ||
         tool == StrokeTool.shapeRectangle ||
         tool == StrokeTool.shapeEllipse ||
-        tool == StrokeTool.shapeArrow) {
+        tool == StrokeTool.shapeArrow ||
+        tool == StrokeTool.shapeTriangle) {
       _shapeEnd();
       return;
     }
@@ -575,6 +1089,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       return;
     }
     if (active.isEmpty) return;
+    _flushActiveCanvas();
     _recordHistory();
     strokes.add(Stroke(
         id: '${DateTime.now().microsecondsSinceEpoch}',
@@ -584,12 +1099,102 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         points: List.of(active),
         color: activeColor,
         width: activeWidth,
-        opacity: tool == StrokeTool.highlighter ? .35 : 1,
+        opacity: tool == StrokeTool.highlighter ? highlighterOpacity : 1,
         order: strokes.length,
         createdAt: DateTime.now()));
     active.clear();
-    _scheduleSave();
+    if (!_benchmarkReplayActive) _scheduleSave();
     setState(() {});
+    _bumpCanvas(staticLayer: true);
+    if (_perfEnabled) {
+      _strokeClock?.stop();
+      final points = strokes.last.points.length;
+      final averageMs = _frameSamples == 0
+          ? 0.0
+          : _frameTotal.inMicroseconds / _frameSamples / 1000.0;
+      final sortedFrames = List<int>.of(_frameDurationsUs)..sort();
+      final p95Ms = sortedFrames.isEmpty
+          ? 0.0
+          : sortedFrames[((sortedFrames.length - 1) * .95).round()] / 1000.0;
+      final buildStats = _timingStats(_buildDurationsUs);
+      final rasterStats = _timingStats(_rasterDurationsUs);
+      _lastPerfSample = _PerfSample(
+        rawMoveEvents: _rawMoveEvents,
+        acceptedPoints: points,
+        rejectedNearPoints: _rejectedNearPoints,
+        avgPointDistance:
+            _rawMoveEvents == 0 ? 0 : _totalPointDistancePx / _rawMoveEvents,
+        minPointDistance:
+            _minPointDistancePx.isFinite ? _minPointDistancePx : 0.0,
+        maxPointDistance: _maxPointDistancePx,
+        totalStrokeDistance: _totalPointDistancePx,
+        pathBuildCount: _pathBuildCount,
+        pathBuildAvgUs: _pathBuildCount == 0
+            ? 0
+            : (_pathBuildTotalUs / _pathBuildCount).round(),
+        pathBuildMaxUs: _pathBuildMaxUs,
+        fullPathRebuildCount: _fullPathRebuildCount,
+        incrementalSegmentBuildCount: _incrementalSegmentBuildCount,
+        incrementalBuildAvgUs: _incrementalSegmentBuildCount == 0
+            ? 0
+            : (_incrementalBuildTotalUs / _incrementalSegmentBuildCount)
+                .round(),
+        incrementalBuildMaxUs: _incrementalBuildMaxUs,
+        activePaintAvgUs: _activePaintSamples == 0
+            ? 0
+            : (_activePaintTotalUs / _activePaintSamples).round(),
+        activePaintMaxUs: _activePaintMaxUs,
+        overlayPaintAvgUs: _overlayPaintSamples == 0
+            ? 0
+            : (_overlayPaintTotalUs / _overlayPaintSamples).round(),
+        overlayPaintMaxUs: _overlayPaintMaxUs,
+        pictureDrawAvgUs: _pictureDrawSamples == 0
+            ? 0
+            : (_pictureDrawTotalUs / _pictureDrawSamples).round(),
+        pictureDrawMaxUs: _pictureDrawMaxUs,
+        activePathDrawAvgUs: _activePathDrawSamples == 0
+            ? 0
+            : (_activePathDrawTotalUs / _activePathDrawSamples).round(),
+        activePathDrawMaxUs: _activePathDrawMaxUs,
+        editorBuilds: _editorBuilds,
+        staticPainterRepaints: _staticPainterRepaints,
+        activePainterRepaints: _activePainterRepaints,
+        activeRevisionUpdates: _activeRevisionUpdates,
+        staticObjectPaintCount: _staticObjectPaintCount,
+        avgFrameMs: averageMs,
+        p95FrameMs: p95Ms,
+        maxFrameMs: _frameMax.inMicroseconds / 1000.0,
+        strokeElapsedMs: _strokeClock?.elapsedMilliseconds ?? 0,
+        buildAvgMs: buildStats[0],
+        buildP95Ms: buildStats[1],
+        buildMaxMs: buildStats[2],
+        rasterAvgMs: rasterStats[0],
+        rasterP95Ms: rasterStats[1],
+        rasterMaxMs: rasterStats[2],
+      );
+      debugPrint('[DrawingPerf] moves=$_pointerMoves points=$points '
+          'editorBuilds=$_editorBuilds painterRepaints=$_painterRepaints '
+          'staticPainterRepaints=$_staticPainterRepaints '
+          'activePainterRepaints=$_activePainterRepaints '
+          'activeRevisionUpdates=$_activeRevisionUpdates '
+          'staticObjectPaintCount=$_staticObjectPaintCount '
+          'rawMoveEvents=$_rawMoveEvents acceptedPoints=$_acceptedPoints '
+          'rejectedNearPoints=$_rejectedNearPoints '
+          'avgPointDistancePx=${_rawMoveEvents == 0 ? 0 : (_totalPointDistancePx / _rawMoveEvents).toStringAsFixed(2)} '
+          'minPointDistancePx=${_minPointDistancePx.isFinite ? _minPointDistancePx.toStringAsFixed(2) : 0} '
+          'maxPointDistancePx=${_maxPointDistancePx.toStringAsFixed(2)} '
+          'pathBuildCount=$_pathBuildCount pathBuildAvgUs=${_pathBuildCount == 0 ? 0 : (_pathBuildTotalUs / _pathBuildCount).round()} pathBuildMaxUs=$_pathBuildMaxUs '
+          'fullPathRebuildCount=$_fullPathRebuildCount incrementalSegmentBuildCount=$_incrementalSegmentBuildCount '
+          'incrementalBuildAvgUs=${_incrementalSegmentBuildCount == 0 ? 0 : (_incrementalBuildTotalUs / _incrementalSegmentBuildCount).round()} incrementalBuildMaxUs=$_incrementalBuildMaxUs '
+          'activePaintAvgUs=${_activePaintSamples == 0 ? 0 : (_activePaintTotalUs / _activePaintSamples).round()} activePaintMaxUs=$_activePaintMaxUs '
+          'overlayPaintAvgUs=${_overlayPaintSamples == 0 ? 0 : (_overlayPaintTotalUs / _overlayPaintSamples).round()} overlayPaintMaxUs=$_overlayPaintMaxUs '
+          'undoDepth=${undoHistory.length} redoDepth=${redoHistory.length} '
+          'undoEstimateKb=${(_undoEstimatedBytes / 1024).toStringAsFixed(1)} redoEstimateKb=${(_redoEstimatedBytes / 1024).toStringAsFixed(1)} '
+          'frames=$_frameSamples avg=${averageMs.toStringAsFixed(2)}ms '
+          'max=${(_frameMax.inMicroseconds / 1000.0).toStringAsFixed(2)}ms '
+          'elapsed=${_strokeClock?.elapsedMilliseconds}ms');
+      _strokeClock = null;
+    }
   }
 
   void _shapeStart(Offset point, Size size) {
@@ -606,14 +1211,14 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       order: shapes.length,
       createdAt: DateTime.now(),
     );
-    setState(() {});
+    _bumpCanvas();
   }
 
   void _shapeMove(Offset point, Size size) {
     final shape = activeShape;
     if (shape == null) return;
     activeShape = shape.copyWith(endPoint: normalizePoint(point, size));
-    setState(() {});
+    _bumpCanvas();
   }
 
   void _shapeEnd() {
@@ -622,7 +1227,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     if (shape == null ||
         (shape.startPoint.x == shape.endPoint.x &&
             shape.startPoint.y == shape.endPoint.y)) {
-      setState(() {});
+      _bumpCanvas(staticLayer: true);
       return;
     }
     _recordHistory();
@@ -639,6 +1244,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       createdAt: shape.createdAt,
     ));
     _scheduleSave();
+    _bumpCanvas(staticLayer: true);
     setState(() {});
   }
 
@@ -649,6 +1255,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
           DrawingShapeType.rectangle => StrokeTool.shapeRectangle,
           DrawingShapeType.ellipse => StrokeTool.shapeEllipse,
           DrawingShapeType.arrow => StrokeTool.shapeArrow,
+          DrawingShapeType.triangle => StrokeTool.shapeTriangle,
         };
         activeShape = null;
       });
@@ -659,6 +1266,19 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     final kept = <Stroke>[];
     var changed = false;
     for (final stroke in strokes) {
+      if (eraserMode == EraserMode.wholeStroke) {
+        final intersectsEraser = stroke.points.any((point) {
+          final dx = point.x - n.x;
+          final dy = point.y - n.y;
+          return dx * dx + dy * dy <= radius * radius;
+        });
+        if (intersectsEraser) {
+          changed = true;
+          continue;
+        }
+        kept.add(stroke);
+        continue;
+      }
       final segments = <List<StrokePoint>>[];
       var segment = <StrokePoint>[];
       for (final point in stroke.points) {
@@ -701,7 +1321,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         ..clear()
         ..addAll(kept);
       _scheduleSave();
-      setState(() {});
+      _bumpCanvas(staticLayer: true);
     }
   }
 
@@ -758,6 +1378,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     editingText = null;
     textEditBaseline = null;
     textFocus.unfocus();
+    _bumpCanvas(staticLayer: true);
     if (mounted) setState(() {});
   }
 
@@ -797,6 +1418,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       _clearSelectionState();
       selectedImageIds.add(image.id);
       _scheduleSave();
+      _bumpCanvas(staticLayer: true);
       setState(() {});
     } catch (_) {
       if (mounted) {
@@ -833,28 +1455,53 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
               }),
             ),
             const SizedBox(height: 12),
-            _CropSlider(label: '왼쪽', value: left, min: 0, max: right - .05,
+            _CropSlider(
+                label: '왼쪽',
+                value: left,
+                min: 0,
+                max: right - .05,
                 onChanged: (value) => setDialogState(() => left = value)),
-            _CropSlider(label: '위쪽', value: top, min: 0, max: bottom - .05,
+            _CropSlider(
+                label: '위쪽',
+                value: top,
+                min: 0,
+                max: bottom - .05,
                 onChanged: (value) => setDialogState(() => top = value)),
-            _CropSlider(label: '오른쪽', value: right, min: left + .05, max: 1,
+            _CropSlider(
+                label: '오른쪽',
+                value: right,
+                min: left + .05,
+                max: 1,
                 onChanged: (value) => setDialogState(() => right = value)),
-            _CropSlider(label: '아래쪽', value: bottom, min: top + .05, max: 1,
+            _CropSlider(
+                label: '아래쪽',
+                value: bottom,
+                min: top + .05,
+                max: 1,
                 onChanged: (value) => setDialogState(() => bottom = value)),
           ]),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소')),
-            FilledButton(onPressed: () => Navigator.pop(context, (left, top, right, bottom)), child: const Text('적용')),
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소')),
+            FilledButton(
+                onPressed: () =>
+                    Navigator.pop(context, (left, top, right, bottom)),
+                child: const Text('적용')),
           ],
         ),
       ),
     );
     if (result == null || !mounted) return;
     _recordHistory();
-    final updated = image.copyWith(cropLeft: result.$1, cropTop: result.$2,
-        cropRight: result.$3, cropBottom: result.$4);
+    final updated = image.copyWith(
+        cropLeft: result.$1,
+        cropTop: result.$2,
+        cropRight: result.$3,
+        cropBottom: result.$4);
     images[images.indexWhere((value) => value.id == id)] = updated;
     _scheduleSave();
+    _bumpCanvas(staticLayer: true);
     setState(() {});
   }
 
@@ -862,8 +1509,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     if (undoHistory.isEmpty) return;
     redoHistory.add(_snapshot());
     _replacePage(undoHistory.removeLast());
+    _refreshHistoryMemoryEstimate();
     _clearSelectionState();
     _scheduleSave();
+    _bumpCanvas();
     setState(() {});
   }
 
@@ -871,25 +1520,33 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     if (redoHistory.isEmpty) return;
     undoHistory.add(_snapshot());
     _replacePage(redoHistory.removeLast());
+    _refreshHistoryMemoryEstimate();
     _clearSelectionState();
     _scheduleSave();
+    _bumpCanvas(staticLayer: true);
     setState(() {});
   }
 
   void _selectionStart(Offset point, Size size) {
     final normalized = normalizePoint(point, size);
     final bounds = _selectedBounds();
+    final resizeHandle =
+        bounds == null ? null : _resizeHandleHit(bounds, normalized);
     final touchesResizeHandle = bounds != null &&
         ((selectedStrokeIds.isEmpty && selectedShapeIds.isNotEmpty) ||
             (selectedStrokeIds.isEmpty &&
                 selectedShapeIds.isEmpty &&
                 selectedTextIds.isEmpty &&
                 selectedImageIds.length == 1)) &&
-        _resizeHandleHit(bounds, normalized);
+        resizeHandle != null;
     final touchesRotateHandle = bounds != null &&
         selectedStrokeIds.isEmpty &&
-        ((selectedShapeIds.isNotEmpty && selectedTextIds.isEmpty && selectedImageIds.isEmpty) ||
-            (selectedShapeIds.isEmpty && selectedTextIds.isEmpty && selectedImageIds.length == 1)) &&
+        ((selectedShapeIds.isNotEmpty &&
+                selectedTextIds.isEmpty &&
+                selectedImageIds.isEmpty) ||
+            (selectedShapeIds.isEmpty &&
+                selectedTextIds.isEmpty &&
+                selectedImageIds.length == 1)) &&
         _rotationHandleHit(bounds, normalized);
     if (bounds != null &&
         (bounds.contains(Offset(normalized.x, normalized.y)) ||
@@ -897,6 +1554,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
             touchesRotateHandle)) {
       rotatingSelection = touchesRotateHandle;
       resizingSelection = !rotatingSelection && touchesResizeHandle;
+      activeResizeHandle = resizingSelection ? resizeHandle : null;
       movingSelection = !rotatingSelection && !resizingSelection;
       selectionMoveOrigin = normalized;
       selectionMoveBounds = bounds;
@@ -907,8 +1565,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       lassoPath.clear();
     } else {
       _clearSelectionState();
+      activeResizeHandle = null;
       lassoPath.add(normalized);
     }
+    _bumpCanvas();
     setState(() {});
   }
 
@@ -916,6 +1576,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     final normalized = normalizePoint(point, size);
     if (!movingSelection && !resizingSelection && !rotatingSelection) {
       lassoPath.add(normalized);
+      _bumpCanvas();
       setState(() {});
       return;
     }
@@ -938,31 +1599,49 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
           return image.copyWith(rotationRadians: image.rotationRadians + delta);
         }).toList(),
       ));
+      _bumpCanvas();
       setState(() {});
       return;
     }
     if (resizingSelection) {
-      final targetX = normalized.x.clamp(bounds.left + .02, 1.0);
-      final targetY = normalized.y.clamp(bounds.top + .02, 1.0);
-      final scaleX = (targetX - bounds.left) / bounds.width;
-      final scaleY = (targetY - bounds.top) / bounds.height;
+      final handle = activeResizeHandle ?? _ResizeHandle.bottomRight;
+      final targetX = normalized.x.clamp(.0, 1.0);
+      final targetY = normalized.y.clamp(.0, 1.0);
+      final left = handle.horizontal == -1
+          ? targetX.clamp(0.0, bounds.right - .02)
+          : bounds.left;
+      final right = handle.horizontal == 1
+          ? targetX.clamp(bounds.left + .02, 1.0)
+          : bounds.right;
+      final top = handle.vertical == -1
+          ? targetY.clamp(0.0, bounds.bottom - .02)
+          : bounds.top;
+      final bottom = handle.vertical == 1
+          ? targetY.clamp(bounds.top + .02, 1.0)
+          : bounds.bottom;
+      final targetBounds = Rect.fromLTRB(left, top, right, bottom);
+      final scaleX = targetBounds.width / bounds.width;
+      final scaleY = targetBounds.height / bounds.height;
       _replacePage(_PageSnapshot(
         strokes: baseline.strokes,
         shapes: baseline.shapes.map((shape) {
           if (!selectedShapeIds.contains(shape.id)) return shape;
           return shape.copyWith(
-            startPoint: _scaledPoint(shape.startPoint, bounds, scaleX, scaleY),
-            endPoint: _scaledPoint(shape.endPoint, bounds, scaleX, scaleY),
+            startPoint: _scaledPoint(shape.startPoint, bounds, scaleX, scaleY,
+                offset: Offset(targetBounds.left - bounds.left,
+                    targetBounds.top - bounds.top)),
+            endPoint: _scaledPoint(shape.endPoint, bounds, scaleX, scaleY,
+                offset: Offset(targetBounds.left - bounds.left,
+                    targetBounds.top - bounds.top)),
           );
         }).toList(),
         texts: baseline.texts,
         images: baseline.images.map((image) {
           if (!selectedImageIds.contains(image.id)) return image;
-          final aspect = image.height / image.width;
-          final width =
-              (targetX - bounds.left).clamp(.08, 1 - image.position.x);
-          final height = (width * aspect).clamp(.05, 1 - image.position.y);
-          return image.copyWith(width: width, height: height);
+          return image.copyWith(
+              position: StrokePoint(targetBounds.left, targetBounds.top, 1),
+              width: targetBounds.width,
+              height: targetBounds.height);
         }).toList(),
       ));
       setState(() {});
@@ -972,8 +1651,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         (normalized.x - origin.x).clamp(-bounds.left, 1 - bounds.right);
     final rawDy =
         (normalized.y - origin.y).clamp(-bounds.top, 1 - bounds.bottom);
-    final dx = _snappedSelectionDelta(rawDx, bounds.left, bounds.right);
-    final dy = _snappedSelectionDelta(rawDy, bounds.top, bounds.bottom);
+    final dx = _snappedSelectionDelta(rawDx, bounds.left, bounds.right)
+        .clamp(-bounds.left, 1 - bounds.right);
+    final dy = _snappedSelectionDelta(rawDy, bounds.top, bounds.bottom)
+        .clamp(-bounds.top, 1 - bounds.bottom);
     _replacePage(_PageSnapshot(
       strokes: baseline.strokes.map((stroke) {
         if (!selectedStrokeIds.contains(stroke.id)) return stroke;
@@ -1002,6 +1683,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
               : image)
           .toList(),
     ));
+    _bumpCanvas();
     setState(() {});
   }
 
@@ -1015,37 +1697,53 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       selectionMoveBaseline = null;
       selectionMoveOrigin = null;
       selectionMoveBounds = null;
+      activeResizeHandle = null;
       movingSelection = false;
       resizingSelection = false;
       rotatingSelection = false;
+      _bumpCanvas();
       setState(() {});
       return;
     }
     if (lassoPath.length < 3) {
       _clearSelectionState();
+      _bumpCanvas();
       setState(() {});
       return;
     }
-    selectedStrokeIds
-      ..clear()
-      ..addAll(strokes
-          .where((stroke) => _strokeIsInsideLasso(stroke, lassoPath))
+    final selectionPolygon = _lassoSelectionPolygon();
+    final selectionBounds = _pointsBounds(selectionPolygon);
+    selectedStrokeIds.clear();
+    if (lassoIncludeStrokes) {
+      selectedStrokeIds.addAll(strokes
+          .where((stroke) =>
+              _strokeIsInsideLasso(stroke, selectionPolygon, selectionBounds))
           .map((stroke) => stroke.id));
+    }
     selectedShapeIds
       ..clear()
-      ..addAll(shapes
-          .where((shape) => _shapeIsInsideLasso(shape, lassoPath))
-          .map((shape) => shape.id));
+      ..addAll(lassoIncludeStrokes
+          ? shapes
+              .where((shape) =>
+                  _shapeIsInsideLasso(shape, selectionPolygon, selectionBounds))
+              .map((shape) => shape.id)
+          : const <String>[]);
     selectedTextIds
       ..clear()
-      ..addAll(texts
-          .where((text) => _textIsInsideLasso(text, lassoPath))
-          .map((text) => text.id));
+      ..addAll(lassoIncludeTexts
+          ? texts
+              .where((text) =>
+                  _textIsInsideLasso(text, selectionPolygon, selectionBounds))
+              .map((text) => text.id)
+          : const <String>[]);
     selectedImageIds
       ..clear()
-      ..addAll(images
-          .where((image) => _imageIsInsideLasso(image, lassoPath))
-          .map((image) => image.id));
+      ..addAll(lassoIncludeImages
+          ? images
+              .where((image) => _imageIsInsideLasso(
+                  image, selectionPolygon, selectionBounds))
+              .map((image) => image.id)
+          : const <String>[]);
     lassoPath.clear();
     if (selectedStrokeIds.isNotEmpty ||
         selectedShapeIds.isNotEmpty ||
@@ -1053,7 +1751,22 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         selectedImageIds.isNotEmpty) {
       HapticFeedback.selectionClick();
     }
+    _bumpCanvas();
     setState(() {});
+  }
+
+  List<StrokePoint> _lassoSelectionPolygon() {
+    if (lassoMode == LassoMode.freeform) return List.of(lassoPath);
+    final left = lassoPath.map((point) => point.x).reduce(math.min);
+    final right = lassoPath.map((point) => point.x).reduce(math.max);
+    final top = lassoPath.map((point) => point.y).reduce(math.min);
+    final bottom = lassoPath.map((point) => point.y).reduce(math.max);
+    return [
+      StrokePoint(left, top, 1),
+      StrokePoint(right, top, 1),
+      StrokePoint(right, bottom, 1),
+      StrokePoint(left, bottom, 1),
+    ];
   }
 
   void _deleteSelection() {
@@ -1126,9 +1839,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         createdAt: DateTime.now(),
       );
     });
-    final copiedTexts = texts
-        .where((text) => selectedTextIds.contains(text.id))
-        .map((text) {
+    final copiedTexts =
+        texts.where((text) => selectedTextIds.contains(text.id)).map((text) {
       final id = '${text.id}_copy_$stamp';
       copiedTextIds.add(id);
       return DrawingText(
@@ -1183,6 +1895,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       ..clear()
       ..addAll(copiedImageIds);
     _scheduleSave();
+    _bumpCanvas(staticLayer: true);
     setState(() {});
   }
 
@@ -1230,6 +1943,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
 
   @override
   Widget build(BuildContext context) {
+    if (_perfEnabled) _editorBuilds++;
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
@@ -1307,10 +2021,38 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
                     activeShape = null;
                     _clearSelectionState();
                     _scheduleSave();
+                    _bumpCanvas(staticLayer: true);
                     setState(() {});
                     break;
                   case 'toolbar':
                     setState(() => toolbarVisible = !toolbarVisible);
+                    break;
+                  case 'benchmark100':
+                    _loadDebugBenchmark(100);
+                    break;
+                  case 'benchmark500':
+                    _loadDebugBenchmark(500);
+                    break;
+                  case 'benchmark1000':
+                    _loadDebugBenchmark(1000);
+                    break;
+                  case 'benchmarkReplay':
+                    _runDebugReplayBenchmark();
+                    break;
+                  case 'toggleIncremental':
+                    if (_perfEnabled) {
+                      setState(() => _useIncrementalActivePath =
+                          !_useIncrementalActivePath);
+                    }
+                    break;
+                  case 'frameDiagnosis':
+                    _runFrameDiagnosisBenchmark();
+                    break;
+                  case 'longStrokeBenchmark':
+                    _runLongStrokeBenchmark();
+                    break;
+                  case 'pressureStrokeBenchmark':
+                    _runLongStrokeBenchmark(pressureReplay: true);
                     break;
                 }
               },
@@ -1334,97 +2076,291 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
                     child: Text(toolbarVisible ? '도구 숨기기' : '도구 보이기')),
                 const PopupMenuDivider(),
                 const PopupMenuItem(value: 'clear', child: Text('현재 페이지 지우기')),
+                if (kDebugMode || kProfileMode) ...[
+                  const PopupMenuDivider(),
+                  const PopupMenuItem(
+                      value: 'benchmark100', child: Text('DEBUG: 100 strokes')),
+                  const PopupMenuItem(
+                      value: 'benchmark500', child: Text('DEBUG: 500 strokes')),
+                  const PopupMenuItem(
+                      value: 'benchmark1000',
+                      child: Text('DEBUG: 1000 strokes')),
+                  const PopupMenuItem(
+                      value: 'benchmarkReplay',
+                      child: Text('DEBUG: replay baseline (5x)')),
+                  PopupMenuItem(
+                      value: 'toggleIncremental',
+                      child: Text(_useIncrementalActivePath
+                          ? 'DEBUG: legacy full path'
+                          : 'DEBUG: incremental path')),
+                  const PopupMenuItem(
+                      value: 'frameDiagnosis',
+                      child: Text('DEBUG/Profile: frame diagnosis')),
+                  const PopupMenuItem(
+                      value: 'longStrokeBenchmark',
+                      child: Text('DEBUG: long stroke benchmark')),
+                  const PopupMenuItem(
+                      value: 'pressureStrokeBenchmark',
+                      child: Text('DEBUG: pressure stroke benchmark')),
+                ],
               ],
             ),
           ]),
       body: !loaded
           ? const Center(child: CircularProgressIndicator())
-          : Column(children: [
-              if (toolbarVisible) _toolbar(context),
-              Expanded(
-                  child: _ZoomableNotebookViewport(
-                      onViewportGestureStart:
-                          _cancelCanvasInputForViewportGesture,
-                      child: Align(
-                          alignment: Alignment.topCenter,
-                          child: AspectRatio(
-                              aspectRatio: .7,
-                              child: DecoratedBox(
-                                decoration: const BoxDecoration(
-                                    color: Colors.white,
-                                    boxShadow: [
-                                      BoxShadow(
-                                          blurRadius: 3, color: Colors.black12)
-                                    ]),
-                                child: LayoutBuilder(
-                                    builder: (context, constraints) =>
-                                        Stack(children: [
-                                          DrawingCanvas(
-                                              strokes: strokes,
-                                              texts: texts,
-                                              images: images,
-                                              imageCache: imageCache,
-                                              hiddenTextId: editingText?.id,
-                                              shapes: shapes,
-                                              activePoints: active,
-                                              activeShape: activeShape,
-                                              tool: tool,
-                                              color: activeColor,
-                                              width: activeWidth,
-                                              pageTemplateId:
-                                                  widget.pageTemplateId,
-                                              onStart: _start,
-                                              onMove: _move,
-                                              onEnd: _end,
-                                              lassoPath: lassoPath,
-                                              selectedStrokeIds:
-                                                  selectedStrokeIds,
-                                              selectedShapeIds:
-                                                  selectedShapeIds,
-                                              selectedTextIds: selectedTextIds,
-                                              selectedImageIds:
-                                                  selectedImageIds,
-                                              onSelectionStart: _selectionStart,
-                                              onSelectionMove: _selectionMove,
-                                              onSelectionEnd: _selectionEnd,
-                                              onTextTap: _textTap,
-                                              onImageTap: _imageTap),
-                                          if (editingText case final text?)
-                                            Positioned(
-                                              left: text.position.x *
-                                                  constraints.maxWidth,
-                                              top: text.position.y *
-                                                  constraints.maxHeight,
-                                              width: text.maxWidth *
-                                                  constraints.maxWidth,
-                                              child: TextField(
-                                                controller: textController,
-                                                focusNode: textFocus,
-                                                minLines: 1,
-                                                maxLines: null,
-                                                style: TextStyle(
-                                                    color: text.color,
-                                                    fontSize: text.fontSize,
-                                                    height: 1.25),
-                                                decoration:
-                                                    const InputDecoration(
-                                                        isDense: true,
-                                                        border:
-                                                            InputBorder.none),
+          : Stack(
+              fit: StackFit.expand,
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(
+                    top: toolbarVisible ? 50 : 0,
+                    child: _ZoomableNotebookViewport(
+                        onViewportGestureStart:
+                            _cancelCanvasInputForViewportGesture,
+                        child: Align(
+                            alignment: Alignment.topCenter,
+                            child: AspectRatio(
+                                aspectRatio: .7,
+                                child: DecoratedBox(
+                                  decoration: const BoxDecoration(
+                                      color: Colors.white,
+                                      boxShadow: [
+                                        BoxShadow(
+                                            blurRadius: 3,
+                                            color: Colors.black12)
+                                      ]),
+                                  child: LayoutBuilder(
+                                      builder: (context, constraints) =>
+                                          Stack(children: [
+                                            AnimatedSwitcher(
+                                              duration: const Duration(
+                                                  milliseconds: 220),
+                                              switchInCurve:
+                                                  Curves.easeOutCubic,
+                                              switchOutCurve:
+                                                  Curves.easeInCubic,
+                                              transitionBuilder:
+                                                  (child, animation) =>
+                                                      FadeTransition(
+                                                opacity: animation,
+                                                child: SlideTransition(
+                                                  position: Tween<Offset>(
+                                                    begin:
+                                                        const Offset(.018, 0),
+                                                    end: Offset.zero,
+                                                  ).animate(animation),
+                                                  child: child,
+                                                ),
                                               ),
+                                              child: DrawingCanvas(
+                                                  key: ValueKey(pageIndex),
+                                                  strokes: strokes,
+                                                  texts: texts,
+                                                  images: images,
+                                                  imageCache: imageCache,
+                                                  hiddenTextId: editingText?.id,
+                                                  shapes: shapes,
+                                                  activePoints: active,
+                                                  activeShape: activeShape,
+                                                  tool: tool,
+                                                  color: activeColor,
+                                                  width: activeWidth,
+                                                  pageTemplateId:
+                                                      widget.pageTemplateId,
+                                                  onStart: _start,
+                                                  onMove: _move,
+                                                  onEnd: _end,
+                                                  lassoPath: lassoPath,
+                                                  selectedStrokeIds:
+                                                      selectedStrokeIds,
+                                                  selectedShapeIds:
+                                                      selectedShapeIds,
+                                                  selectedTextIds:
+                                                      selectedTextIds,
+                                                  selectedImageIds:
+                                                      selectedImageIds,
+                                                  onSelectionStart:
+                                                      _selectionStart,
+                                                  onSelectionMove:
+                                                      _selectionMove,
+                                                  onSelectionEnd: _selectionEnd,
+                                                  onTextTap: _textTap,
+                                                  onImageTap: _imageTap,
+                                                  repaint: canvasRevision,
+                                                  staticRepaint:
+                                                      staticRevisionNotifier,
+                                                  revision:
+                                                      canvasRevision.value,
+                                                  staticRevision:
+                                                      staticRevision,
+                                                  useIncrementalActivePath:
+                                                      _useIncrementalActivePath,
+                                                  instrumentationEnabled:
+                                                      _instrumentationEnabled,
+                                                  onPaint: () {
+                                                    if (_perfEnabled) {
+                                                      _painterRepaints++;
+                                                      _activePainterRepaints++;
+                                                    }
+                                                  },
+                                                  onStaticPaint: () {
+                                                    if (_perfEnabled) {
+                                                      _staticPainterRepaints++;
+                                                    }
+                                                  },
+                                                  onStaticObjectPaint: () {
+                                                    if (_perfEnabled) {
+                                                      _staticObjectPaintCount++;
+                                                    }
+                                                  },
+                                                  onPathBuild: (elapsed) {
+                                                    if (_perfEnabled &&
+                                                        _instrumentationEnabled) {
+                                                      _pathBuildCount++;
+                                                      final us = elapsed
+                                                          .inMicroseconds;
+                                                      _pathBuildTotalUs += us;
+                                                      _pathBuildMaxUs =
+                                                          math.max(
+                                                              _pathBuildMaxUs,
+                                                              us);
+                                                    }
+                                                  },
+                                                  onIncrementalPathBuild:
+                                                      (elapsed) {
+                                                    if (_perfEnabled &&
+                                                        _instrumentationEnabled) {
+                                                      _incrementalSegmentBuildCount++;
+                                                      final us = elapsed
+                                                          .inMicroseconds;
+                                                      _incrementalBuildTotalUs +=
+                                                          us;
+                                                      _incrementalBuildMaxUs =
+                                                          math.max(
+                                                              _incrementalBuildMaxUs,
+                                                              us);
+                                                    }
+                                                  },
+                                                  onFullPathRebuild: () {
+                                                    if (_perfEnabled &&
+                                                        _instrumentationEnabled) {
+                                                      _fullPathRebuildCount++;
+                                                    }
+                                                  },
+                                                  onActivePaint: (elapsed) {
+                                                    if (_perfEnabled) {
+                                                      final us = elapsed
+                                                          .inMicroseconds;
+                                                      _activePaintTotalUs += us;
+                                                      _activePaintMaxUs =
+                                                          math.max(
+                                                              _activePaintMaxUs,
+                                                              us);
+                                                      _activePaintSamples++;
+                                                    }
+                                                  },
+                                                  onPictureDraw: (elapsed) {
+                                                    if (_perfEnabled &&
+                                                        _instrumentationEnabled) {
+                                                      final us = elapsed
+                                                          .inMicroseconds;
+                                                      _pictureDrawSamples++;
+                                                      _pictureDrawTotalUs += us;
+                                                      _pictureDrawMaxUs =
+                                                          math.max(
+                                                              _pictureDrawMaxUs,
+                                                              us);
+                                                    }
+                                                  },
+                                                  onActivePathDraw: (elapsed) {
+                                                    if (_perfEnabled &&
+                                                        _instrumentationEnabled) {
+                                                      final us = elapsed
+                                                          .inMicroseconds;
+                                                      _activePathDrawSamples++;
+                                                      _activePathDrawTotalUs +=
+                                                          us;
+                                                      _activePathDrawMaxUs =
+                                                          math.max(
+                                                              _activePathDrawMaxUs,
+                                                              us);
+                                                    }
+                                                  },
+                                                  onOverlayPaint: (elapsed) {
+                                                    if (_perfEnabled) {
+                                                      final us = elapsed
+                                                          .inMicroseconds;
+                                                      _overlayPaintTotalUs +=
+                                                          us;
+                                                      _overlayPaintMaxUs =
+                                                          math.max(
+                                                              _overlayPaintMaxUs,
+                                                              us);
+                                                      _overlayPaintSamples++;
+                                                    }
+                                                  }),
                                             ),
-                                        ])),
-                              ))))),
-            ]),
+                                            if (editingText case final text?)
+                                              Positioned(
+                                                left: text.position.x *
+                                                    constraints.maxWidth,
+                                                top: text.position.y *
+                                                    constraints.maxHeight,
+                                                width: text.maxWidth *
+                                                    constraints.maxWidth,
+                                                child: TextField(
+                                                  controller: textController,
+                                                  focusNode: textFocus,
+                                                  minLines: 1,
+                                                  maxLines: null,
+                                                  style: TextStyle(
+                                                      color: text.color,
+                                                      fontSize: text.fontSize,
+                                                      height: 1.25),
+                                                  decoration:
+                                                      const InputDecoration(
+                                                          isDense: true,
+                                                          border:
+                                                              InputBorder.none),
+                                                ),
+                                              ),
+                                          ])),
+                                ))))),
+                if (toolbarVisible)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: _toolbar(context),
+                  ),
+              ],
+            ),
     );
   }
 
-  Widget _toolbar(BuildContext context) => EditorToolbar(
+  Widget _toolbar(BuildContext context) => DrawingToolbar(
         selectedTool: tool,
         width: activeWidth,
         color: activeColor,
+        highlighterOpacity: highlighterOpacity,
+        eraserMode: eraserMode,
         onToolChanged: _setTool,
         onWidthChanged: _setWidth,
+        onColorChanged: (value) => _setColorForTool(tool, value),
+        onHighlighterOpacityChanged: (value) =>
+            setState(() => highlighterOpacity = value),
+        onEraserModeChanged: (value) => setState(() => eraserMode = value),
+        lassoMode: lassoMode,
+        lassoIncludeStrokes: lassoIncludeStrokes,
+        lassoIncludeTexts: lassoIncludeTexts,
+        lassoIncludeImages: lassoIncludeImages,
+        onLassoModeChanged: (value) => setState(() => lassoMode = value),
+        onLassoIncludeStrokesChanged: (value) =>
+            setState(() => lassoIncludeStrokes = value),
+        onLassoIncludeTextsChanged: (value) =>
+            setState(() => lassoIncludeTexts = value),
+        onLassoIncludeImagesChanged: (value) =>
+            setState(() => lassoIncludeImages = value),
         onPaletteRequested: _showColorPalette,
         shapeType: shapeType,
         onShapeTypeChanged: _setShapeType,
@@ -1628,87 +2564,102 @@ class _PageNavigatorSheet extends StatelessWidget {
                   final selected = page == selectedPage;
                   return DragTarget<int>(
                     onWillAcceptWithDetails: (details) => details.data != page,
-                    onAcceptWithDetails: (details) => onMovePageTo(details.data, page),
-                    builder: (context, candidates, rejected) => Semantics(
-                      button: true,
-                      selected: selected,
-                      label: '$page페이지',
-                      child: InkWell(
-                      onTap: () => onPageSelected(page),
-                      onLongPress: () => _showPageActions(context, page),
-                      borderRadius: BorderRadius.circular(6),
-                      child: Column(children: [
-                        Expanded(
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 150),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(5),
-                              border: Border.all(
-                                color: selected
-                                    ? scheme.primary
-                                    : scheme.outlineVariant
-                                        .withValues(alpha: .65),
-                                width: selected ? 1.4 : .7,
-                              ),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Color(0x12000000),
-                                  blurRadius: 3,
-                                  offset: Offset(0, 1),
-                                ),
-                              ],
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: Stack(children: [
-                                Positioned.fill(
-                                  child: _PageThumbnail(
-                                    documentId: documentId,
-                                    pageId: 'page_$page',
-                                    templateId: templateId,
-                                  ),
-                                ),
-                                Positioned(
-                                  right: 3,
-                                  top: 3,
-                                  child: LongPressDraggable<int>(
-                                    data: page,
-                                    feedback: Material(
-                                      color: scheme.surface,
-                                      elevation: 4,
-                                      borderRadius: BorderRadius.circular(6),
-                                      child: SizedBox(
-                                        width: 72,
-                                        height: 96,
-                                        child: Center(child: Text('$page페이지')),
-                                      ),
+                    onAcceptWithDetails: (details) =>
+                        onMovePageTo(details.data, page),
+                    builder: (context, candidates, rejected) {
+                      final hovering = candidates.isNotEmpty;
+                      return Semantics(
+                        button: true,
+                        selected: selected,
+                        label: '$page페이지',
+                        child: InkWell(
+                          onTap: () => onPageSelected(page),
+                          onLongPress: () => _showPageActions(context, page),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Column(children: [
+                            Expanded(
+                              child: AnimatedScale(
+                                scale: hovering ? 1.035 : 1,
+                                duration: const Duration(milliseconds: 140),
+                                curve: Curves.easeOutCubic,
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 150),
+                                  decoration: BoxDecoration(
+                                    color: hovering
+                                        ? scheme.primaryContainer
+                                            .withValues(alpha: .35)
+                                        : Colors.white,
+                                    borderRadius: BorderRadius.circular(5),
+                                    border: Border.all(
+                                      color: hovering || selected
+                                          ? scheme.primary
+                                          : scheme.outlineVariant
+                                              .withValues(alpha: .65),
+                                      width: selected ? 1.4 : .7,
                                     ),
-                                    child: Icon(Icons.drag_indicator,
-                                        size: 14,
-                                        color: scheme.onSurfaceVariant.withValues(alpha: .5)),
+                                    boxShadow: const [
+                                      BoxShadow(
+                                        color: Color(0x12000000),
+                                        blurRadius: 3,
+                                        offset: Offset(0, 1),
+                                      ),
+                                    ],
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: Stack(children: [
+                                      Positioned.fill(
+                                        child: _PageThumbnail(
+                                          documentId: documentId,
+                                          pageId: 'page_$page',
+                                          templateId: templateId,
+                                        ),
+                                      ),
+                                      Positioned(
+                                        right: 3,
+                                        top: 3,
+                                        child: LongPressDraggable<int>(
+                                          data: page,
+                                          feedback: Material(
+                                            color: scheme.surface,
+                                            elevation: 4,
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                            child: SizedBox(
+                                              width: 72,
+                                              height: 96,
+                                              child: Center(
+                                                  child: Text('$page페이지')),
+                                            ),
+                                          ),
+                                          child: Icon(Icons.drag_indicator,
+                                              size: 14,
+                                              color: scheme.onSurfaceVariant
+                                                  .withValues(alpha: .5)),
+                                        ),
+                                      ),
+                                    ]),
                                   ),
                                 ),
-                              ]),
+                              ),
                             ),
-                          ),
+                            const SizedBox(height: 6),
+                            Text('$page',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelMedium
+                                    ?.copyWith(
+                                      color: selected
+                                          ? scheme.primary
+                                          : scheme.onSurfaceVariant,
+                                      fontWeight: selected
+                                          ? FontWeight.w600
+                                          : FontWeight.w400,
+                                    )),
+                          ]),
                         ),
-                        const SizedBox(height: 6),
-                        Text('$page',
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelMedium
-                                ?.copyWith(
-                                  color: selected
-                                      ? scheme.primary
-                                      : scheme.onSurfaceVariant,
-                                  fontWeight: selected
-                                      ? FontWeight.w600
-                                      : FontWeight.w400,
-                                )),
-                      ]),
-                      ),
-                    ),
+                      );
+                    },
                   );
                 },
               ),
@@ -1777,7 +2728,12 @@ class _PageNavigatorSheet extends StatelessWidget {
 }
 
 class _PageActionButton extends StatelessWidget {
-  const _PageActionButton({required this.icon, required this.label, required this.onTap, this.enabled = true, this.destructive = false});
+  const _PageActionButton(
+      {required this.icon,
+      required this.label,
+      required this.onTap,
+      this.enabled = true,
+      this.destructive = false});
   final IconData icon;
   final String label;
   final VoidCallback? onTap;
@@ -1805,10 +2761,13 @@ class _PageActionButton extends StatelessWidget {
                 color: color.withValues(alpha: .10),
                 borderRadius: BorderRadius.circular(9),
               ),
-              child: Padding(padding: const EdgeInsets.all(8), child: Icon(icon, size: 18, color: color)),
+              child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(icon, size: 18, color: color)),
             ),
             const SizedBox(width: 12),
-            Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+            Text(label,
+                style: TextStyle(color: color, fontWeight: FontWeight.w600)),
           ]),
         ),
       ),
@@ -1916,13 +2875,26 @@ class _PageThumbnailState extends State<_PageThumbnail>
   }
 }
 
-class EditorToolbar extends StatelessWidget {
-  const EditorToolbar({
+class DrawingToolbar extends StatefulWidget {
+  const DrawingToolbar({
     required this.selectedTool,
     required this.width,
     required this.color,
+    required this.highlighterOpacity,
+    required this.eraserMode,
+    required this.lassoMode,
+    required this.lassoIncludeStrokes,
+    required this.lassoIncludeTexts,
+    required this.lassoIncludeImages,
     required this.onToolChanged,
     required this.onWidthChanged,
+    required this.onColorChanged,
+    required this.onHighlighterOpacityChanged,
+    required this.onEraserModeChanged,
+    required this.onLassoModeChanged,
+    required this.onLassoIncludeStrokesChanged,
+    required this.onLassoIncludeTextsChanged,
+    required this.onLassoIncludeImagesChanged,
     required this.onPaletteRequested,
     required this.shapeType,
     required this.onShapeTypeChanged,
@@ -1938,8 +2910,21 @@ class EditorToolbar extends StatelessWidget {
   final StrokeTool selectedTool;
   final double width;
   final Color color;
+  final double highlighterOpacity;
+  final EraserMode eraserMode;
+  final LassoMode lassoMode;
+  final bool lassoIncludeStrokes;
+  final bool lassoIncludeTexts;
+  final bool lassoIncludeImages;
   final ValueChanged<StrokeTool> onToolChanged;
   final ValueChanged<double> onWidthChanged;
+  final ValueChanged<Color> onColorChanged;
+  final ValueChanged<double> onHighlighterOpacityChanged;
+  final ValueChanged<EraserMode> onEraserModeChanged;
+  final ValueChanged<LassoMode> onLassoModeChanged;
+  final ValueChanged<bool> onLassoIncludeStrokesChanged;
+  final ValueChanged<bool> onLassoIncludeTextsChanged;
+  final ValueChanged<bool> onLassoIncludeImagesChanged;
   final VoidCallback onPaletteRequested;
   final DrawingShapeType shapeType;
   final ValueChanged<DrawingShapeType> onShapeTypeChanged;
@@ -1952,193 +2937,383 @@ class EditorToolbar extends StatelessWidget {
   final VoidCallback onCropRequested;
 
   @override
+  State<DrawingToolbar> createState() => _DrawingToolbarState();
+}
+
+class _DrawingToolbarState extends State<DrawingToolbar> {
+  void _selectTool(StrokeTool tool) {
+    widget.onToolChanged(tool);
+  }
+
+  Future<void> _showInsertMenu(BuildContext context) async {
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+          MediaQuery.sizeOf(context).width - 150, 92, 12, 0),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      items: const [
+        PopupMenuItem(value: 'text', child: Text('텍스트')),
+        PopupMenuItem(value: 'image', child: Text('이미지')),
+      ],
+    );
+    if (!mounted || choice == null) return;
+    _selectTool(choice == 'text' ? StrokeTool.text : StrokeTool.image);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    return _IntegratedEditorToolbar(
+      toolbar: widget,
+      onToolChanged: _selectTool,
+      onInsertTap: () => _showInsertMenu(context),
+    ); /*
+    final selectedTool = widget.selectedTool;
     final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: scheme.surface,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
-        ),
-        child: SizedBox(
-          width: double.infinity,
-          height: 60,
-          child: Row(children: [
-            _ToolSelector(
-              selectedTool: selectedTool,
-              onChanged: onToolChanged,
-            ),
-            Container(width: 1, height: 28, color: scheme.outlineVariant),
-            Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 180),
-                switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
-                transitionBuilder: (child, animation) => FadeTransition(
-                  opacity: animation,
-                  child: SlideTransition(
-                    position: Tween<Offset>(
-                      begin: const Offset(.04, 0),
-                      end: Offset.zero,
-                    ).animate(animation),
-                    child: child,
+      color: Colors.transparent,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          PrimaryToolBar(
+            selectedTool: selectedTool,
+            onChanged: _selectTool,
+            onWritingTap: _selectWriting,
+            onInsertTap: () => _showInsertMenu(context),
+          ),
+          if (_activeMenuVisible)
+            Positioned(
+              top: 54,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: FractionallySizedBox(
+                  widthFactor: .82,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 390),
+                    child: Material(
+                      color: scheme.primaryContainer.withValues(alpha: .16),
+                      elevation: 2,
+                      shadowColor: scheme.primary.withValues(alpha: .10),
+                      borderRadius: BorderRadius.circular(14),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 160),
+                          child: _isWriting(selectedTool)
+                              ? Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _WritingToolSwitcher(
+                                      selectedTool: selectedTool,
+                                      onSelected: (tool) {
+                                        widget.onToolChanged(tool);
+                                        setState(
+                                            () => _activeMenuVisible = true);
+                                      },
+                                    ),
+                                    ToolOptionsBar(
+                                      key: ValueKey(selectedTool),
+                                      selectedTool: selectedTool,
+                                      width: widget.width,
+                                      color: widget.color,
+                                      highlighterOpacity:
+                                          widget.highlighterOpacity,
+                                      eraserMode: widget.eraserMode,
+                                      lassoMode: widget.lassoMode,
+                                      lassoIncludeStrokes:
+                                          widget.lassoIncludeStrokes,
+                                      lassoIncludeTexts:
+                                          widget.lassoIncludeTexts,
+                                      lassoIncludeImages:
+                                          widget.lassoIncludeImages,
+                                      onWidthChanged: widget.onWidthChanged,
+                                      onColorChanged: widget.onColorChanged,
+                                      onHighlighterOpacityChanged:
+                                          widget.onHighlighterOpacityChanged,
+                                      onEraserModeChanged:
+                                          widget.onEraserModeChanged,
+                                      onLassoModeChanged:
+                                          widget.onLassoModeChanged,
+                                      onLassoIncludeStrokesChanged:
+                                          widget.onLassoIncludeStrokesChanged,
+                                      onLassoIncludeTextsChanged:
+                                          widget.onLassoIncludeTextsChanged,
+                                      onLassoIncludeImagesChanged:
+                                          widget.onLassoIncludeImagesChanged,
+                                      onPaletteRequested:
+                                          widget.onPaletteRequested,
+                                      shapeType: widget.shapeType,
+                                      onShapeTypeChanged:
+                                          widget.onShapeTypeChanged,
+                                      hasSelection: widget.hasSelection,
+                                      hasShapeSelection:
+                                          widget.hasShapeSelection,
+                                      hasSingleImageSelection:
+                                          widget.hasSingleImageSelection,
+                                      onDeleteSelection:
+                                          widget.onDeleteSelection,
+                                      onDuplicateSelection:
+                                          widget.onDuplicateSelection,
+                                      onShapeStyleRequested:
+                                          widget.onShapeStyleRequested,
+                                      onCropRequested: widget.onCropRequested,
+                                    ),
+                                  ],
+                                )
+                              : ToolOptionsBar(
+                                  key: ValueKey(selectedTool),
+                                  selectedTool: selectedTool,
+                                  width: widget.width,
+                                  color: widget.color,
+                                  highlighterOpacity: widget.highlighterOpacity,
+                                  eraserMode: widget.eraserMode,
+                                  lassoMode: widget.lassoMode,
+                                  lassoIncludeStrokes:
+                                      widget.lassoIncludeStrokes,
+                                  lassoIncludeTexts: widget.lassoIncludeTexts,
+                                  lassoIncludeImages: widget.lassoIncludeImages,
+                                  onWidthChanged: widget.onWidthChanged,
+                                  onColorChanged: widget.onColorChanged,
+                                  onHighlighterOpacityChanged:
+                                      widget.onHighlighterOpacityChanged,
+                                  onEraserModeChanged:
+                                      widget.onEraserModeChanged,
+                                  onLassoModeChanged: widget.onLassoModeChanged,
+                                  onLassoIncludeStrokesChanged:
+                                      widget.onLassoIncludeStrokesChanged,
+                                  onLassoIncludeTextsChanged:
+                                      widget.onLassoIncludeTextsChanged,
+                                  onLassoIncludeImagesChanged:
+                                      widget.onLassoIncludeImagesChanged,
+                                  onPaletteRequested: widget.onPaletteRequested,
+                                  shapeType: widget.shapeType,
+                                  onShapeTypeChanged: widget.onShapeTypeChanged,
+                                  hasSelection: widget.hasSelection,
+                                  hasShapeSelection: widget.hasShapeSelection,
+                                  hasSingleImageSelection:
+                                      widget.hasSingleImageSelection,
+                                  onDeleteSelection: widget.onDeleteSelection,
+                                  onDuplicateSelection:
+                                      widget.onDuplicateSelection,
+                                  onShapeStyleRequested:
+                                      widget.onShapeStyleRequested,
+                                  onCropRequested: widget.onCropRequested,
+                                ),
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-                child: _EditorToolOptions(
-                  key: ValueKey(selectedTool),
-                selectedTool: selectedTool,
-                width: width,
-                color: color,
-                onWidthChanged: onWidthChanged,
-                onPaletteRequested: onPaletteRequested,
-                shapeType: shapeType,
-                onShapeTypeChanged: onShapeTypeChanged,
-                hasSelection: hasSelection,
-                hasShapeSelection: hasShapeSelection,
-                hasSingleImageSelection: hasSingleImageSelection,
-                onDeleteSelection: onDeleteSelection,
-                onDuplicateSelection: onDuplicateSelection,
-                onShapeStyleRequested: onShapeStyleRequested,
-                onCropRequested: onCropRequested,
                 ),
               ),
             ),
-          ]),
-        ),
+        ],
       ),
     );
   }
+    */
+  }
 }
 
-class _ToolSelector extends StatelessWidget {
-  const _ToolSelector({required this.selectedTool, required this.onChanged});
-  final StrokeTool selectedTool;
-  final ValueChanged<StrokeTool> onChanged;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-        width: 160,
-        child: Row(children: [
-          _EditorToolButton(
-              glyph: _EditorToolGlyph.pen,
-              label: '펜',
-              selected: selectedTool == StrokeTool.pen,
-              onTap: () => onChanged(StrokeTool.pen)),
-          _EditorToolButton(
-              glyph: _EditorToolGlyph.eraser,
-              label: '지우개',
-              selected: selectedTool == StrokeTool.eraser,
-              onTap: () => onChanged(StrokeTool.eraser)),
-          _EditorToolButton(
-              glyph: _EditorToolGlyph.highlighter,
-              label: '형광펜',
-              selected: selectedTool == StrokeTool.highlighter,
-              onTap: () => onChanged(StrokeTool.highlighter)),
-          _EditorToolButton(
-              glyph: _EditorToolGlyph.lasso,
-              label: '선택',
-              selected: selectedTool == StrokeTool.lasso,
-              onTap: () => onChanged(StrokeTool.lasso)),
-          _AdditionalToolsButton(
-            selectedTool: selectedTool,
-            onChanged: onChanged,
-          ),
-        ]),
-      );
-}
-
-class _AdditionalToolsButton extends StatelessWidget {
-  const _AdditionalToolsButton(
-      {required this.selectedTool, required this.onChanged});
-  final StrokeTool selectedTool;
-  final ValueChanged<StrokeTool> onChanged;
-
-  bool get _isAdditionalTool =>
-      selectedTool == StrokeTool.shapeLine ||
-      selectedTool == StrokeTool.shapeRectangle ||
-      selectedTool == StrokeTool.shapeEllipse ||
-      selectedTool == StrokeTool.shapeArrow ||
-      selectedTool == StrokeTool.text ||
-      selectedTool == StrokeTool.image;
+class _IntegratedEditorToolbar extends StatelessWidget {
+  const _IntegratedEditorToolbar({
+    required this.toolbar,
+    required this.onToolChanged,
+    required this.onInsertTap,
+  });
+  final DrawingToolbar toolbar;
+  final ValueChanged<StrokeTool> onToolChanged;
+  final VoidCallback onInsertTap;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Semantics(
-      button: true,
-      label: '추가 도구',
-      selected: _isAdditionalTool,
-      child: PopupMenuButton<StrokeTool>(
-        tooltip: '추가 도구',
-        padding: EdgeInsets.zero,
-        position: PopupMenuPosition.under,
-        onSelected: onChanged,
-        itemBuilder: (_) => const [
-          PopupMenuItem(
-            value: StrokeTool.shapeLine,
-            child: _AdditionalToolMenuItem(
-              icon: Icons.category_outlined,
-              label: '도형',
+    final selected = toolbar.selectedTool;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      child: Material(
+        color: scheme.surface,
+        elevation: 2,
+        shadowColor: Colors.black.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(16),
+        clipBehavior: Clip.antiAlias,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(
+            height: 42,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                _EditorToolButton(Icons.gesture_rounded, StrokeTool.lasso,
+                    selected, onToolChanged, '올가미'),
+                _EditorToolButton(Icons.edit_rounded, StrokeTool.pen, selected,
+                    onToolChanged, '펜'),
+                _EditorToolButton(Icons.cleaning_services_outlined,
+                    StrokeTool.eraser, selected, onToolChanged, '지우개'),
+                _EditorToolButton(Icons.border_color_outlined,
+                    StrokeTool.highlighter, selected, onToolChanged, '형광펜'),
+                _EditorToolButton(Icons.category_outlined, StrokeTool.shapeLine,
+                    selected, onToolChanged, '도형'),
+                _EditorToolButton(Icons.text_fields_rounded, StrokeTool.text,
+                    selected, onToolChanged, '텍스트'),
+                _EditorToolButton(Icons.image_outlined, StrokeTool.image,
+                    selected, onToolChanged, '이미지'),
+                IconButton(
+                  tooltip: '삽입 도구',
+                  onPressed: onInsertTap,
+                  icon: const Icon(Icons.add_rounded),
+                ),
+              ]),
             ),
           ),
-          PopupMenuItem(
-            value: StrokeTool.text,
-            child: _AdditionalToolMenuItem(
-              icon: Icons.text_fields_rounded,
-              label: '텍스트',
-            ),
+          Divider(
+              height: 1,
+              thickness: 1,
+              color: scheme.outlineVariant.withValues(alpha: .35)),
+          ToolOptionsBar(
+            selectedTool: selected,
+            width: toolbar.width,
+            color: toolbar.color,
+            highlighterOpacity: toolbar.highlighterOpacity,
+            eraserMode: toolbar.eraserMode,
+            lassoMode: toolbar.lassoMode,
+            lassoIncludeStrokes: toolbar.lassoIncludeStrokes,
+            lassoIncludeTexts: toolbar.lassoIncludeTexts,
+            lassoIncludeImages: toolbar.lassoIncludeImages,
+            onWidthChanged: toolbar.onWidthChanged,
+            onColorChanged: toolbar.onColorChanged,
+            onHighlighterOpacityChanged: toolbar.onHighlighterOpacityChanged,
+            onEraserModeChanged: toolbar.onEraserModeChanged,
+            onLassoModeChanged: toolbar.onLassoModeChanged,
+            onLassoIncludeStrokesChanged: toolbar.onLassoIncludeStrokesChanged,
+            onLassoIncludeTextsChanged: toolbar.onLassoIncludeTextsChanged,
+            onLassoIncludeImagesChanged: toolbar.onLassoIncludeImagesChanged,
+            onPaletteRequested: toolbar.onPaletteRequested,
+            shapeType: toolbar.shapeType,
+            onShapeTypeChanged: toolbar.onShapeTypeChanged,
+            hasSelection: toolbar.hasSelection,
+            hasShapeSelection: toolbar.hasShapeSelection,
+            hasSingleImageSelection: toolbar.hasSingleImageSelection,
+            onDeleteSelection: toolbar.onDeleteSelection,
+            onDuplicateSelection: toolbar.onDuplicateSelection,
+            onShapeStyleRequested: toolbar.onShapeStyleRequested,
+            onCropRequested: toolbar.onCropRequested,
           ),
-          PopupMenuItem(
-            value: StrokeTool.image,
-            child: _AdditionalToolMenuItem(
-              icon: Icons.image_outlined,
-              label: '이미지',
-            ),
-          ),
-        ],
-        child: SizedBox(
-          width: 32,
-          height: 60,
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(Icons.more_horiz,
-                size: 22,
-                color: _isAdditionalTool
-                    ? scheme.primary
-                    : scheme.onSurfaceVariant),
-            const SizedBox(height: 4),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              width: _isAdditionalTool ? 15 : 0,
-              height: 2,
-              color: scheme.primary,
-            ),
-          ]),
-        ),
+        ]),
       ),
     );
   }
-}
-
-class _AdditionalToolMenuItem extends StatelessWidget {
-  const _AdditionalToolMenuItem({required this.icon, required this.label});
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) => Row(children: [
-        Icon(icon, size: 20),
-        const SizedBox(width: 12),
-        Text(label),
-      ]);
 }
 
 class _EditorToolButton extends StatelessWidget {
   const _EditorToolButton(
-      {required this.glyph,
+      this.icon, this.tool, this.selectedTool, this.onTap, this.label);
+  final IconData icon;
+  final StrokeTool tool;
+  final StrokeTool selectedTool;
+  final ValueChanged<StrokeTool> onTap;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isSelected = tool == selectedTool ||
+        (_isShapeToolValue(tool) && _isShapeToolValue(selectedTool));
+    return Tooltip(
+      message: label,
+      child: InkWell(
+        onTap: () => onTap(tool),
+        borderRadius: BorderRadius.circular(10),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 40,
+          height: 36,
+          margin: const EdgeInsets.symmetric(horizontal: 1),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? scheme.primaryContainer.withValues(alpha: .72)
+                : null,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon,
+              size: 21,
+              color: isSelected ? scheme.primary : scheme.onSurfaceVariant),
+        ),
+      ),
+    );
+  }
+}
+
+class PrimaryToolBar extends StatelessWidget {
+  const PrimaryToolBar({
+    required this.selectedTool,
+    required this.onChanged,
+    required this.onWritingTap,
+    required this.onInsertTap,
+    super.key,
+  });
+  final StrokeTool selectedTool;
+  final ValueChanged<StrokeTool> onChanged;
+  final VoidCallback onWritingTap;
+  final VoidCallback onInsertTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+        height: 58,
+        child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Material(
+              color: scheme.surface,
+              elevation: 2,
+              shadowColor: Colors.black.withValues(alpha: .10),
+              borderRadius: BorderRadius.circular(16),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const ClampingScrollPhysics(),
+                  child: Row(children: [
+                    _CategoryToolButton(
+                        icon: Icons.gesture_rounded,
+                        label: '선택',
+                        selected: selectedTool == StrokeTool.lasso,
+                        onTap: () => onChanged(StrokeTool.lasso)),
+                    _CategoryToolButton(
+                        icon: Icons.edit_rounded,
+                        label: '필기',
+                        selected: selectedTool == StrokeTool.pen ||
+                            selectedTool == StrokeTool.highlighter,
+                        onTap: onWritingTap),
+                    _CategoryToolButton(
+                        icon: Icons.cleaning_services_outlined,
+                        label: '지우개',
+                        selected: selectedTool == StrokeTool.eraser,
+                        onTap: () => onChanged(StrokeTool.eraser)),
+                    _CategoryToolButton(
+                        icon: Icons.category_outlined,
+                        label: '도형',
+                        selected: _isShapeToolValue(selectedTool),
+                        onTap: () => onChanged(StrokeTool.shapeLine)),
+                    _CategoryToolButton(
+                        icon: Icons.add_rounded,
+                        label: '삽입',
+                        selected: selectedTool == StrokeTool.text ||
+                            selectedTool == StrokeTool.image,
+                        onTap: onInsertTap),
+                  ]),
+                ),
+              ),
+            )));
+  }
+}
+
+class _CategoryToolButton extends StatelessWidget {
+  const _CategoryToolButton(
+      {required this.icon,
       required this.label,
       required this.selected,
       required this.onTap});
-  final _EditorToolGlyph glyph;
+  final IconData icon;
   final String label;
   final bool selected;
   final VoidCallback onTap;
@@ -2147,120 +3322,50 @@ class _EditorToolButton extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Semantics(
       button: true,
-      label: label,
       selected: selected,
+      label: label,
       child: InkWell(
         onTap: onTap,
-        child: SizedBox(
-          width: 32,
-          height: 60,
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            AnimatedScale(
-              scale: selected ? 1.08 : 1,
-              duration: const Duration(milliseconds: 160),
-              curve: Curves.easeOutCubic,
-              child: SizedBox(
-                width: 22,
-                height: 22,
-                child: CustomPaint(
-                  painter: _EditorToolGlyphPainter(
-                    glyph,
-                    selected ? scheme.primary : scheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 4),
-            AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                width: selected ? 15 : 0,
-                height: 2,
-                color: scheme.primary),
-          ]),
+        borderRadius: BorderRadius.circular(8),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 58,
+          height: 46,
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          decoration: BoxDecoration(
+            color: selected
+                ? scheme.primaryContainer.withValues(alpha: .72)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon,
+              size: 22,
+              color: selected ? scheme.primary : scheme.onSurfaceVariant),
         ),
       ),
     );
   }
 }
 
-enum _EditorToolGlyph { pen, eraser, highlighter, lasso }
-
-/// Core drawing tools use one compact, stroke-based icon set rather than a
-/// mixture of unrelated Material glyphs. The same 1.8px stroke and geometry
-/// keeps the toolbar calm while still being legible at phone size.
-class _EditorToolGlyphPainter extends CustomPainter {
-  const _EditorToolGlyphPainter(this.glyph, this.color);
-
-  final _EditorToolGlyph glyph;
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final stroke = Paint()
-      ..color = color
-      ..strokeWidth = 1.8
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
-    switch (glyph) {
-      case _EditorToolGlyph.pen:
-        final body = Path()
-          ..moveTo(5.2, 16.8)
-          ..lineTo(6.4, 12.8)
-          ..lineTo(15.8, 3.4)
-          ..lineTo(18.6, 6.2)
-          ..lineTo(9.2, 15.6)
-          ..close();
-        canvas.drawPath(body, stroke);
-        canvas.drawLine(const Offset(5.2, 16.8), const Offset(9.2, 15.6), stroke);
-      case _EditorToolGlyph.eraser:
-        final body = Path()
-          ..moveTo(6.0, 11.2)
-          ..lineTo(11.3, 5.9)
-          ..lineTo(18.0, 12.6)
-          ..lineTo(12.7, 17.9)
-          ..close();
-        canvas.drawPath(body, stroke);
-        canvas.drawLine(const Offset(9.3, 14.5), const Offset(15.3, 8.5), stroke);
-      case _EditorToolGlyph.highlighter:
-        final center = Offset(size.width / 2, size.height / 2);
-        canvas.save();
-        canvas.translate(center.dx, center.dy);
-        canvas.rotate(-.72);
-        canvas.translate(-center.dx, -center.dy);
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(
-            Rect.fromCenter(center: center, width: 7.5, height: 15),
-            const Radius.circular(1.2),
-          ),
-          stroke,
-        );
-        canvas.drawLine(const Offset(7.3, 16.5), const Offset(14.7, 16.5), stroke);
-        canvas.restore();
-      case _EditorToolGlyph.lasso:
-        final loop = Path()
-          ..moveTo(16.7, 8.0)
-          ..cubicTo(14.8, 4.6, 8.1, 4.5, 5.7, 8.6)
-          ..cubicTo(3.5, 12.5, 7.2, 16.6, 11.8, 15.6)
-          ..cubicTo(15.7, 14.8, 15.7, 10.2, 12.5, 9.8)
-          ..cubicTo(10.1, 9.5, 8.9, 11.6, 10.2, 13.3);
-        canvas.drawPath(loop, stroke);
-        canvas.drawCircle(const Offset(17.5, 16.9), 1.5, stroke);
-        canvas.drawLine(const Offset(15.9, 15.3), const Offset(14.2, 13.6), stroke);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _EditorToolGlyphPainter oldDelegate) =>
-      oldDelegate.glyph != glyph || oldDelegate.color != color;
-}
-
-class _EditorToolOptions extends StatelessWidget {
-  const _EditorToolOptions(
+class ToolOptionsBar extends StatelessWidget {
+  const ToolOptionsBar(
       {required this.selectedTool,
       required this.width,
       required this.color,
+      required this.highlighterOpacity,
+      required this.eraserMode,
+      required this.lassoMode,
+      required this.lassoIncludeStrokes,
+      required this.lassoIncludeTexts,
+      required this.lassoIncludeImages,
       required this.onWidthChanged,
+      required this.onColorChanged,
+      required this.onHighlighterOpacityChanged,
+      required this.onEraserModeChanged,
+      required this.onLassoModeChanged,
+      required this.onLassoIncludeStrokesChanged,
+      required this.onLassoIncludeTextsChanged,
+      required this.onLassoIncludeImagesChanged,
       required this.onPaletteRequested,
       required this.shapeType,
       required this.onShapeTypeChanged,
@@ -2275,7 +3380,20 @@ class _EditorToolOptions extends StatelessWidget {
   final StrokeTool selectedTool;
   final double width;
   final Color color;
+  final double highlighterOpacity;
+  final EraserMode eraserMode;
+  final LassoMode lassoMode;
+  final bool lassoIncludeStrokes;
+  final bool lassoIncludeTexts;
+  final bool lassoIncludeImages;
   final ValueChanged<double> onWidthChanged;
+  final ValueChanged<Color> onColorChanged;
+  final ValueChanged<double> onHighlighterOpacityChanged;
+  final ValueChanged<EraserMode> onEraserModeChanged;
+  final ValueChanged<LassoMode> onLassoModeChanged;
+  final ValueChanged<bool> onLassoIncludeStrokesChanged;
+  final ValueChanged<bool> onLassoIncludeTextsChanged;
+  final ValueChanged<bool> onLassoIncludeImagesChanged;
   final VoidCallback onPaletteRequested;
   final DrawingShapeType shapeType;
   final ValueChanged<DrawingShapeType> onShapeTypeChanged;
@@ -2288,125 +3406,833 @@ class _EditorToolOptions extends StatelessWidget {
   final VoidCallback onCropRequested;
   @override
   Widget build(BuildContext context) {
+    if (selectedTool == StrokeTool.pen) {
+      return PenOptionsBar(
+          width: width,
+          color: color,
+          onWidthChanged: onWidthChanged,
+          onColorChanged: onColorChanged,
+          onPaletteRequested: onPaletteRequested);
+    }
+    if (selectedTool == StrokeTool.highlighter) {
+      return HighlighterOptionsBar(
+          width: width,
+          color: color,
+          opacity: highlighterOpacity,
+          onWidthChanged: onWidthChanged,
+          onColorChanged: onColorChanged,
+          onOpacityChanged: onHighlighterOpacityChanged,
+          onPaletteRequested: onPaletteRequested);
+    }
+    if (selectedTool == StrokeTool.eraser) {
+      return EraserOptionsBar(
+        width: width,
+        mode: eraserMode,
+        onWidthChanged: onWidthChanged,
+        onModeChanged: onEraserModeChanged,
+      );
+    }
     if (selectedTool == StrokeTool.image) {
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: IconButton(
-          onPressed: hasSingleImageSelection
-              ? onCropRequested
-              : null,
-          tooltip: '이미지 자르기',
-          icon: const Icon(Icons.crop_outlined),
-        ),
+      return _ContextActionRow(
+        icon: Icons.crop_outlined,
+        label: hasSingleImageSelection ? '이미지 자르기' : '이미지를 선택해 자르기',
+        onTap: hasSingleImageSelection ? onCropRequested : null,
       );
     }
     if (_isShapeTool(selectedTool)) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4),
+      return ShapeOptionsBar(
+        shapeType: shapeType,
+        width: width,
+        color: color,
+        onShapeTypeChanged: onShapeTypeChanged,
+        onWidthChanged: onWidthChanged,
+        onColorChanged: onColorChanged,
+        onPaletteRequested: onPaletteRequested,
+      );
+    }
+    if (selectedTool == StrokeTool.lasso) {
+      return LassoOptionsBar(
+        hasSelection: hasSelection,
+        hasShapeSelection: hasShapeSelection,
+        mode: lassoMode,
+        includeStrokes: lassoIncludeStrokes,
+        includeTexts: lassoIncludeTexts,
+        includeImages: lassoIncludeImages,
+        onModeChanged: onLassoModeChanged,
+        onIncludeStrokesChanged: onLassoIncludeStrokesChanged,
+        onIncludeTextsChanged: onLassoIncludeTextsChanged,
+        onIncludeImagesChanged: onLassoIncludeImagesChanged,
+        onDuplicateSelection: onDuplicateSelection,
+        onDeleteSelection: onDeleteSelection,
+        onShapeStyleRequested: onShapeStyleRequested,
+      );
+    }
+    return TextOptionsBar(
+        width: width,
+        color: color,
+        onWidthChanged: onWidthChanged,
+        onColorChanged: onColorChanged,
+        onPaletteRequested: onPaletteRequested);
+  }
+
+  bool _isShapeTool(StrokeTool tool) => _isShapeToolValue(tool);
+}
+
+bool _isShapeToolValue(StrokeTool tool) =>
+    tool == StrokeTool.shapeLine ||
+    tool == StrokeTool.shapeRectangle ||
+    tool == StrokeTool.shapeEllipse ||
+    tool == StrokeTool.shapeArrow ||
+    tool == StrokeTool.shapeTriangle;
+
+class PenOptionsBar extends StatelessWidget {
+  const PenOptionsBar({
+    required this.width,
+    required this.color,
+    required this.onWidthChanged,
+    required this.onColorChanged,
+    required this.onPaletteRequested,
+    super.key,
+  });
+  final double width;
+  final Color color;
+  final ValueChanged<double> onWidthChanged;
+  final ValueChanged<Color> onColorChanged;
+  final VoidCallback onPaletteRequested;
+
+  @override
+  Widget build(BuildContext context) => _InkOptionsLayout(
+        label: '펜',
+        icon: Icons.edit_outlined,
+        width: width,
+        min: 1,
+        max: 12,
+        color: color,
+        onWidthChanged: onWidthChanged,
+        onColorChanged: onColorChanged,
+        onPaletteRequested: onPaletteRequested,
+      );
+}
+
+class HighlighterOptionsBar extends StatelessWidget {
+  const HighlighterOptionsBar({
+    required this.width,
+    required this.color,
+    required this.opacity,
+    required this.onWidthChanged,
+    required this.onColorChanged,
+    required this.onOpacityChanged,
+    required this.onPaletteRequested,
+    super.key,
+  });
+  final double width;
+  final Color color;
+  final double opacity;
+  final ValueChanged<double> onWidthChanged;
+  final ValueChanged<Color> onColorChanged;
+  final ValueChanged<double> onOpacityChanged;
+  final VoidCallback onPaletteRequested;
+
+  @override
+  Widget build(BuildContext context) => _InkOptionsLayout(
+        label: '형광펜',
+        icon: Icons.border_color_outlined,
+        width: width,
+        min: 4,
+        max: 30,
+        color: color,
+        onWidthChanged: onWidthChanged,
+        onColorChanged: onColorChanged,
+        onPaletteRequested: onPaletteRequested,
+        trailing: _OpacityButton(value: opacity, onChanged: onOpacityChanged),
+      );
+}
+
+class EraserOptionsBar extends StatelessWidget {
+  const EraserOptionsBar({
+    required this.width,
+    required this.mode,
+    required this.onWidthChanged,
+    required this.onModeChanged,
+    super.key,
+  });
+  final double width;
+  final EraserMode mode;
+  final ValueChanged<double> onWidthChanged;
+  final ValueChanged<EraserMode> onModeChanged;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Row(children: [
+          _WidthPresetGroup(
+            value: width,
+            values: const [4, 10, 24],
+            color: Theme.of(context).colorScheme.primary,
+            semanticLabel: '지우개 크기 프리셋',
+            onChanged: onWidthChanged,
+            onDetailsRequested: () => _showWidthValuePopover(
+              context,
+              title: '지우개 크기',
+              value: width,
+              min: 2,
+              max: 50,
+              color: Theme.of(context).colorScheme.primary,
+              onChanged: onWidthChanged,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 2),
+            child: SizedBox(
+              width: 34,
+              child: Text(
+                '${width.round()} px',
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.clip,
+                textAlign: TextAlign.end,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w500,
+                    ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          _EraserModeSegmentedControl(
+            mode: mode,
+            onChanged: onModeChanged,
+          ),
+        ]),
+      );
+}
+
+class _EraserModeSegmentedControl extends StatelessWidget {
+  const _EraserModeSegmentedControl({
+    required this.mode,
+    required this.onChanged,
+  });
+  final EraserMode mode;
+  final ValueChanged<EraserMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      label: '지우개 방식',
+      child: Container(
+        height: 30,
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainer.withValues(alpha: .62),
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          _EraserModeSegment(
+            label: '부분',
+            selected: mode == EraserMode.partial,
+            onTap: () => onChanged(EraserMode.partial),
+          ),
+          _EraserModeSegment(
+            label: '획 전체',
+            selected: mode == EraserMode.wholeStroke,
+            onTap: () => onChanged(EraserMode.wholeStroke),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _EraserModeSegment extends StatelessWidget {
+  const _EraserModeSegment({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '$label 모드',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(5),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected
+                ? scheme.primaryContainer.withValues(alpha: .72)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(5),
+          ),
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: selected
+                      ? scheme.onPrimaryContainer
+                      : scheme.onSurfaceVariant,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ShapeOptionsBar extends StatelessWidget {
+  const ShapeOptionsBar({
+    required this.shapeType,
+    required this.width,
+    required this.color,
+    required this.onShapeTypeChanged,
+    required this.onWidthChanged,
+    required this.onColorChanged,
+    required this.onPaletteRequested,
+    super.key,
+  });
+  final DrawingShapeType shapeType;
+  final double width;
+  final Color color;
+  final ValueChanged<DrawingShapeType> onShapeTypeChanged;
+  final ValueChanged<double> onWidthChanged;
+  final ValueChanged<Color> onColorChanged;
+  final VoidCallback onPaletteRequested;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
           for (final type in DrawingShapeType.values)
             _ShapeTypeButton(
               type: type,
               selected: type == shapeType,
               onTap: () => onShapeTypeChanged(type),
             ),
+          const SizedBox(width: 4),
+          _ShapeDetailsButton(
+            width: width,
+            color: color,
+            onWidthChanged: onWidthChanged,
+            onPaletteRequested: onPaletteRequested,
+          ),
         ]),
       );
-    }
-    if (selectedTool == StrokeTool.lasso) {
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: hasSelection
-            ? Row(mainAxisSize: MainAxisSize.min, children: [
-                IconButton(
-                  onPressed: onDuplicateSelection,
-                  tooltip: '선택 항목 복제',
-                  icon: const Icon(Icons.content_copy_outlined),
-                ),
-                if (hasShapeSelection)
-                  IconButton(
-                    onPressed: onShapeStyleRequested,
-                    tooltip: '선택한 도형 스타일',
-                    icon: const Icon(Icons.tune_rounded),
-                  ),
-                IconButton(
-                  onPressed: onDeleteSelection,
-                  tooltip: '선택한 필기 삭제',
-                  icon: const Icon(Icons.delete_outline),
-                  color: Theme.of(context).colorScheme.error,
-                ),
-              ])
-            : const SizedBox.shrink(),
-      );
-    }
-    final isEraser = selectedTool == StrokeTool.eraser;
-    final isText = selectedTool == StrokeTool.text;
-    final widths = isText
-        ? const [14.0, 18.0, 24.0]
-        : isEraser
-            ? const [4.0, 16.0, 32.0]
-            : const [2.0, 8.0, 14.0];
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: isText ? 0 : 4),
-      child: Row(children: [
-        for (final value in widths)
-          Padding(
-            padding: const EdgeInsets.only(right: 2),
-            child: _StrokeWidthOption(
-                value: value,
-                selected: _isSelectedWidth(value),
-                compact: isText,
-                onTap: () => onWidthChanged(value)),
-          ),
-        if (!isEraser) ...[
-          Container(
-              width: 1,
-              height: 24,
-              margin: const EdgeInsets.symmetric(horizontal: 5),
-              color: scheme.outlineVariant),
-          _ColorDot(color: color, selected: true, onTap: onPaletteRequested),
-          const SizedBox(width: 4),
-          _PaletteButton(onTap: onPaletteRequested),
+}
+
+class _ShapeDetailsButton extends StatelessWidget {
+  const _ShapeDetailsButton(
+      {required this.width,
+      required this.color,
+      required this.onWidthChanged,
+      required this.onPaletteRequested});
+  final double width;
+  final Color color;
+  final ValueChanged<double> onWidthChanged;
+  final VoidCallback onPaletteRequested;
+
+  @override
+  Widget build(BuildContext context) => PopupMenuButton<String>(
+        tooltip: '도형 선과 색상 설정',
+        padding: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        onSelected: (value) {
+          switch (value) {
+            case 'thin':
+              onWidthChanged(1);
+            case 'medium':
+              onWidthChanged(4);
+            case 'thick':
+              onWidthChanged(8);
+            case 'color':
+              onPaletteRequested();
+          }
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(value: 'thin', child: Text('얇은 선')),
+          PopupMenuItem(value: 'medium', child: Text('보통 선')),
+          PopupMenuItem(value: 'thick', child: Text('굵은 선')),
+          PopupMenuDivider(),
+          PopupMenuItem(value: 'color', child: Text('색상 선택')),
         ],
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Icon(Icons.tune_rounded,
+              size: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
+        ),
+      );
+}
+
+class LassoOptionsBar extends StatelessWidget {
+  const LassoOptionsBar({
+    required this.hasSelection,
+    required this.hasShapeSelection,
+    required this.mode,
+    required this.includeStrokes,
+    required this.includeTexts,
+    required this.includeImages,
+    required this.onModeChanged,
+    required this.onIncludeStrokesChanged,
+    required this.onIncludeTextsChanged,
+    required this.onIncludeImagesChanged,
+    required this.onDuplicateSelection,
+    required this.onDeleteSelection,
+    required this.onShapeStyleRequested,
+    super.key,
+  });
+  final bool hasSelection;
+  final bool hasShapeSelection;
+  final LassoMode mode;
+  final bool includeStrokes;
+  final bool includeTexts;
+  final bool includeImages;
+  final ValueChanged<LassoMode> onModeChanged;
+  final ValueChanged<bool> onIncludeStrokesChanged;
+  final ValueChanged<bool> onIncludeTextsChanged;
+  final ValueChanged<bool> onIncludeImagesChanged;
+  final VoidCallback onDuplicateSelection;
+  final VoidCallback onDeleteSelection;
+  final VoidCallback onShapeStyleRequested;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(children: [
+          const Icon(Icons.gesture_outlined, size: 18),
+          const SizedBox(width: 6),
+          _LassoModeSegmentedControl(mode: mode, onChanged: onModeChanged),
+          const SizedBox(width: 6),
+          PopupMenuButton<String>(
+            tooltip: '선택 대상 옵션',
+            padding: EdgeInsets.zero,
+            onSelected: (value) {
+              switch (value) {
+                case 'strokes':
+                  onIncludeStrokesChanged(!includeStrokes);
+                case 'texts':
+                  onIncludeTextsChanged(!includeTexts);
+                case 'images':
+                  onIncludeImagesChanged(!includeImages);
+              }
+            },
+            itemBuilder: (_) => [
+              CheckedPopupMenuItem(
+                  value: 'strokes',
+                  checked: includeStrokes,
+                  child: const Text('필기 포함')),
+              CheckedPopupMenuItem(
+                  value: 'texts',
+                  checked: includeTexts,
+                  child: const Text('텍스트 포함')),
+              CheckedPopupMenuItem(
+                  value: 'images',
+                  checked: includeImages,
+                  child: const Text('이미지 포함')),
+            ],
+            child: const Padding(
+              padding: EdgeInsets.all(6),
+              child: Icon(Icons.tune_outlined, size: 18),
+            ),
+          ),
+          if (hasSelection) ...[
+            IconButton(
+                onPressed: onDuplicateSelection,
+                tooltip: '선택 항목 복제',
+                icon: const Icon(Icons.content_copy_outlined, size: 20)),
+            if (hasShapeSelection)
+              IconButton(
+                  onPressed: onShapeStyleRequested,
+                  tooltip: '선택한 도형 스타일',
+                  icon: const Icon(Icons.tune_rounded, size: 20)),
+            IconButton(
+                onPressed: onDeleteSelection,
+                tooltip: '선택 항목 삭제',
+                color: Theme.of(context).colorScheme.error,
+                icon: const Icon(Icons.delete_outline, size: 20)),
+          ],
+        ]),
+      );
+}
+
+class _LassoModeSegmentedControl extends StatelessWidget {
+  const _LassoModeSegmentedControl(
+      {required this.mode, required this.onChanged});
+  final LassoMode mode;
+  final ValueChanged<LassoMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      height: 26,
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainer.withValues(alpha: .62),
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        _LassoModeSegment(
+          label: '자유형',
+          selected: mode == LassoMode.freeform,
+          onTap: () => onChanged(LassoMode.freeform),
+        ),
+        _LassoModeSegment(
+          label: '사각형',
+          selected: mode == LassoMode.rectangle,
+          onTap: () => onChanged(LassoMode.rectangle),
+        ),
       ]),
     );
   }
+}
 
-  bool _isSelectedWidth(double candidate) {
-    if (selectedTool == StrokeTool.eraser) {
-      return candidate ==
-          (width <= 7
-              ? 4
-              : width <= 24
-                  ? 16
-                  : 32);
-    }
-    if (selectedTool == StrokeTool.text) {
-      return candidate ==
-          (width <= 16
-              ? 14
-              : width <= 21
-                  ? 18
-                  : 24);
-    }
-    return candidate ==
-        (width <= 4
-            ? 2
-            : width <= 10
-                ? 8
-                : 14);
+class _LassoModeSegment extends StatelessWidget {
+  const _LassoModeSegment(
+      {required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(5),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 7),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected
+              ? scheme.primaryContainer.withValues(alpha: .72)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(5),
+        ),
+        child: Text(label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: selected
+                      ? scheme.onPrimaryContainer
+                      : scheme.onSurfaceVariant,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                )),
+      ),
+    );
   }
+}
 
-  bool _isShapeTool(StrokeTool tool) =>
-      tool == StrokeTool.shapeLine ||
-      tool == StrokeTool.shapeRectangle ||
-      tool == StrokeTool.shapeEllipse ||
-      tool == StrokeTool.shapeArrow;
+class TextOptionsBar extends StatelessWidget {
+  const TextOptionsBar({
+    required this.width,
+    required this.color,
+    required this.onWidthChanged,
+    required this.onColorChanged,
+    required this.onPaletteRequested,
+    super.key,
+  });
+  final double width;
+  final Color color;
+  final ValueChanged<double> onWidthChanged;
+  final ValueChanged<Color> onColorChanged;
+  final VoidCallback onPaletteRequested;
+
+  @override
+  Widget build(BuildContext context) => _InkOptionsLayout(
+        label: '텍스트',
+        icon: Icons.text_fields_rounded,
+        width: width,
+        min: 12,
+        max: 32,
+        color: color,
+        onWidthChanged: onWidthChanged,
+        onColorChanged: onColorChanged,
+        onPaletteRequested: onPaletteRequested,
+        widthSuffix: 'pt',
+      );
+}
+
+class _InkOptionsLayout extends StatelessWidget {
+  const _InkOptionsLayout({
+    required this.label,
+    required this.icon,
+    required this.width,
+    required this.min,
+    required this.max,
+    required this.color,
+    required this.onWidthChanged,
+    required this.onColorChanged,
+    required this.onPaletteRequested,
+    this.trailing,
+    this.widthSuffix = 'mm',
+  });
+  final String label;
+  final IconData icon;
+  final double width;
+  final double min;
+  final double max;
+  final Color color;
+  final ValueChanged<double> onWidthChanged;
+  final ValueChanged<Color> onColorChanged;
+  final VoidCallback onPaletteRequested;
+  final Widget? trailing;
+  final String widthSuffix;
+
+  static const recentColors = [
+    Colors.black,
+    Color(0xff3f6f9f),
+    Color(0xffc95656),
+    Color(0xff4e8b68),
+  ];
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(children: [
+          _WidthPresetGroup(
+            value: width,
+            values: [min, min + (max - min) * .45, max],
+            color: color,
+            semanticLabel: '$label 굵기 프리셋',
+            onChanged: onWidthChanged,
+            onDetailsRequested: () => _showWidthPopover(context),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: SizedBox(
+              width: 42,
+              child: InkWell(
+                onTap: () => _showWidthPopover(context),
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 3, vertical: 5),
+                  child: Text(
+                      widthSuffix == 'mm'
+                          ? '${(width / 4).toStringAsFixed(1)} mm'
+                          : '${width.round()} pt',
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.clip,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w500,
+                          )),
+                ),
+              ),
+            ),
+          ),
+          if (trailing != null) ...[const SizedBox(width: 4), trailing!],
+          const SizedBox(width: 6),
+          for (final swatch in recentColors.take(3))
+            Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: ColorChip(
+                color: swatch,
+                selected: swatch == color,
+                onTap: () => onColorChanged(swatch),
+              ),
+            ),
+          const SizedBox(width: 4),
+          _PaletteButton(onTap: onPaletteRequested),
+        ]),
+      );
+
+  Future<void> _showWidthPopover(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('$label 굵기'),
+        content: StatefulBuilder(
+          builder: (context, setDialogState) => SizedBox(
+            width: 270,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                height: 28,
+                alignment: Alignment.center,
+                child: Container(
+                  width: 120,
+                  height: width.clamp(1, 12) / 12 * 8 + 1,
+                  decoration: BoxDecoration(
+                      color: color, borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+              Slider(
+                value: width.clamp(min, max),
+                min: min,
+                max: max,
+                onChanged: (value) {
+                  setDialogState(() {});
+                  onWidthChanged(value);
+                },
+              ),
+            ]),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('닫기'))
+        ],
+      ),
+    );
+  }
+}
+
+class StrokeWidthSlider extends StatelessWidget {
+  const StrokeWidthSlider({
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.color,
+    required this.onChanged,
+    required this.semanticLabel,
+    super.key,
+  });
+  final double value;
+  final double min;
+  final double max;
+  final Color color;
+  final ValueChanged<double> onChanged;
+  final String semanticLabel;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        slider: true,
+        label: semanticLabel,
+        child: SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            activeTrackColor: color,
+            inactiveTrackColor: color.withValues(alpha: .18),
+            thumbColor: color,
+            trackHeight: 2,
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+          ),
+          child: Slider(
+            value: value.clamp(min, max),
+            min: min,
+            max: max,
+            onChanged: onChanged,
+          ),
+        ),
+      );
+}
+
+class ColorChip extends StatelessWidget {
+  const ColorChip({
+    required this.color,
+    required this.selected,
+    required this.onTap,
+    super.key,
+  });
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        selected: selected,
+        label: '색상 선택',
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            width: 20,
+            height: 20,
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: selected
+                    ? Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: .72)
+                    : Theme.of(context)
+                        .colorScheme
+                        .outlineVariant
+                        .withValues(alpha: .7),
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+          ),
+        ),
+      );
+}
+
+class _OpacityButton extends StatelessWidget {
+  const _OpacityButton({required this.value, required this.onChanged});
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) => PopupMenuButton<double>(
+        tooltip: '형광펜 강도',
+        padding: EdgeInsets.zero,
+        onSelected: onChanged,
+        itemBuilder: (_) => const [
+          PopupMenuItem(value: .2, child: Text('연하게 20%')),
+          PopupMenuItem(value: .35, child: Text('보통 35%')),
+          PopupMenuItem(value: .5, child: Text('진하게 50%')),
+        ],
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          decoration: BoxDecoration(
+            color: Theme.of(context)
+                .colorScheme
+                .surfaceContainer
+                .withValues(alpha: .55),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.opacity_outlined,
+                size: 15,
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
+            const SizedBox(width: 3),
+            Text('${(value * 100).round()}%',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    )),
+          ]),
+        ),
+      );
+}
+
+class _ContextActionRow extends StatelessWidget {
+  const _ContextActionRow(
+      {required this.icon, required this.label, this.onTap});
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+  @override
+  Widget build(BuildContext context) => Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: onTap,
+          icon: Icon(icon, size: 19),
+          label: Text(label),
+        ),
+      );
 }
 
 class _CropPreview extends StatefulWidget {
-  const _CropPreview({required this.path, required this.crop, required this.onChanged});
+  const _CropPreview(
+      {required this.path, required this.crop, required this.onChanged});
   final String path;
   final Rect crop;
   final ValueChanged<Rect> onChanged;
@@ -2433,7 +4259,9 @@ class _CropPreviewState extends State<_CropPreview> {
                 'top': (p.dy - crop.top).abs(),
                 'bottom': (p.dy - crop.bottom).abs(),
               };
-              edge = distances.entries.reduce((a, b) => a.value < b.value ? a : b).key;
+              edge = distances.entries
+                  .reduce((a, b) => a.value < b.value ? a : b)
+                  .key;
             },
             onPanUpdate: (details) {
               if (edge == null) return;
@@ -2441,10 +4269,24 @@ class _CropPreviewState extends State<_CropPreview> {
               final dy = details.delta.dy / constraints.maxHeight;
               var next = crop;
               switch (edge) {
-                case 'left': next = Rect.fromLTRB((crop.left + dx).clamp(0, crop.right - .05), crop.top, crop.right, crop.bottom);
-                case 'right': next = Rect.fromLTRB(crop.left, crop.top, (crop.right + dx).clamp(crop.left + .05, 1), crop.bottom);
-                case 'top': next = Rect.fromLTRB(crop.left, (crop.top + dy).clamp(0, crop.bottom - .05), crop.right, crop.bottom);
-                case 'bottom': next = Rect.fromLTRB(crop.left, crop.top, crop.right, (crop.bottom + dy).clamp(crop.top + .05, 1));
+                case 'left':
+                  next = Rect.fromLTRB(
+                      (crop.left + dx).clamp(0, crop.right - .05),
+                      crop.top,
+                      crop.right,
+                      crop.bottom);
+                case 'right':
+                  next = Rect.fromLTRB(crop.left, crop.top,
+                      (crop.right + dx).clamp(crop.left + .05, 1), crop.bottom);
+                case 'top':
+                  next = Rect.fromLTRB(
+                      crop.left,
+                      (crop.top + dy).clamp(0, crop.bottom - .05),
+                      crop.right,
+                      crop.bottom);
+                case 'bottom':
+                  next = Rect.fromLTRB(crop.left, crop.top, crop.right,
+                      (crop.bottom + dy).clamp(crop.top + .05, 1));
               }
               widget.onChanged(next);
             },
@@ -2470,17 +4312,31 @@ class _CropOverlayPainter extends CustomPainter {
         crop.right * size.width, crop.bottom * size.height);
     final shade = Paint()..color = Colors.black45;
     canvas.drawRect(Rect.fromLTRB(0, 0, size.width, rect.top), shade);
-    canvas.drawRect(Rect.fromLTRB(0, rect.bottom, size.width, size.height), shade);
+    canvas.drawRect(
+        Rect.fromLTRB(0, rect.bottom, size.width, size.height), shade);
     canvas.drawRect(Rect.fromLTRB(0, rect.top, rect.left, rect.bottom), shade);
-    canvas.drawRect(Rect.fromLTRB(rect.right, rect.top, size.width, rect.bottom), shade);
-    canvas.drawRect(rect, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 2);
+    canvas.drawRect(
+        Rect.fromLTRB(rect.right, rect.top, size.width, rect.bottom), shade);
+    canvas.drawRect(
+        rect,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2);
   }
+
   @override
-  bool shouldRepaint(covariant _CropOverlayPainter oldDelegate) => oldDelegate.crop != crop;
+  bool shouldRepaint(covariant _CropOverlayPainter oldDelegate) =>
+      oldDelegate.crop != crop;
 }
 
 class _CropSlider extends StatelessWidget {
-  const _CropSlider({required this.label, required this.value, required this.min, required this.max, required this.onChanged});
+  const _CropSlider(
+      {required this.label,
+      required this.value,
+      required this.min,
+      required this.max,
+      required this.onChanged});
   final String label;
   final double value;
   final double min;
@@ -2489,8 +4345,15 @@ class _CropSlider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(children: [
-        SizedBox(width: 42, child: Text(label, style: Theme.of(context).textTheme.bodySmall)),
-        Expanded(child: Slider(value: value.clamp(min, max), min: min, max: max, onChanged: onChanged)),
+        SizedBox(
+            width: 42,
+            child: Text(label, style: Theme.of(context).textTheme.bodySmall)),
+        Expanded(
+            child: Slider(
+                value: value.clamp(min, max),
+                min: min,
+                max: max,
+                onChanged: onChanged)),
       ]);
 }
 
@@ -2508,12 +4371,14 @@ class _ShapeTypeButton extends StatelessWidget {
       DrawingShapeType.rectangle => Icons.crop_square_rounded,
       DrawingShapeType.ellipse => Icons.circle_outlined,
       DrawingShapeType.arrow => Icons.arrow_right_alt_rounded,
+      DrawingShapeType.triangle => Icons.change_history_outlined,
     };
     final label = switch (type) {
       DrawingShapeType.line => '직선',
       DrawingShapeType.rectangle => '사각형',
       DrawingShapeType.ellipse => '타원',
       DrawingShapeType.arrow => '화살표',
+      DrawingShapeType.triangle => '삼각형',
     };
     final scheme = Theme.of(context).colorScheme;
     return Semantics(
@@ -2524,7 +4389,7 @@ class _ShapeTypeButton extends StatelessWidget {
         onTap: onTap,
         child: SizedBox(
           width: 32,
-          height: 60,
+          height: 50,
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
             Icon(icon,
                 size: 22,
@@ -2542,76 +4407,6 @@ class _ShapeTypeButton extends StatelessWidget {
   }
 }
 
-class _StrokeWidthOption extends StatelessWidget {
-  const _StrokeWidthOption(
-      {required this.value,
-      required this.selected,
-      required this.onTap,
-      this.compact = false});
-  final double value;
-  final bool selected;
-  final VoidCallback onTap;
-  final bool compact;
-  @override
-  Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: SizedBox(
-          width: compact ? 22 : 32,
-          height: 32,
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Container(
-              width: value <= 4
-                  ? 18
-                  : value <= 10
-                      ? 24
-                      : compact
-                          ? 20
-                          : 30,
-              height: (value / 2).clamp(2, 8),
-              decoration: BoxDecoration(
-                  color: selected
-                      ? const Color(0xff326b9e)
-                      : const Color(0xff65717c),
-                  borderRadius: BorderRadius.circular(6)),
-            ),
-            const SizedBox(height: 5),
-            AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                width: selected ? 16 : 0,
-                height: 2,
-                color: const Color(0xff377ab7)),
-          ]),
-        ),
-      );
-}
-
-class _ColorDot extends StatelessWidget {
-  const _ColorDot(
-      {required this.color, required this.selected, required this.onTap});
-  final Color color;
-  final bool selected;
-  final VoidCallback onTap;
-  @override
-  Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: Container(
-          width: 28,
-          height: 28,
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                  color:
-                      selected ? const Color(0xff377ab7) : Colors.transparent,
-                  width: 2)),
-          child: DecoratedBox(
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-        ),
-      );
-}
-
 class _PaletteButton extends StatelessWidget {
   const _PaletteButton({required this.onTap});
   final VoidCallback onTap;
@@ -2626,8 +4421,8 @@ class _PaletteButton extends StatelessWidget {
             width: 28,
             height: 28,
             child: Center(
-              child: Icon(Icons.keyboard_arrow_down_rounded,
-                  size: 22, color: Color(0xff5f6b76)),
+              child: Icon(Icons.palette_outlined,
+                  size: 20, color: Color(0xff5f6b76)),
             ),
           ),
         ),
@@ -2791,6 +4586,87 @@ class _PageSnapshot {
   final List<DrawingImage> images;
 }
 
+class _PerfSample {
+  const _PerfSample({
+    required this.rawMoveEvents,
+    required this.acceptedPoints,
+    required this.rejectedNearPoints,
+    required this.avgPointDistance,
+    required this.minPointDistance,
+    required this.maxPointDistance,
+    required this.totalStrokeDistance,
+    required this.pathBuildCount,
+    required this.pathBuildAvgUs,
+    required this.pathBuildMaxUs,
+    required this.fullPathRebuildCount,
+    required this.incrementalSegmentBuildCount,
+    required this.incrementalBuildAvgUs,
+    required this.incrementalBuildMaxUs,
+    required this.activePaintAvgUs,
+    required this.activePaintMaxUs,
+    required this.overlayPaintAvgUs,
+    required this.overlayPaintMaxUs,
+    required this.pictureDrawAvgUs,
+    required this.pictureDrawMaxUs,
+    required this.activePathDrawAvgUs,
+    required this.activePathDrawMaxUs,
+    required this.buildAvgMs,
+    required this.buildP95Ms,
+    required this.buildMaxMs,
+    required this.rasterAvgMs,
+    required this.rasterP95Ms,
+    required this.rasterMaxMs,
+    required this.editorBuilds,
+    required this.staticPainterRepaints,
+    required this.activePainterRepaints,
+    required this.activeRevisionUpdates,
+    required this.staticObjectPaintCount,
+    required this.avgFrameMs,
+    required this.p95FrameMs,
+    required this.maxFrameMs,
+    required this.strokeElapsedMs,
+  });
+  final int rawMoveEvents;
+  final int acceptedPoints;
+  final int rejectedNearPoints;
+  final double avgPointDistance;
+  final double minPointDistance;
+  final double maxPointDistance;
+  final double totalStrokeDistance;
+  final int pathBuildCount;
+  final int pathBuildAvgUs;
+  final int pathBuildMaxUs;
+  final int fullPathRebuildCount;
+  final int incrementalSegmentBuildCount;
+  final int incrementalBuildAvgUs;
+  final int incrementalBuildMaxUs;
+  final int activePaintAvgUs;
+  final int activePaintMaxUs;
+  final int overlayPaintAvgUs;
+  final int overlayPaintMaxUs;
+  final int pictureDrawAvgUs;
+  final int pictureDrawMaxUs;
+  final int activePathDrawAvgUs;
+  final int activePathDrawMaxUs;
+  final double buildAvgMs;
+  final double buildP95Ms;
+  final double buildMaxMs;
+  final double rasterAvgMs;
+  final double rasterP95Ms;
+  final double rasterMaxMs;
+  final int editorBuilds;
+  final int staticPainterRepaints;
+  final int activePainterRepaints;
+  final int activeRevisionUpdates;
+  final int staticObjectPaintCount;
+  final double avgFrameMs;
+  final double p95FrameMs;
+  final double maxFrameMs;
+  final int strokeElapsedMs;
+  double get reductionRate =>
+      rawMoveEvents == 0 ? 0 : (rejectedNearPoints / rawMoveEvents) * 100;
+}
+
 bool _samePages(_PageSnapshot before, _PageSnapshot after) =>
     _sameStrokePoints(before.strokes, after.strokes) &&
     _sameShapes(before.shapes, after.shapes) &&
@@ -2861,8 +4737,17 @@ Rect _textRect(DrawingText text, Size size) => Rect.fromLTWH(
 Rect _imageRectNormalized(DrawingImage image) => Rect.fromLTWH(
     image.position.x, image.position.y, image.width, image.height);
 
-bool _imageIsInsideLasso(DrawingImage image, List<StrokePoint> polygon) {
+Rect _pointsBounds(List<StrokePoint> points) {
+  final xs = points.map((point) => point.x);
+  final ys = points.map((point) => point.y);
+  return Rect.fromLTRB(xs.reduce(math.min), ys.reduce(math.min),
+      xs.reduce(math.max), ys.reduce(math.max));
+}
+
+bool _imageIsInsideLasso(DrawingImage image, List<StrokePoint> polygon,
+    Rect polygonBounds) {
   final rect = _imageRectNormalized(image);
+  if (!rect.overlaps(polygonBounds)) return false;
   final points = [
     StrokePoint(rect.left, rect.top, 1),
     StrokePoint(rect.right, rect.top, 1),
@@ -2873,8 +4758,10 @@ bool _imageIsInsideLasso(DrawingImage image, List<StrokePoint> polygon) {
   return points.where((point) => _pointInPolygon(point, polygon)).length >= 3;
 }
 
-bool _textIsInsideLasso(DrawingText text, List<StrokePoint> polygon) {
+bool _textIsInsideLasso(DrawingText text, List<StrokePoint> polygon,
+    Rect polygonBounds) {
   final rect = _textRectNormalized(text);
+  if (!rect.overlaps(polygonBounds)) return false;
   final points = [
     StrokePoint(rect.left, rect.top, 1),
     StrokePoint(rect.right, rect.top, 1),
@@ -2886,16 +4773,35 @@ bool _textIsInsideLasso(DrawingText text, List<StrokePoint> polygon) {
 }
 
 StrokePoint _scaledPoint(
-        StrokePoint point, Rect bounds, double scaleX, double scaleY) =>
+        StrokePoint point, Rect bounds, double scaleX, double scaleY,
+        {Offset offset = Offset.zero}) =>
     StrokePoint(
-      bounds.left + (point.x - bounds.left) * scaleX,
-      bounds.top + (point.y - bounds.top) * scaleY,
+      bounds.left + offset.dx + (point.x - bounds.left) * scaleX,
+      bounds.top + offset.dy + (point.y - bounds.top) * scaleY,
       point.pressure,
     );
 
-bool _resizeHandleHit(Rect bounds, StrokePoint point) =>
-    (point.x - bounds.right).abs() <= .03 &&
-    (point.y - bounds.bottom).abs() <= .03;
+enum _ResizeHandle {
+  topLeft(-1, -1),
+  topRight(1, -1),
+  bottomLeft(-1, 1),
+  bottomRight(1, 1);
+
+  const _ResizeHandle(this.horizontal, this.vertical);
+  final int horizontal;
+  final int vertical;
+}
+
+_ResizeHandle? _resizeHandleHit(Rect bounds, StrokePoint point) {
+  for (final handle in _ResizeHandle.values) {
+    final x = handle.horizontal < 0 ? bounds.left : bounds.right;
+    final y = handle.vertical < 0 ? bounds.top : bounds.bottom;
+    if ((point.x - x).abs() <= .035 && (point.y - y).abs() <= .035) {
+      return handle;
+    }
+  }
+  return null;
+}
 
 double _snappedSelectionDelta(double delta, double start, double end) {
   const targets = [.04, .5, .96];
@@ -2926,6 +4832,114 @@ StrokePoint _rotatePoint(StrokePoint point, StrokePoint pivot, double radians) {
     pivot.x + dx * cos - dy * sin,
     pivot.y + dx * sin + dy * cos,
     point.pressure,
+  );
+}
+
+class _WidthPresetGroup extends StatelessWidget {
+  const _WidthPresetGroup({
+    required this.value,
+    required this.values,
+    required this.color,
+    required this.onChanged,
+    required this.semanticLabel,
+    this.onDetailsRequested,
+  });
+  final double value;
+  final List<double> values;
+  final Color color;
+  final ValueChanged<double> onChanged;
+  final String semanticLabel;
+  final VoidCallback? onDetailsRequested;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        label: semanticLabel,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          for (final preset in values)
+            InkWell(
+              onTap: () {
+                if (preset == _nearestPreset && onDetailsRequested != null) {
+                  onDetailsRequested!();
+                } else {
+                  onChanged(preset);
+                }
+              },
+              borderRadius: BorderRadius.circular(6),
+              child: SizedBox(
+                width: 32,
+                height: 34,
+                child: Center(
+                  child: Container(
+                    width: 22,
+                    height: 1.5 + 5 * (preset / values.last),
+                    decoration: BoxDecoration(
+                      color: preset == _nearestPreset
+                          ? color
+                          : color.withValues(alpha: .52),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ]),
+      );
+
+  double get _nearestPreset =>
+      values.reduce((a, b) => (value - a).abs() <= (value - b).abs() ? a : b);
+}
+
+Future<void> _showWidthValuePopover(
+  BuildContext context, {
+  required String title,
+  required double value,
+  required double min,
+  required double max,
+  required Color color,
+  required ValueChanged<double> onChanged,
+}) async {
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text(title),
+      content: SizedBox(
+        width: 270,
+        child: StatefulBuilder(
+          builder: (context, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                height: 28,
+                alignment: Alignment.center,
+                child: Container(
+                  width: 120,
+                  height: 2 + 7 * ((value - min) / (max - min)),
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+              Slider(
+                value: value.clamp(min, max),
+                min: min,
+                max: max,
+                onChanged: (next) {
+                  setDialogState(() {});
+                  onChanged(next);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('닫기'),
+        ),
+      ],
+    ),
   );
 }
 
@@ -2966,27 +4980,45 @@ List<StrokePoint> _shapeSelectionPoints(DrawingShape shape) {
   ].map((point) => _rotatePoint(point, pivot, shape.rotationRadians)).toList();
 }
 
-bool _strokeIsInsideLasso(Stroke stroke, List<StrokePoint> polygon) {
+bool _strokeIsInsideLasso(Stroke stroke, List<StrokePoint> polygon,
+    Rect polygonBounds) {
   if (stroke.points.isEmpty) return false;
-  final inside =
-      stroke.points.where((point) => _pointInPolygon(point, polygon)).length;
-  return inside >= math.max(1, (stroke.points.length * .6).ceil());
+  if (!_pointsBounds(stroke.points).overlaps(polygonBounds)) return false;
+  // Selecting an ink stroke should work when the lasso contains it *or*
+  // crosses it. Requiring most points to be inside made long strokes at the
+  // edge of a selection unexpectedly unselectable.
+  if (stroke.points.any((point) => _pointInPolygon(point, polygon))) {
+    return true;
+  }
+  for (var index = 1; index < stroke.points.length; index++) {
+    if (_segmentIntersectsPolygon(
+        stroke.points[index - 1], stroke.points[index], polygon)) {
+      return true;
+    }
+  }
+  return false;
 }
 
-bool _shapeIsInsideLasso(DrawingShape shape, List<StrokePoint> polygon) {
+bool _shapeIsInsideLasso(DrawingShape shape, List<StrokePoint> polygon,
+    Rect polygonBounds) {
   final points = _shapeSelectionPoints(shape);
+  if (!_pointsBounds(points).overlaps(polygonBounds)) return false;
   final start = points.first;
   final end = points[1];
   final center = StrokePoint((start.x + end.x) / 2, (start.y + end.y) / 2, 1);
   if (shape.type == DrawingShapeType.line ||
       shape.type == DrawingShapeType.arrow) {
-    return [start, center, end]
-            .where((point) => _pointInPolygon(point, polygon))
-            .length >=
-        2;
+    return _pointInPolygon(start, polygon) ||
+        _pointInPolygon(end, polygon) ||
+        _segmentIntersectsPolygon(start, end, polygon);
   }
   final corners = [...points, center];
-  return corners.where((point) => _pointInPolygon(point, polygon)).length >= 3;
+  if (corners.any((point) => _pointInPolygon(point, polygon))) return true;
+  for (var index = 0; index < 4; index++) {
+    if (_segmentIntersectsPolygon(
+        points[index], points[(index + 1) % 4], polygon)) return true;
+  }
+  return false;
 }
 
 bool _pointInPolygon(StrokePoint point, List<StrokePoint> polygon) {
@@ -3008,6 +5040,41 @@ bool _pointInPolygon(StrokePoint point, List<StrokePoint> polygon) {
   }
   return inside;
 }
+
+bool _segmentIntersectsPolygon(
+    StrokePoint start, StrokePoint end, List<StrokePoint> polygon) {
+  for (var index = 0; index < polygon.length; index++) {
+    final next = polygon[(index + 1) % polygon.length];
+    if (_segmentsIntersect(start, end, polygon[index], next)) return true;
+  }
+  return false;
+}
+
+bool _segmentsIntersect(
+    StrokePoint a, StrokePoint b, StrokePoint c, StrokePoint d) {
+  final ab = _orientation(a, b, c);
+  final ab2 = _orientation(a, b, d);
+  final cd = _orientation(c, d, a);
+  final cd2 = _orientation(c, d, b);
+  const epsilon = 1e-9;
+  final crosses = ((ab > epsilon && ab2 < -epsilon) ||
+          (ab < -epsilon && ab2 > epsilon)) &&
+      ((cd > epsilon && cd2 < -epsilon) || (cd < -epsilon && cd2 > epsilon));
+  if (crosses) return true;
+  return (ab.abs() <= epsilon && _pointOnSegment(a, b, c)) ||
+      (ab2.abs() <= epsilon && _pointOnSegment(a, b, d)) ||
+      (cd.abs() <= epsilon && _pointOnSegment(c, d, a)) ||
+      (cd2.abs() <= epsilon && _pointOnSegment(c, d, b));
+}
+
+double _orientation(StrokePoint a, StrokePoint b, StrokePoint c) =>
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+
+bool _pointOnSegment(StrokePoint a, StrokePoint b, StrokePoint point) =>
+    point.x >= math.min(a.x, b.x) - 1e-9 &&
+    point.x <= math.max(a.x, b.x) + 1e-9 &&
+    point.y >= math.min(a.y, b.y) - 1e-9 &&
+    point.y <= math.max(a.y, b.y) + 1e-9;
 
 class DrawingCanvas extends StatelessWidget {
   const DrawingCanvas(
@@ -3037,6 +5104,22 @@ class DrawingCanvas extends StatelessWidget {
       this.onSelectionEnd,
       this.onTextTap,
       this.onImageTap,
+      this.repaint,
+      this.staticRepaint,
+      this.revision = 0,
+      this.staticRevision = 0,
+      this.useIncrementalActivePath = true,
+      this.instrumentationEnabled = true,
+      this.onPaint,
+      this.onStaticPaint,
+      this.onStaticObjectPaint,
+      this.onPathBuild,
+      this.onIncrementalPathBuild,
+      this.onFullPathRebuild,
+      this.onActivePaint,
+      this.onOverlayPaint,
+      this.onPictureDraw,
+      this.onActivePathDraw,
       super.key});
   final List<Stroke> strokes;
   final List<DrawingText> texts;
@@ -3064,6 +5147,22 @@ class DrawingCanvas extends StatelessWidget {
   final VoidCallback? onSelectionEnd;
   final void Function(Offset, Size)? onTextTap;
   final void Function(Offset, Size)? onImageTap;
+  final Listenable? repaint;
+  final Listenable? staticRepaint;
+  final int revision;
+  final int staticRevision;
+  final bool useIncrementalActivePath;
+  final bool instrumentationEnabled;
+  final VoidCallback? onPaint;
+  final VoidCallback? onStaticPaint;
+  final VoidCallback? onStaticObjectPaint;
+  final ValueChanged<Duration>? onPathBuild;
+  final ValueChanged<Duration>? onIncrementalPathBuild;
+  final VoidCallback? onFullPathRebuild;
+  final ValueChanged<Duration>? onActivePaint;
+  final ValueChanged<Duration>? onOverlayPaint;
+  final ValueChanged<Duration>? onPictureDraw;
+  final ValueChanged<Duration>? onActivePathDraw;
   @override
   Widget build(BuildContext context) =>
       LayoutBuilder(builder: (context, constraints) {
@@ -3094,28 +5193,98 @@ class DrawingCanvas extends StatelessWidget {
                         : tool == StrokeTool.image
                             ? null
                             : onEnd(),
-            child: CustomPaint(
-                painter: _NotebookPagePainter(pageTemplateId),
-                foregroundPainter: StrokePainter(
-                    strokes,
-                    activePoints,
-                    size,
-                    tool,
-                    color,
-                    width,
-                    penType,
-                    lassoPath,
-                    selectedStrokeIds,
-                    shapes,
-                    activeShape,
-                    selectedShapeIds,
-                    texts,
-                    selectedTextIds,
-                    hiddenTextId,
-                    images,
-                    imageCache,
-                    selectedImageIds),
-                child: const SizedBox.expand()));
+            child: RepaintBoundary(
+              child: Stack(children: [
+                RepaintBoundary(
+                  child: CustomPaint(
+                    isComplex: true,
+                    willChange: false,
+                    painter: _NotebookPagePainter(pageTemplateId),
+                    foregroundPainter: StrokePainter(
+                        strokes,
+                        activePoints,
+                        size,
+                        tool,
+                        color,
+                        width,
+                        penType,
+                        lassoPath,
+                        selectedStrokeIds,
+                        shapes,
+                        activeShape,
+                        selectedShapeIds,
+                        texts,
+                        selectedTextIds,
+                        hiddenTextId,
+                        images,
+                        imageCache,
+                        selectedImageIds,
+                        revision,
+                        staticRevision,
+                        onPaint,
+                        onStaticPaint,
+                        onStaticObjectPaint,
+                        onPathBuild,
+                        onIncrementalPathBuild,
+                        onFullPathRebuild,
+                        onActivePaint,
+                        onOverlayPaint,
+                        onPictureDraw,
+                        onActivePathDraw,
+                        useIncrementalActivePath,
+                        instrumentationEnabled,
+                        staticRepaint,
+                        true),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+                RepaintBoundary(
+                  child: CustomPaint(
+                    isComplex: false,
+                    willChange: true,
+                    foregroundPainter: StrokePainter.activeLayer(
+                      StrokePainter(
+                          strokes,
+                          activePoints,
+                          size,
+                          tool,
+                          color,
+                          width,
+                          penType,
+                          lassoPath,
+                          selectedStrokeIds,
+                          shapes,
+                          activeShape,
+                          selectedShapeIds,
+                          texts,
+                          selectedTextIds,
+                          hiddenTextId,
+                          images,
+                          imageCache,
+                          selectedImageIds,
+                          revision,
+                          staticRevision,
+                          onPaint,
+                          onStaticPaint,
+                          onStaticObjectPaint,
+                          onPathBuild,
+                          onIncrementalPathBuild,
+                          onFullPathRebuild,
+                          onActivePaint,
+                          onOverlayPaint,
+                          onPictureDraw,
+                          onActivePathDraw,
+                          useIncrementalActivePath,
+                          instrumentationEnabled,
+                          null,
+                          true),
+                      repaint,
+                    ),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              ]),
+            ));
       });
 }
 
@@ -3225,7 +5394,61 @@ class StrokePainter extends CustomPainter {
       this.hiddenTextId,
       this.images = const [],
       this.imageCache = const {},
-      this.selectedImageIds = const {}]);
+      this.selectedImageIds = const {},
+      this.revision = 0,
+      this.staticRevision = 0,
+      this.onPaint,
+      this.onStaticPaint,
+      this.onStaticObjectPaint,
+      this.onPathBuild,
+      this.onIncrementalPathBuild,
+      this.onFullPathRebuild,
+      this.onActivePaint,
+      this.onOverlayPaint,
+      this.onPictureDraw,
+      this.onActivePathDraw,
+      this.useIncrementalActivePath = true,
+      this.instrumentationEnabled = true,
+      Listenable? repaint,
+      this.staticOnly = false])
+      : super(repaint: repaint);
+
+  StrokePainter.activeLayer(StrokePainter source, Listenable? repaint)
+      : this(
+            source.strokes,
+            source.active,
+            source.size,
+            source.activeTool,
+            source.activeColor,
+            source.activeWidth,
+            source.activePenType,
+            source.lassoPath,
+            source.selectedStrokeIds,
+            source.shapes,
+            source.activeShape,
+            source.selectedShapeIds,
+            source.texts,
+            source.selectedTextIds,
+            source.hiddenTextId,
+            source.images,
+            source.imageCache,
+            source.selectedImageIds,
+            source.revision,
+            source.staticRevision,
+            source.onPaint,
+            source.onStaticPaint,
+            source.onStaticObjectPaint,
+            source.onPathBuild,
+            source.onIncrementalPathBuild,
+            source.onFullPathRebuild,
+            source.onActivePaint,
+            source.onOverlayPaint,
+            source.onPictureDraw,
+            source.onActivePathDraw,
+            source.useIncrementalActivePath,
+            source.instrumentationEnabled,
+            repaint,
+            false);
   final List<Stroke> strokes;
   final List<StrokePoint> active;
   final Size size;
@@ -3244,91 +5467,240 @@ class StrokePainter extends CustomPainter {
   final List<DrawingImage> images;
   final Map<String, ui.Image> imageCache;
   final Set<String> selectedImageIds;
+  final int revision;
+  final int staticRevision;
+  final VoidCallback? onPaint;
+  final VoidCallback? onStaticPaint;
+  final VoidCallback? onStaticObjectPaint;
+  final ValueChanged<Duration>? onPathBuild;
+  final ValueChanged<Duration>? onIncrementalPathBuild;
+  final VoidCallback? onFullPathRebuild;
+  final ValueChanged<Duration>? onActivePaint;
+  final ValueChanged<Duration>? onOverlayPaint;
+  final ValueChanged<Duration>? onPictureDraw;
+  final ValueChanged<Duration>? onActivePathDraw;
+  final bool useIncrementalActivePath;
+  final bool instrumentationEnabled;
+  final bool staticOnly;
+  ui.Picture? _staticPicture;
+  Size? _staticSize;
+  int _staticRevision = -1;
+  Path? _activePath;
+  int _activeProcessedPointCount = 0;
+  Size? _activePathSize;
+  StrokePoint? _activeFirstPoint;
+  final Paint _activePaint = Paint();
+  static final DateTime _activeCreatedAt =
+      DateTime.fromMicrosecondsSinceEpoch(0);
   @override
   void paint(Canvas canvas, Size _) {
+    if (!staticOnly) onPaint?.call();
+    if (staticOnly) {
+      if (_staticPicture == null ||
+          _staticRevision != staticRevision ||
+          _staticSize != size) {
+        final recorder = ui.PictureRecorder();
+        final staticCanvas = Canvas(recorder);
+        _paintStatic(staticCanvas);
+        onStaticPaint?.call();
+        _staticPicture = recorder.endRecording();
+        _staticRevision = staticRevision;
+        _staticSize = size;
+      }
+      final pictureClock = _drawingPerfEnabled && instrumentationEnabled
+          ? (Stopwatch()..start())
+          : null;
+      canvas.drawPicture(_staticPicture!);
+      pictureClock?.stop();
+      onPictureDraw?.call(pictureClock?.elapsed ?? Duration.zero);
+      return;
+    }
+    if (activeShape case final shape?) _paintShape(canvas, shape);
+    if (active.isNotEmpty) {
+      final activeClock = _drawingPerfEnabled && instrumentationEnabled
+          ? (Stopwatch()..start())
+          : null;
+      _paintActiveStroke(canvas);
+      activeClock?.stop();
+      onActivePaint?.call(activeClock?.elapsed ?? Duration.zero);
+    }
+    final overlayClock = _drawingPerfEnabled && instrumentationEnabled
+        ? (Stopwatch()..start())
+        : null;
+    _paintLasso(canvas);
+    _paintSelectionBounds(canvas);
+    overlayClock?.stop();
+    onOverlayPaint?.call(overlayClock?.elapsed ?? Duration.zero);
+  }
+
+  void _paintStatic(Canvas canvas) {
     for (final image in images) {
+      onStaticObjectPaint?.call();
       _paintImage(canvas, image);
     }
     for (final shape in shapes) {
+      onStaticObjectPaint?.call();
       _paintShape(canvas, shape);
     }
     for (final text in texts) {
+      onStaticObjectPaint?.call();
       if (text.id != hiddenTextId) _paintText(canvas, text);
     }
-    if (activeShape case final shape?) _paintShape(canvas, shape);
-    final all = [...strokes];
-    if (active.isNotEmpty) {
-      all.add(Stroke(
-          id: 'active',
-          documentId: '',
-          pageId: '',
-          tool: activeTool,
-          penType: activePenType,
-          points: active,
-          color: activeColor,
-          width: activeWidth,
-          opacity: activeTool == StrokeTool.highlighter ? .35 : 1,
-          order: 0,
-          createdAt: DateTime.now()));
+    for (final stroke in strokes) {
+      onStaticObjectPaint?.call();
+      _paintStroke(canvas, stroke);
     }
-    for (final stroke in all) {
-      if (stroke.points.isEmpty) continue;
-      final paint = Paint()
-        ..color = stroke.color.withValues(alpha: _opacityFor(stroke))
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-      if (stroke.tool == StrokeTool.eraser) {
-        paint.blendMode = ui.BlendMode.clear;
-      }
-      if (stroke.tool == StrokeTool.shapeLine ||
-          stroke.tool == StrokeTool.shapeRectangle ||
-          stroke.tool == StrokeTool.shapeEllipse ||
-          stroke.tool == StrokeTool.shapeArrow) {
-        final start = restorePoint(stroke.points.first, size);
-        final end = restorePoint(stroke.points.last, size);
-        paint.strokeWidth = stroke.width;
-        final rect = Rect.fromPoints(start, end);
-        switch (stroke.tool) {
-          case StrokeTool.shapeLine:
-            canvas.drawLine(start, end, paint);
-          case StrokeTool.shapeRectangle:
-            canvas.drawRect(rect, paint);
-          case StrokeTool.shapeEllipse:
-            canvas.drawOval(rect, paint);
-          case StrokeTool.shapeArrow:
-            canvas.drawLine(start, end, paint);
-            final direction = end - start;
-            final angle = math.atan2(direction.dy, direction.dx);
-            const wing = math.pi / 7;
-            final length = 12.0 + stroke.width * 1.5;
-            final left = end -
-                Offset(math.cos(angle - wing) * length,
-                    math.sin(angle - wing) * length);
-            final right = end -
-                Offset(math.cos(angle + wing) * length,
-                    math.sin(angle + wing) * length);
-            canvas.drawLine(end, left, paint);
-            canvas.drawLine(end, right, paint);
-          case StrokeTool.pen:
-          case StrokeTool.highlighter:
-          case StrokeTool.eraser:
-          case StrokeTool.lasso:
-          case StrokeTool.text:
-          case StrokeTool.image:
-            break;
-        }
-        continue;
-      }
-      _paintSmoothStroke(canvas, stroke, paint);
-      if (stroke.points.length == 1) {
-        final point = stroke.points.first;
-        canvas.drawCircle(
-            restorePoint(point, size), _widthFor(stroke, point) / 2, paint);
-      }
+  }
+
+  void _paintStroke(Canvas canvas, Stroke stroke) {
+    if (stroke.points.isEmpty) return;
+    final paint = Paint()
+      ..color = stroke.color.withValues(alpha: _opacityFor(stroke))
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+    if (stroke.tool == StrokeTool.eraser) {
+      paint.blendMode = ui.BlendMode.clear;
     }
-    _paintLasso(canvas);
-    _paintSelectionBounds(canvas);
+    if (stroke.tool == StrokeTool.shapeLine ||
+        stroke.tool == StrokeTool.shapeRectangle ||
+        stroke.tool == StrokeTool.shapeEllipse ||
+        stroke.tool == StrokeTool.shapeArrow ||
+        stroke.tool == StrokeTool.shapeTriangle) {
+      final start = restorePoint(stroke.points.first, size);
+      final end = restorePoint(stroke.points.last, size);
+      paint.strokeWidth = stroke.width;
+      final rect = Rect.fromPoints(start, end);
+      switch (stroke.tool) {
+        case StrokeTool.shapeLine:
+          canvas.drawLine(start, end, paint);
+        case StrokeTool.shapeRectangle:
+          canvas.drawRect(rect, paint);
+        case StrokeTool.shapeEllipse:
+          canvas.drawOval(rect, paint);
+        case StrokeTool.shapeArrow:
+          canvas.drawLine(start, end, paint);
+          final direction = end - start;
+          final angle = math.atan2(direction.dy, direction.dx);
+          const wing = math.pi / 7;
+          final length = 12.0 + stroke.width * 1.5;
+          final left = end -
+              Offset(math.cos(angle - wing) * length,
+                  math.sin(angle - wing) * length);
+          final right = end -
+              Offset(math.cos(angle + wing) * length,
+                  math.sin(angle + wing) * length);
+          canvas.drawLine(end, left, paint);
+          canvas.drawLine(end, right, paint);
+        case StrokeTool.shapeTriangle:
+          final rect = Rect.fromPoints(start, end);
+          final path = Path()
+            ..moveTo(rect.center.dx, rect.top)
+            ..lineTo(rect.right, rect.bottom)
+            ..lineTo(rect.left, rect.bottom)
+            ..close();
+          canvas.drawPath(path, paint);
+        case StrokeTool.pen:
+        case StrokeTool.highlighter:
+        case StrokeTool.eraser:
+        case StrokeTool.lasso:
+        case StrokeTool.text:
+        case StrokeTool.image:
+          break;
+      }
+      return;
+    }
+    _paintSmoothStroke(canvas, stroke, paint);
+    if (stroke.points.length == 1) {
+      final point = stroke.points.first;
+      canvas.drawCircle(
+          restorePoint(point, size), _widthFor(stroke, point) / 2, paint);
+    }
+  }
+
+  void _paintActiveStroke(Canvas canvas) {
+    final stroke = Stroke(
+        id: 'active',
+        documentId: '',
+        pageId: '',
+        tool: activeTool,
+        penType: activePenType,
+        points: active,
+        color: activeColor,
+        width: activeWidth,
+        opacity: activeTool == StrokeTool.highlighter ? .35 : 1,
+        order: 0,
+        createdAt: _activeCreatedAt);
+    if (active.length < 3) {
+      _activePath = null;
+      _activeProcessedPointCount = 0;
+      _activeFirstPoint = null;
+      _paintStroke(canvas, stroke);
+      return;
+    }
+    if (_hasPressureVariation(stroke)) {
+      // Variable-width pressure strokes need per-segment paints; retain the
+      // incremental path for the common constant-pressure case.
+      _paintStroke(canvas, stroke);
+      return;
+    }
+    if (!useIncrementalActivePath) {
+      _paintStroke(canvas, stroke);
+      return;
+    }
+    final paint = _activePaint
+      ..color = stroke.color.withValues(alpha: _opacityFor(stroke))
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = (_widthFor(stroke, active[active.length - 2]) +
+              _widthFor(stroke, active.last)) /
+          2;
+    final path = _incrementalActivePath();
+    final pathClock = _drawingPerfEnabled && instrumentationEnabled
+        ? (Stopwatch()..start())
+        : null;
+    canvas.drawPath(path, paint);
+    pathClock?.stop();
+    onActivePathDraw?.call(pathClock?.elapsed ?? Duration.zero);
+  }
+
+  Path _incrementalActivePath() {
+    final points = active;
+    final needsReset = _activePath == null ||
+        _activePathSize != size ||
+        _activeProcessedPointCount > points.length ||
+        _activeFirstPoint?.x != points.first.x ||
+        _activeFirstPoint?.y != points.first.y;
+    if (needsReset) {
+      _activePath = Path()
+        ..moveTo(restorePoint(points.first, size).dx,
+            restorePoint(points.first, size).dy);
+      _activeProcessedPointCount = 1;
+      _activePathSize = size;
+      _activeFirstPoint = points.first;
+      onFullPathRebuild?.call();
+    }
+    final path = _activePath!;
+    // The previous path ends at the prior final point. Appending the new
+    // midpoint segment preserves the existing quadratic composition without
+    // walking already processed points again.
+    final firstNewControl = math.max(1, _activeProcessedPointCount - 1);
+    for (var index = firstNewControl; index < points.length - 1; index++) {
+      final clock = _drawingPerfEnabled && instrumentationEnabled
+          ? (Stopwatch()..start())
+          : null;
+      final control = restorePoint(points[index], size);
+      final next = restorePoint(points[index + 1], size);
+      final midpoint =
+          Offset((control.dx + next.dx) / 2, (control.dy + next.dy) / 2);
+      path.quadraticBezierTo(control.dx, control.dy, midpoint.dx, midpoint.dy);
+      path.quadraticBezierTo(next.dx, next.dy, next.dx, next.dy);
+      clock?.stop();
+      onIncrementalPathBuild?.call(clock?.elapsed ?? Duration.zero);
+    }
+    _activeProcessedPointCount = points.length;
+    return path;
   }
 
   /// Draws a stroke as a compact quadratic path. Pointer samples are often
@@ -3336,13 +5708,24 @@ class StrokePainter extends CustomPainter {
   /// visibly jagged at normal writing speed. Midpoints keep the original
   /// normalized coordinates while making the rendered path feel continuous.
   void _paintSmoothStroke(Canvas canvas, Stroke stroke, Paint paint) {
+    final pathClock = _drawingPerfEnabled && instrumentationEnabled
+        ? (Stopwatch()..start())
+        : null;
     final points = stroke.points;
     if (points.length < 2) return;
+    if (_hasPressureVariation(stroke)) {
+      pathClock?.stop();
+      onPathBuild?.call(pathClock?.elapsed ?? Duration.zero);
+      _paintVariablePressureStroke(canvas, stroke, paint);
+      return;
+    }
     if (points.length == 2) {
       final start = points.first;
       final end = points.last;
-      paint.strokeWidth = (_widthFor(stroke, start) + _widthFor(stroke, end)) / 2;
-      canvas.drawLine(restorePoint(start, size), restorePoint(end, size), paint);
+      paint.strokeWidth =
+          (_widthFor(stroke, start) + _widthFor(stroke, end)) / 2;
+      canvas.drawLine(
+          restorePoint(start, size), restorePoint(end, size), paint);
       return;
     }
 
@@ -3361,13 +5744,72 @@ class StrokePainter extends CustomPainter {
         nextMid.dx,
         nextMid.dy,
       );
-      paint.strokeWidth =
-          (_widthFor(stroke, points[index]) + _widthFor(stroke, points[index + 1])) /
-              2;
+      paint.strokeWidth = (_widthFor(stroke, points[index]) +
+              _widthFor(stroke, points[index + 1])) /
+          2;
     }
     final last = restorePoint(points.last, size);
     path.quadraticBezierTo(last.dx, last.dy, last.dx, last.dy);
     canvas.drawPath(path, paint);
+    pathClock?.stop();
+    onPathBuild?.call(pathClock?.elapsed ?? Duration.zero);
+  }
+
+  bool _hasPressureVariation(Stroke stroke) {
+    if (stroke.tool != StrokeTool.pen || stroke.points.length < 3) return false;
+    var minPressure = stroke.points.first.pressure;
+    var maxPressure = minPressure;
+    for (final point in stroke.points.skip(1)) {
+      minPressure = math.min(minPressure, point.pressure);
+      maxPressure = math.max(maxPressure, point.pressure);
+    }
+    return maxPressure - minPressure >= .05;
+  }
+
+  void _paintVariablePressureStroke(Canvas canvas, Stroke stroke, Paint paint) {
+    final points = stroke.points;
+    final first = restorePoint(points.first, size);
+    canvas.drawCircle(first, _widthFor(stroke, points.first) / 2, paint);
+    Path? segmentPath;
+    double? bucketWidth;
+    void flush() {
+      final path = segmentPath;
+      if (path != null) canvas.drawPath(path, paint);
+      segmentPath = null;
+    }
+
+    for (var index = 1; index < points.length - 1; index++) {
+      final previous = restorePoint(points[index - 1], size);
+      final control = restorePoint(points[index], size);
+      final next = restorePoint(points[index + 1], size);
+      final start = Offset(
+        (previous.dx + control.dx) / 2,
+        (previous.dy + control.dy) / 2,
+      );
+      final end = Offset(
+        (control.dx + next.dx) / 2,
+        (control.dy + next.dy) / 2,
+      );
+      final width = (_widthFor(stroke, points[index - 1]) +
+              _widthFor(stroke, points[index]) +
+              _widthFor(stroke, points[index + 1])) /
+          3;
+      // Quantizing widths into small buckets lets adjacent segments share a
+      // Path/draw call while retaining the visible pressure variation.
+      final nextBucket = (width * 2).round() / 2;
+      if (bucketWidth != nextBucket) {
+        flush();
+        bucketWidth = nextBucket;
+        paint.strokeWidth = nextBucket;
+      }
+      (segmentPath ??= Path())
+        ..moveTo(start.dx, start.dy)
+        ..quadraticBezierTo(control.dx, control.dy, end.dx, end.dy);
+    }
+    flush();
+    final last = points.last;
+    canvas.drawCircle(
+        restorePoint(last, size), _widthFor(stroke, last) / 2, paint);
   }
 
   void _paintText(Canvas canvas, DrawingText text) {
@@ -3455,6 +5897,14 @@ class StrokePainter extends CustomPainter {
                 math.sin(angle + wing) * length);
         canvas.drawLine(end, left, paint);
         canvas.drawLine(end, right, paint);
+      case DrawingShapeType.triangle:
+        final rect = Rect.fromPoints(start, end);
+        final path = Path()
+          ..moveTo(rect.center.dx, rect.top)
+          ..lineTo(rect.right, rect.bottom)
+          ..lineTo(rect.left, rect.bottom)
+          ..close();
+        canvas.drawPath(path, paint);
     }
     canvas.restore();
   }
@@ -3560,20 +6010,29 @@ class StrokePainter extends CustomPainter {
           rotateCenter,
           border);
       _paintSelectionHandle(canvas, rotateCenter);
-      final center = Offset(rect.right * size.width, rect.bottom * size.height);
-      _paintSelectionHandle(canvas, center);
+      _paintResizeHandles(canvas, rect);
     } else if (selectedStrokeIds.isEmpty &&
         selectedTextIds.isEmpty &&
         selectedShapeIds.isEmpty &&
         selectedImageIds.length == 1) {
-      final center = Offset(rect.right * size.width, rect.bottom * size.height);
-      _paintSelectionHandle(canvas, center);
+      _paintResizeHandles(canvas, rect);
     }
   }
 
   void _paintSelectionHandle(Canvas canvas, Offset center) {
     canvas.drawCircle(center, 5, Paint()..color = const Color(0xff5c86aa));
     canvas.drawCircle(center, 2, Paint()..color = const Color(0xfff9fbfd));
+  }
+
+  void _paintResizeHandles(Canvas canvas, Rect rect) {
+    for (final point in [
+      Offset(rect.left * size.width, rect.top * size.height),
+      Offset(rect.right * size.width, rect.top * size.height),
+      Offset(rect.left * size.width, rect.bottom * size.height),
+      Offset(rect.right * size.width, rect.bottom * size.height),
+    ]) {
+      _paintSelectionHandle(canvas, point);
+    }
   }
 
   double _widthFor(Stroke stroke, StrokePoint point) =>
@@ -3598,5 +6057,12 @@ class StrokePainter extends CustomPainter {
           }
       : stroke.opacity;
   @override
-  bool shouldRepaint(covariant StrokePainter old) => true;
+  bool shouldRepaint(covariant StrokePainter old) =>
+      old.revision != revision ||
+      old.staticRevision != staticRevision ||
+      old.activeTool != activeTool ||
+      old.activeColor != activeColor ||
+      old.activeWidth != activeWidth ||
+      old.activePenType != activePenType ||
+      old.hiddenTextId != hiddenTextId;
 }

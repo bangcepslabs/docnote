@@ -8,6 +8,7 @@ enum StrokeTool {
   shapeRectangle,
   shapeEllipse,
   shapeArrow,
+  shapeTriangle,
   text,
   image,
   lasso,
