@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
@@ -16,6 +18,7 @@ import 'core/settings/app_settings.dart';
 import 'core/storage/annotation_store.dart';
 import 'core/storage/backup_service.dart';
 import 'core/storage/document_thumbnail_service.dart';
+import 'core/storage/document_integrity_service.dart';
 import 'core/theme/docnote_theme.dart';
 import 'features/notes/presentation/unified_note_editor.dart';
 import 'features/drawing/presentation/drawing_editor.dart';
@@ -39,7 +42,15 @@ class DocumentsController extends StateNotifier<List<DocumentItem>> {
   }
   final DocumentRepository repo;
   late final Future<void> ready;
-  Future<void> restore() async => state = await repo.load();
+  Future<void> restore() async {
+    state = await repo.load();
+    final issues = await const DocumentIntegrityService().scan(state);
+    if (issues.isNotEmpty) {
+      developer.log('Local document integrity issues: ${issues.length}',
+          name: 'docnote.storage');
+    }
+  }
+
   Future<void> add(DocumentItem d) async {
     state = [...state, d];
     await repo.save(state);
@@ -52,7 +63,8 @@ class DocumentsController extends StateNotifier<List<DocumentItem>> {
   }
 
   Future<void> replaceAll(List<DocumentItem> documents) async {
-    final next = [...documents]..sort((a, b) => b.modified.compareTo(a.modified));
+    final next = [...documents]
+      ..sort((a, b) => b.modified.compareTo(a.modified));
     state = next;
     await repo.save(next);
   }
@@ -132,12 +144,14 @@ class FoldersController extends StateNotifier<List<FolderItem>> {
     state = [...state, folder];
     await repo.save(state);
   }
+
   Future<void> rename(FolderItem folder, String name) async {
     folder.name = name.trim();
     folder.modified = DateTime.now();
     state = [...state];
     await repo.save(state);
   }
+
   Future<void> remove(FolderItem folder) async {
     state = state.where((item) => item.id != folder.id).toList();
     await repo.save(state);
@@ -329,6 +343,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       bottomNavigationBar: _RefinedBottomNavigation(
         selectedIndex: index,
         onSelected: (value) {
+          HapticFeedback.selectionClick();
           if (value == 2) {
             _createSheet();
           } else {
@@ -355,25 +370,36 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   Future<void> _createBackup() async {
     final documents = ref.read(documentsProvider);
+    _showProgress('백업을 준비하는 중…');
     try {
       final file = await const BackupService().createBackup(documents);
-      await SharePlus.instance.share(
-          ShareParams(files: [XFile(file.path)], text: 'DocNote 백업'));
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      await SharePlus.instance
+          .share(ShareParams(files: [XFile(file.path)], text: 'DocNote 백업'));
     } catch (error) {
+      if (mounted) Navigator.of(context, rootNavigator: true).maybePop();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('백업을 만들지 못했습니다: $error')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('백업을 만들지 못했습니다: $error')));
       }
     }
   }
 
   Future<void> _restoreBackup() async {
     try {
-      final result = await FilePicker.platform.pickFiles(
-          type: FileType.custom, allowedExtensions: ['docnote'], withData: true);
-      if (result == null || result.files.single.path == null) return;
+      final backupPath = Platform.isAndroid
+          ? await const MethodChannel('docnote/backup_picker')
+              .invokeMethod<String>('pickBackup')
+          : (await FilePicker.platform.pickFiles(
+                  type: FileType.custom,
+                  allowedExtensions: ['docnote'],
+                  withData: false))
+              ?.files
+              .single
+              .path;
+      if (backupPath == null || backupPath.isEmpty) return;
       final restored = await const BackupService()
-          .restoreBackup(File(result.files.single.path!), writeFiles: false);
+          .restoreBackup(File(backupPath), writeFiles: false);
       if (!mounted) return;
       final selectedIds = restored.map((document) => document.id).toSet();
       final replace = await showDialog<bool>(
@@ -424,13 +450,17 @@ class _AppShellState extends ConsumerState<AppShell> {
         ),
       );
       if (replace != true) return;
-      await const BackupService()
-          .restoreBackup(File(result.files.single.path!),
-              documentIds: selectedIds);
+      _showProgress('백업을 복원하는 중…');
+      try {
+        await const BackupService()
+            .restoreBackup(File(backupPath), documentIds: selectedIds);
+      } finally {
+        if (mounted) Navigator.of(context, rootNavigator: true).maybePop();
+      }
       final controller = ref.read(documentsProvider.notifier);
       final existing = [...ref.read(documentsProvider)];
-      for (final document in restored
-          .where((item) => selectedIds.contains(item.id))) {
+      for (final document
+          in restored.where((item) => selectedIds.contains(item.id))) {
         final index = existing.indexWhere((item) => item.id == document.id);
         if (index >= 0) {
           existing[index] = document;
@@ -440,16 +470,37 @@ class _AppShellState extends ConsumerState<AppShell> {
       }
       await controller.replaceAll(existing);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('백업을 복원했습니다.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('백업을 복원했습니다.')));
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('백업을 복원하지 못했습니다: $error')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('백업을 복원하지 못했습니다: $error')));
       }
     }
   }
+
+  void _showProgress(String message) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          content: Row(children: [
+            const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2.5)),
+            const SizedBox(width: 16),
+            Expanded(child: Text(message)),
+          ]),
+        ),
+      ),
+    );
+  }
+
   Future<void> _quickMemo() async {
     if (creating) return;
     final draft = await showModalBottomSheet<NotebookDraft>(
@@ -826,43 +877,50 @@ class _RefinedNavigationItem extends StatelessWidget {
               .withValues(alpha: .72)
           : Colors.transparent,
       borderRadius: BorderRadius.circular(10),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: SizedBox(
-          width: double.infinity,
-          height: 56,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon,
-                  size: index == 2 ? 22 : 18,
-                  color: index == 2
-                      ? DocNoteTheme.accent
-                      : selected
-                          ? Theme.of(context).colorScheme.onPrimaryContainer
-                          : Theme.of(context).colorScheme.onSurfaceVariant),
-              const SizedBox(height: 3),
-              SizedBox(
-                width: double.infinity,
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: selected
-                          ? (Theme.of(context).brightness == Brightness.dark
-                              ? Theme.of(context).colorScheme.onPrimaryContainer
-                              : DocNoteTheme.ink)
-                          : (Theme.of(context).brightness == Brightness.dark
-                              ? Theme.of(context).colorScheme.onSurfaceVariant
-                              : const Color(0xff737a83))),
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: label,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon,
+                    size: index == 2 ? 22 : 18,
+                    color: index == 2
+                        ? DocNoteTheme.accent
+                        : selected
+                            ? Theme.of(context).colorScheme.onPrimaryContainer
+                            : Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(height: 3),
+                SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: selected
+                            ? (Theme.of(context).brightness == Brightness.dark
+                                ? Theme.of(context)
+                                    .colorScheme
+                                    .onPrimaryContainer
+                                : DocNoteTheme.ink)
+                            : (Theme.of(context).brightness == Brightness.dark
+                                ? Theme.of(context).colorScheme.onSurfaceVariant
+                                : const Color(0xff737a83))),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -3011,6 +3069,7 @@ class _RefinedHomeViewState extends ConsumerState<_RefinedHomeView> {
       ..sort((left, right) => right.modified.compareTo(left.modified));
     final documents = storedDocuments;
     final recent = documents.take(5).toList();
+    final contentWidth = math.min(MediaQuery.sizeOf(context).width, 1600.0);
     final library = documents
         .where((document) => switch (category) {
               HomeDocumentCategory.memo => document.isNotebook,
@@ -3025,72 +3084,80 @@ class _RefinedHomeViewState extends ConsumerState<_RefinedHomeView> {
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
       body: SafeArea(
         bottom: false,
-        child: CustomScrollView(
-          slivers: [
-            SliverToBoxAdapter(
-              child: _RefinedHeader(
-                onSearch: widget.onSearch,
-              ),
-            ),
-            SliverToBoxAdapter(
-              child: _RecentLibrarySection(
-                documents: recent,
-                onCreate: widget.onCreate,
-              ),
-            ),
-            SliverToBoxAdapter(
-              child: _LibraryControls(
-                category: category,
-                grid: grid,
-                onCategoryChanged: (value) => setState(() => category = value),
-                onGridChanged: () => setState(() => grid = !grid),
-              ),
-            ),
-            if (library.isEmpty)
-              SliverToBoxAdapter(
-                child: _LibraryEmptyState(
-                  category: category,
-                  onCreate: widget.onCreate,
-                ),
-              )
-            else if (grid)
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 112),
-                sliver: SliverLayoutBuilder(
-                  builder: (context, constraints) {
-                    final columns = constraints.crossAxisExtent >= 760 ? 4 : 2;
-                    return SliverGrid(
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) => _LibraryDocumentCard(
-                          document: library[index],
-                          index: index,
-                        ),
-                        childCount: library.length,
-                      ),
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: columns,
-                        mainAxisSpacing: 18,
-                        crossAxisSpacing: 14,
-                        childAspectRatio: .64,
-                      ),
-                    );
-                  },
-                ),
-              )
-            else
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 112),
-                sliver: SliverList.separated(
-                  itemCount: library.length,
-                  itemBuilder: (context, index) => _LibraryDocumentListItem(
-                    document: library[index],
-                    index: index,
+        child: Center(
+          child: SizedBox(
+            width: contentWidth,
+            child: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(
+                  child: _RefinedHeader(
+                    onSearch: widget.onSearch,
                   ),
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
                 ),
-              ),
-            const SliverToBoxAdapter(child: SizedBox(height: 24)),
-          ],
+                SliverToBoxAdapter(
+                  child: _RecentLibrarySection(
+                    documents: recent,
+                    onCreate: widget.onCreate,
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: _LibraryControls(
+                    category: category,
+                    grid: grid,
+                    onCategoryChanged: (value) =>
+                        setState(() => category = value),
+                    onGridChanged: () => setState(() => grid = !grid),
+                  ),
+                ),
+                if (library.isEmpty)
+                  SliverToBoxAdapter(
+                    child: _LibraryEmptyState(
+                      category: category,
+                      onCreate: widget.onCreate,
+                    ),
+                  )
+                else if (grid)
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 112),
+                    sliver: SliverLayoutBuilder(
+                      builder: (context, constraints) {
+                        final columns =
+                            constraints.crossAxisExtent >= 760 ? 4 : 2;
+                        return SliverGrid(
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) => _LibraryDocumentCard(
+                              document: library[index],
+                              index: index,
+                            ),
+                            childCount: library.length,
+                          ),
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: columns,
+                            mainAxisSpacing: 18,
+                            crossAxisSpacing: 14,
+                            childAspectRatio: .64,
+                          ),
+                        );
+                      },
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 112),
+                    sliver: SliverList.separated(
+                      itemCount: library.length,
+                      itemBuilder: (context, index) => _LibraryDocumentListItem(
+                        document: library[index],
+                        index: index,
+                      ),
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    ),
+                  ),
+                const SliverToBoxAdapter(child: SizedBox(height: 24)),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -3155,32 +3222,39 @@ class _RecentLibrarySection extends StatelessWidget {
   final VoidCallback onCreate;
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20),
-            child: Text('최근 작업',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 170,
-            child: documents.isEmpty
-                ? _RecentLibraryEmpty(onCreate: onCreate)
-                : ListView.separated(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    scrollDirection: Axis.horizontal,
-                    itemCount: documents.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 12),
-                    itemBuilder: (_, index) => _RecentLibraryItem(
-                      document: documents[index],
-                      index: index,
-                    ),
+  Widget build(BuildContext context) {
+    final tablet = MediaQuery.sizeOf(context).width >= 600;
+    final itemWidth = tablet ? 168.0 : 116.0;
+    final shelfHeight = tablet ? 210.0 : 170.0;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: tablet ? 40 : 20),
+          child: Text('최근 작업',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: shelfHeight,
+          child: documents.isEmpty
+              ? _RecentLibraryEmpty(onCreate: onCreate)
+              : ListView.separated(
+                  padding: EdgeInsets.symmetric(horizontal: tablet ? 40 : 20),
+                  scrollDirection: Axis.horizontal,
+                  itemCount: documents.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 12),
+                  itemBuilder: (_, index) => _RecentLibraryItem(
+                    document: documents[index],
+                    index: index,
+                    width: itemWidth,
+                    visualHeight: tablet ? 176 : 141,
                   ),
-          ),
-        ]),
-      );
+                ),
+        ),
+      ]),
+    );
+  }
 }
 
 class _RecentLibraryEmpty extends StatelessWidget {
@@ -3202,20 +3276,27 @@ class _RecentLibraryEmpty extends StatelessWidget {
 }
 
 class _RecentLibraryItem extends ConsumerWidget {
-  const _RecentLibraryItem({required this.document, required this.index});
+  const _RecentLibraryItem({
+    required this.document,
+    required this.index,
+    this.width = 116,
+    this.visualHeight = 141,
+  });
   final DocumentItem document;
   final int index;
+  final double width;
+  final double visualHeight;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => SizedBox(
-        width: 116,
+        width: width,
         child: InkWell(
           onTap: () => openDocument(context, document, ref),
           borderRadius: BorderRadius.circular(8),
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             SizedBox(
-                height: 141,
+                height: visualHeight,
                 child: _LibraryVisual(
                     document: document, index: index, compact: true)),
             const SizedBox(height: 6),
@@ -4652,6 +4733,16 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
         actions: [
           if (selectedDocumentIds.isNotEmpty) ...[
             IconButton(
+              onPressed: () => _toggleSelectedFavorite(),
+              tooltip: '즐겨찾기 전환',
+              icon: const Icon(Icons.star_border),
+            ),
+            IconButton(
+              onPressed: () => _trashSelected(),
+              tooltip: '휴지통으로 이동',
+              icon: const Icon(Icons.delete_outline),
+            ),
+            IconButton(
               onPressed: () => _moveSelected(context),
               tooltip: '폴더로 이동',
               icon: const Icon(Icons.drive_file_move_outlined),
@@ -4684,97 +4775,113 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
           const SizedBox(width: 8),
         ],
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
-            child: Text('${docs.length}개의 노트와 문서',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    )),
-          ),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-            child: Row(children: [
-              _refinedChip('전체', _DocumentsLibraryCategory.all),
-              _refinedChip('노트', _DocumentsLibraryCategory.notebook),
-              _refinedChip('메모', _DocumentsLibraryCategory.memo),
-              _refinedChip('PDF', _DocumentsLibraryCategory.pdf),
-              _refinedChip('HWP', _DocumentsLibraryCategory.hwp),
-              _refinedChip('폴더', _DocumentsLibraryCategory.folder),
-            ]),
-          ),
-          if (folders.isNotEmpty)
-            SizedBox(
-              height: 54,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-                itemCount: folders.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (context, index) {
-                  final folder = folders[index];
-                  final count = ref
-                      .watch(documentsProvider)
-                      .where((d) => !d.trashed && d.folderId == folder.id)
-                      .length;
-                  return GestureDetector(
-                    onLongPress: () => _renameFolder(context, folder),
-                    child: InputChip(
-                      avatar: const Icon(Icons.folder_outlined, size: 17),
-                      label: Text('${folder.name} $count'),
-                      selected: selectedFolderId == folder.id,
-                      onSelected: (_) => setState(() {
-                        selectedFolderId = selectedFolderId == folder.id
-                            ? null
-                            : folder.id;
-                      }),
-                      onDeleted: () => _deleteFolder(context, folder),
-                    ),
-                  );
-                },
+      body: Center(
+        child: SizedBox(
+          width: math.min(MediaQuery.sizeOf(context).width, 1600.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+                child: Text('${docs.length}개의 노트와 문서',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        )),
               ),
-            ),
-          Expanded(
-            child: docs.isEmpty
-                ? _DocumentsLibraryEmptyState(category: category)
-                : grid
-                    ? LayoutBuilder(builder: (context, constraints) {
-                        final columns = constraints.maxWidth >= 760 ? 4 : 2;
-                        return GridView.builder(
-                          padding: const EdgeInsets.fromLTRB(20, 14, 20, 112),
-                          gridDelegate:
-                              SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: columns,
-                            crossAxisSpacing: 14,
-                            mainAxisSpacing: 18,
-                            childAspectRatio: .62,
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+                child: Row(children: [
+                  _refinedChip('전체', _DocumentsLibraryCategory.all),
+                  _refinedChip('노트', _DocumentsLibraryCategory.notebook),
+                  _refinedChip('메모', _DocumentsLibraryCategory.memo),
+                  _refinedChip('PDF', _DocumentsLibraryCategory.pdf),
+                  _refinedChip('HWP', _DocumentsLibraryCategory.hwp),
+                  _refinedChip('폴더', _DocumentsLibraryCategory.folder),
+                ]),
+              ),
+              if (folders.isNotEmpty)
+                SizedBox(
+                  height: 54,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+                    itemCount: folders.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final folder = folders[index];
+                      final count = ref
+                          .watch(documentsProvider)
+                          .where((d) => !d.trashed && d.folderId == folder.id)
+                          .length;
+                      return GestureDetector(
+                        onLongPress: () => _renameFolder(context, folder),
+                        child: InputChip(
+                          avatar: const Icon(Icons.folder_outlined, size: 17),
+                          label: Text('${folder.name} $count'),
+                          selected: selectedFolderId == folder.id,
+                          onSelected: (_) => setState(() {
+                            selectedFolderId = selectedFolderId == folder.id
+                                ? null
+                                : folder.id;
+                          }),
+                          onDeleted: () => _deleteFolder(context, folder),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              Expanded(
+                child: docs.isEmpty
+                    ? _DocumentsLibraryEmptyState(category: category)
+                    : grid
+                        ? LayoutBuilder(builder: (context, constraints) {
+                            final columns = constraints.maxWidth >= 760 ? 4 : 2;
+                            return GridView.builder(
+                              padding:
+                                  const EdgeInsets.fromLTRB(20, 14, 20, 112),
+                              gridDelegate:
+                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: columns,
+                                crossAxisSpacing: 14,
+                                mainAxisSpacing: 18,
+                                childAspectRatio: .62,
+                              ),
+                              itemCount: docs.length,
+                              itemBuilder: (_, index) =>
+                                  _DocumentsLibraryGridItem(
+                                      document: docs[index],
+                                      index: index,
+                                      selected: selectedDocumentIds
+                                          .contains(docs[index].id),
+                                      onLongPress: () =>
+                                          _toggleSelection(docs[index].id),
+                                      onSelectionTap: () =>
+                                          _toggleSelection(docs[index].id),
+                                      selectionMode:
+                                          selectedDocumentIds.isNotEmpty),
+                            );
+                          })
+                        : ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(20, 12, 20, 112),
+                            itemCount: docs.length,
+                            itemBuilder: (_, index) =>
+                                _DocumentsLibraryListItem(
+                                    document: docs[index],
+                                    index: index,
+                                    selected: selectedDocumentIds
+                                        .contains(docs[index].id),
+                                    onLongPress: () =>
+                                        _toggleSelection(docs[index].id),
+                                    onSelectionTap: () =>
+                                        _toggleSelection(docs[index].id),
+                                    selectionMode:
+                                        selectedDocumentIds.isNotEmpty),
                           ),
-                          itemCount: docs.length,
-                          itemBuilder: (_, index) => _DocumentsLibraryGridItem(
-                              document: docs[index],
-                              index: index,
-                              selected: selectedDocumentIds.contains(docs[index].id),
-                              onLongPress: () => _toggleSelection(docs[index].id),
-                              onSelectionTap: () => _toggleSelection(docs[index].id),
-                              selectionMode: selectedDocumentIds.isNotEmpty),
-                        );
-                      })
-                    : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 12, 20, 112),
-                        itemCount: docs.length,
-                        itemBuilder: (_, index) => _DocumentsLibraryListItem(
-                            document: docs[index],
-                            index: index,
-                            selected: selectedDocumentIds.contains(docs[index].id),
-                            onLongPress: () => _toggleSelection(docs[index].id),
-                            onSelectionTap: () => _toggleSelection(docs[index].id),
-                            selectionMode: selectedDocumentIds.isNotEmpty),
-                      ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -4787,32 +4894,55 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
     final folders = ref.read(foldersProvider);
     if (folders.isEmpty) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('먼저 폴더를 만들어 주세요.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('먼저 폴더를 만들어 주세요.')));
       }
       return;
     }
-    final folder = await showDialog<FolderItem>(
+    final folderId = await showDialog<String>(
       context: context,
       builder: (dialogContext) => SimpleDialog(
         title: const Text('선택한 문서를 폴더로 이동'),
         children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(dialogContext, ''),
+            child: const Text('폴더 없음'),
+          ),
           for (final item in folders)
             SimpleDialogOption(
-              onPressed: () => Navigator.pop(dialogContext, item),
+              onPressed: () => Navigator.pop(dialogContext, item.id),
               child: Text(item.name),
             ),
         ],
       ),
     );
-    if (folder == null) return;
+    if (folderId == null) return;
     final selected = ref
         .read(documentsProvider)
         .where((document) => selectedDocumentIds.contains(document.id));
     for (final document in selected) {
-      document.folderId = folder.id;
+      document.folderId = folderId.isEmpty ? null : folderId;
       document.modified = DateTime.now();
       await ref.read(documentsProvider.notifier).update(document);
+    }
+    if (mounted) setState(selectedDocumentIds.clear);
+  }
+
+  Future<void> _toggleSelectedFavorite() async {
+    final documents = ref.read(documentsProvider);
+    for (final document
+        in documents.where((item) => selectedDocumentIds.contains(item.id))) {
+      document.favorite = !document.favorite;
+      document.modified = DateTime.now();
+      await ref.read(documentsProvider.notifier).update(document);
+    }
+    if (mounted) setState(selectedDocumentIds.clear);
+  }
+
+  Future<void> _trashSelected() async {
+    final ids = selectedDocumentIds.toList(growable: false);
+    for (final id in ids) {
+      await ref.read(documentsProvider.notifier).remove(id);
     }
     if (mounted) setState(selectedDocumentIds.clear);
   }
@@ -4830,8 +4960,12 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
           decoration: const InputDecoration(hintText: '폴더 이름'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('취소')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, controller.text), child: const Text('만들기')),
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, controller.text),
+              child: const Text('만들기')),
         ],
       ),
     );
@@ -4847,8 +4981,12 @@ class _RefinedDocumentsViewState extends ConsumerState<_RefinedDocumentsView> {
         title: const Text('폴더 삭제'),
         content: Text('“${folder.name}” 폴더를 삭제할까요? 문서는 유지됩니다.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('취소')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('삭제')),
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('삭제')),
         ],
       ),
     );
@@ -4939,39 +5077,43 @@ class _DocumentsLibraryGridItem extends ConsumerWidget {
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: selected
-                ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: .35)
+                ? Theme.of(context)
+                    .colorScheme
+                    .primaryContainer
+                    .withValues(alpha: .35)
                 : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: AspectRatio(
-              aspectRatio: .82,
-              child: _LibraryVisual(document: document, index: index),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: AspectRatio(
+                aspectRatio: .82,
+                child: _LibraryVisual(document: document, index: index),
+              ),
             ),
-          ),
-          const SizedBox(height: 7),
-          Row(children: [
-            Expanded(
-              child: Text(_documentTitle(document),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w600)),
-            ),
-            _DocumentsOverflowMenu(document: document),
-          ]),
-          const SizedBox(height: 3),
-          Text(_documentsLibraryDetail(document),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: 11,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurfaceVariant
-                      .withValues(alpha: .82))),
+            const SizedBox(height: 7),
+            Row(children: [
+              Expanded(
+                child: Text(_documentTitle(document),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+              _DocumentsOverflowMenu(document: document),
+            ]),
+            const SizedBox(height: 3),
+            Text(_documentsLibraryDetail(document),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 11,
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurfaceVariant
+                        .withValues(alpha: .82))),
           ]),
         ),
       );
@@ -5002,42 +5144,46 @@ class _DocumentsLibraryListItem extends ConsumerWidget {
         child: Container(
           decoration: BoxDecoration(
             color: selected
-                ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: .35)
+                ? Theme.of(context)
+                    .colorScheme
+                    .primaryContainer
+                    .withValues(alpha: .35)
                 : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
           ),
           child: SizedBox(
-          height: 82,
-          child: Row(children: [
-            SizedBox(
-                width: 56,
-                height: 68,
-                child: _LibraryVisual(
-                    document: document, index: index, compact: true)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(_documentTitle(document),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 3),
-                  Text(_documentsLibraryDetail(document),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 11,
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant)),
-                ],
+            height: 82,
+            child: Row(children: [
+              SizedBox(
+                  width: 56,
+                  height: 68,
+                  child: _LibraryVisual(
+                      document: document, index: index, compact: true)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_documentTitle(document),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 3),
+                    Text(_documentsLibraryDetail(document),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant)),
+                  ],
+                ),
               ),
-            ),
-            _DocumentsOverflowMenu(document: document),
-          ]),
+              _DocumentsOverflowMenu(document: document),
+            ]),
           ),
         ),
       );
@@ -5527,7 +5673,8 @@ class _SearchHighlightedText extends StatelessWidget {
 }
 
 class SettingsPage extends ConsumerWidget {
-  const SettingsPage({required this.onClose, this.onBackup, this.onRestore, super.key});
+  const SettingsPage(
+      {required this.onClose, this.onBackup, this.onRestore, super.key});
   final VoidCallback onClose;
   final VoidCallback? onBackup;
   final VoidCallback? onRestore;
@@ -5732,6 +5879,23 @@ class _RefinedSettingsView extends ConsumerWidget {
                             trailing: const _SettingsChevron(),
                             onTap: onRestore!,
                           ),
+                        _RefinedSettingsRow(
+                          icon: Icons.fact_check_outlined,
+                          title: '파일 상태 점검',
+                          subtitle: '문서와 첨부 파일의 연결 상태를 확인합니다',
+                          trailing: const _SettingsChevron(),
+                          onTap: () async {
+                            final issues =
+                                await const DocumentIntegrityService()
+                                    .scan(ref.read(documentsProvider));
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text(issues.isEmpty
+                                  ? '모든 문서 파일이 정상입니다.'
+                                  : '${issues.length}개의 누락 파일을 찾았습니다.'),
+                            ));
+                          },
+                        ),
                       ],
                     ),
                   ),

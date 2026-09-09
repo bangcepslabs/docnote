@@ -196,7 +196,7 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
     final index = page.clamp(1, document!.pagesCount) - 1;
     _activatePage(index);
     final targetContext = _keyFor(index).currentContext;
-    if (targetContext != null) {
+    if (targetContext != null && targetContext.mounted) {
       await Scrollable.ensureVisible(targetContext,
           duration: const Duration(milliseconds: 260), alignment: .12);
     }
@@ -245,8 +245,8 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
   Future<void> _showPageJumpDialog() async {
     final pdf = document;
     if (pdf == null) return;
-    final controller = TextEditingController(
-        text: '${editing.selectedPageIndex + 1}');
+    final controller =
+        TextEditingController(text: '${editing.selectedPageIndex + 1}');
     final target = await showDialog<int>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -259,8 +259,8 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
             labelText: '페이지 (1–${pdf.pagesCount})',
             border: const OutlineInputBorder(),
           ),
-          onSubmitted: (_) => Navigator.of(dialogContext)
-              .pop(int.tryParse(controller.text)),
+          onSubmitted: (_) =>
+              Navigator.of(dialogContext).pop(int.tryParse(controller.text)),
         ),
         actions: [
           TextButton(
@@ -405,9 +405,10 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
                 tooltip: bookmarkedPages.contains(editing.selectedPageIndex + 1)
                     ? '현재 페이지 북마크 제거'
                     : '현재 페이지 북마크',
-                icon: Icon(bookmarkedPages.contains(editing.selectedPageIndex + 1)
-                    ? Icons.bookmark
-                    : Icons.bookmark_border)),
+                icon: Icon(
+                    bookmarkedPages.contains(editing.selectedPageIndex + 1)
+                        ? Icons.bookmark
+                        : Icons.bookmark_border)),
             IconButton(
                 onPressed: _showBookmarks,
                 tooltip: '북마크 목록',

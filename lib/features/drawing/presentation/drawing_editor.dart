@@ -146,6 +146,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   late int pageCount = widget.initialPageCount;
   late String title = widget.title;
   int pageIndex = 1;
+  int pageRotation = 0;
   String get pageId => 'page_$pageIndex';
   double get activeWidth => switch (tool) {
         StrokeTool.eraser => eraserWidth,
@@ -300,6 +301,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
 
   Future<void> _load() async {
     final page = await store.loadPage(widget.documentId, pageId);
+    final prefs = await SharedPreferences.getInstance();
+    pageRotation = prefs.getInt(_rotationKey(pageId)) ?? 0;
     strokes.addAll(page.strokes);
     shapes.addAll(page.shapes);
     texts.addAll(page.texts);
@@ -824,6 +827,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     active.clear();
     activeShape = null;
     _replaceLoadedPage(await store.loadPage(widget.documentId, 'page_$next'));
+    final prefs = await SharedPreferences.getInstance();
+    pageRotation = prefs.getInt(_rotationKey('page_$next')) ?? 0;
     await _preloadImages(images);
     undoHistory.clear();
     redoHistory.clear();
@@ -836,6 +841,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     saveTimer?.cancel();
     pageCount++;
     pageIndex = pageCount;
+    pageRotation = 0;
     strokes.clear();
     shapes.clear();
     activeShape = null;
@@ -874,6 +880,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
             Navigator.of(sheetContext).pop();
             await _deletePageAt(targetPage);
           },
+          onDeletePages: (pages) async {
+            Navigator.of(sheetContext).pop();
+            await _deletePages(pages);
+          },
           onMovePage: (page, direction) async {
             Navigator.of(sheetContext).pop();
             await _movePage(page, direction);
@@ -896,12 +906,18 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     await _save();
     await store.swapNotebookPages(widget.documentId,
         firstPage: sourcePage, secondPage: targetPage);
+    final prefs = await SharedPreferences.getInstance();
+    final sourceRotation = prefs.getInt(_rotationKey('page_$sourcePage')) ?? 0;
+    final targetRotation = prefs.getInt(_rotationKey('page_$targetPage')) ?? 0;
+    await prefs.setInt(_rotationKey('page_$sourcePage'), targetRotation);
+    await prefs.setInt(_rotationKey('page_$targetPage'), sourceRotation);
     if (pageIndex == sourcePage) {
       pageIndex = targetPage;
     } else if (pageIndex == targetPage) {
       pageIndex = sourcePage;
     }
     _replaceLoadedPage(await store.loadPage(widget.documentId, pageId));
+    pageRotation = prefs.getInt(_rotationKey(pageId)) ?? 0;
     await _preloadImages(images);
     undoHistory.clear();
     redoHistory.clear();
@@ -912,10 +928,26 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   Future<void> _duplicatePage(int sourcePage) async {
     await _save();
     final source = await store.loadPage(widget.documentId, 'page_$sourcePage');
-    final target = pageCount + 1;
-    await store.savePage(widget.documentId, 'page_$target', source);
-    pageCount = target;
+    await _shiftRotationKeysAfterInsert(sourcePage, pageCount);
+    await store.insertNotebookPage(widget.documentId,
+        sourcePage: sourcePage, pageCount: pageCount);
+    await store.savePage(widget.documentId, 'page_${sourcePage + 1}', source);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_rotationKey('page_${sourcePage + 1}'),
+        prefs.getInt(_rotationKey('page_$sourcePage')) ?? 0);
+    pageCount++;
+    if (pageIndex > sourcePage) pageIndex++;
     widget.onPageCountChanged?.call(pageCount);
+    if (mounted) setState(() {});
+  }
+
+  String _rotationKey(String page) =>
+      'docnote.pageRotation.${widget.documentId}.$page';
+
+  Future<void> _rotatePage() async {
+    pageRotation = (pageRotation + 1) % 4;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_rotationKey(pageId), pageRotation);
     if (mounted) setState(() {});
   }
 
@@ -940,6 +972,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     );
     if (ok != true) return;
     await _save();
+    await _shiftRotationKeysAfterDelete(targetPage, pageCount);
     await store.deleteNotebookPageAndShift(
       widget.documentId,
       removedPage: targetPage,
@@ -948,12 +981,64 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     pageCount--;
     pageIndex = math.min(targetPage, pageCount);
     _replaceLoadedPage(await store.loadPage(widget.documentId, pageId));
+    final prefs = await SharedPreferences.getInstance();
+    pageRotation = prefs.getInt(_rotationKey(pageId)) ?? 0;
     await _preloadImages(images);
     undoHistory.clear();
     redoHistory.clear();
     _clearSelectionState();
     widget.onPageCountChanged?.call(pageCount);
     if (mounted) setState(() {});
+  }
+
+  Future<void> _deletePages(Set<int> targets) async {
+    if (targets.isEmpty || targets.length >= pageCount) return;
+    await _save();
+    for (final target in targets.toList()..sort((a, b) => b.compareTo(a))) {
+      await _shiftRotationKeysAfterDelete(target, pageCount);
+      await store.deleteNotebookPageAndShift(widget.documentId,
+          removedPage: target, pageCount: pageCount);
+      pageCount--;
+    }
+    pageIndex = math.min(pageIndex, pageCount);
+    _replaceLoadedPage(await store.loadPage(widget.documentId, pageId));
+    final prefs = await SharedPreferences.getInstance();
+    pageRotation = prefs.getInt(_rotationKey(pageId)) ?? 0;
+    await _preloadImages(images);
+    undoHistory.clear();
+    redoHistory.clear();
+    _clearSelectionState();
+    widget.onPageCountChanged?.call(pageCount);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _shiftRotationKeysAfterDelete(
+      int removedPage, int oldPageCount) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (var page = removedPage; page < oldPageCount; page++) {
+      final next = prefs.getInt(_rotationKey('page_${page + 1}'));
+      final key = _rotationKey('page_$page');
+      if (next == null) {
+        await prefs.remove(key);
+      } else {
+        await prefs.setInt(key, next);
+      }
+    }
+    await prefs.remove(_rotationKey('page_$oldPageCount'));
+  }
+
+  Future<void> _shiftRotationKeysAfterInsert(
+      int sourcePage, int oldPageCount) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (var page = oldPageCount; page > sourcePage; page--) {
+      final previous = prefs.getInt(_rotationKey('page_$page'));
+      final key = _rotationKey('page_${page + 1}');
+      if (previous == null) {
+        await prefs.remove(key);
+      } else {
+        await prefs.setInt(key, previous);
+      }
+    }
   }
 
   void _start(Offset p, double pressure, Size size) {
@@ -1740,8 +1825,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       ..clear()
       ..addAll(lassoIncludeImages
           ? images
-              .where((image) => _imageIsInsideLasso(
-                  image, selectionPolygon, selectionBounds))
+              .where((image) =>
+                  _imageIsInsideLasso(image, selectionPolygon, selectionBounds))
               .map((image) => image.id)
           : const <String>[]);
     lassoPath.clear();
@@ -1773,7 +1858,9 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     if (selectedStrokeIds.isEmpty &&
         selectedShapeIds.isEmpty &&
         selectedTextIds.isEmpty &&
-        selectedImageIds.isEmpty) return;
+        selectedImageIds.isEmpty) {
+      return;
+    }
     _recordHistory();
     strokes.removeWhere((stroke) => selectedStrokeIds.contains(stroke.id));
     shapes.removeWhere((shape) => selectedShapeIds.contains(shape.id));
@@ -1788,7 +1875,9 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     if (selectedStrokeIds.isEmpty &&
         selectedShapeIds.isEmpty &&
         selectedTextIds.isEmpty &&
-        selectedImageIds.isEmpty) return;
+        selectedImageIds.isEmpty) {
+      return;
+    }
     final bounds = _selectedBounds();
     if (bounds == null) return;
     _recordHistory();
@@ -2027,6 +2116,9 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
                   case 'toolbar':
                     setState(() => toolbarVisible = !toolbarVisible);
                     break;
+                  case 'rotate':
+                    _rotatePage();
+                    break;
                   case 'benchmark100':
                     _loadDebugBenchmark(100);
                     break;
@@ -2067,6 +2159,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
                     enabled: pageIndex < pageCount,
                     child: const Text('다음 페이지')),
                 const PopupMenuItem(value: 'add', child: Text('페이지 추가')),
+                PopupMenuItem(
+                    value: 'rotate',
+                    child:
+                        Text(pageRotation == 0 ? '페이지 시계 방향 회전' : '페이지 회전 계속')),
                 PopupMenuItem(
                     value: 'delete',
                     enabled: pageCount > 1,
@@ -2119,213 +2215,227 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
                             _cancelCanvasInputForViewportGesture,
                         child: Align(
                             alignment: Alignment.topCenter,
-                            child: AspectRatio(
-                                aspectRatio: .7,
-                                child: DecoratedBox(
-                                  decoration: const BoxDecoration(
-                                      color: Colors.white,
-                                      boxShadow: [
-                                        BoxShadow(
-                                            blurRadius: 3,
-                                            color: Colors.black12)
-                                      ]),
-                                  child: LayoutBuilder(
-                                      builder: (context, constraints) =>
-                                          Stack(children: [
-                                            AnimatedSwitcher(
-                                              duration: const Duration(
-                                                  milliseconds: 220),
-                                              switchInCurve:
-                                                  Curves.easeOutCubic,
-                                              switchOutCurve:
-                                                  Curves.easeInCubic,
-                                              transitionBuilder:
-                                                  (child, animation) =>
-                                                      FadeTransition(
-                                                opacity: animation,
-                                                child: SlideTransition(
-                                                  position: Tween<Offset>(
-                                                    begin:
-                                                        const Offset(.018, 0),
-                                                    end: Offset.zero,
-                                                  ).animate(animation),
-                                                  child: child,
+                            child: RotatedBox(
+                                quarterTurns: pageRotation,
+                                child: AspectRatio(
+                                    aspectRatio:
+                                        pageRotation.isEven ? .7 : 1 / .7,
+                                    child: DecoratedBox(
+                                      decoration: const BoxDecoration(
+                                          color: Colors.white,
+                                          boxShadow: [
+                                            BoxShadow(
+                                                blurRadius: 3,
+                                                color: Colors.black12)
+                                          ]),
+                                      child: LayoutBuilder(
+                                          builder: (context, constraints) =>
+                                              Stack(children: [
+                                                AnimatedSwitcher(
+                                                  duration: const Duration(
+                                                      milliseconds: 220),
+                                                  switchInCurve:
+                                                      Curves.easeOutCubic,
+                                                  switchOutCurve:
+                                                      Curves.easeInCubic,
+                                                  transitionBuilder:
+                                                      (child, animation) =>
+                                                          FadeTransition(
+                                                    opacity: animation,
+                                                    child: SlideTransition(
+                                                      position: Tween<Offset>(
+                                                        begin: const Offset(
+                                                            .018, 0),
+                                                        end: Offset.zero,
+                                                      ).animate(animation),
+                                                      child: child,
+                                                    ),
+                                                  ),
+                                                  child: DrawingCanvas(
+                                                      key: ValueKey(pageIndex),
+                                                      strokes: strokes,
+                                                      texts: texts,
+                                                      images: images,
+                                                      imageCache: imageCache,
+                                                      hiddenTextId:
+                                                          editingText?.id,
+                                                      shapes: shapes,
+                                                      activePoints: active,
+                                                      activeShape: activeShape,
+                                                      tool: tool,
+                                                      color: activeColor,
+                                                      width: activeWidth,
+                                                      pageTemplateId:
+                                                          widget.pageTemplateId,
+                                                      onStart: _start,
+                                                      onMove: _move,
+                                                      onEnd: _end,
+                                                      lassoPath: lassoPath,
+                                                      selectedStrokeIds:
+                                                          selectedStrokeIds,
+                                                      selectedShapeIds:
+                                                          selectedShapeIds,
+                                                      selectedTextIds:
+                                                          selectedTextIds,
+                                                      selectedImageIds:
+                                                          selectedImageIds,
+                                                      onSelectionStart:
+                                                          _selectionStart,
+                                                      onSelectionMove:
+                                                          _selectionMove,
+                                                      onSelectionEnd:
+                                                          _selectionEnd,
+                                                      onTextTap: _textTap,
+                                                      onImageTap: _imageTap,
+                                                      repaint: canvasRevision,
+                                                      staticRepaint:
+                                                          staticRevisionNotifier,
+                                                      revision:
+                                                          canvasRevision.value,
+                                                      staticRevision:
+                                                          staticRevision,
+                                                      useIncrementalActivePath:
+                                                          _useIncrementalActivePath,
+                                                      instrumentationEnabled:
+                                                          _instrumentationEnabled,
+                                                      onPaint: () {
+                                                        if (_perfEnabled) {
+                                                          _painterRepaints++;
+                                                          _activePainterRepaints++;
+                                                        }
+                                                      },
+                                                      onStaticPaint: () {
+                                                        if (_perfEnabled) {
+                                                          _staticPainterRepaints++;
+                                                        }
+                                                      },
+                                                      onStaticObjectPaint: () {
+                                                        if (_perfEnabled) {
+                                                          _staticObjectPaintCount++;
+                                                        }
+                                                      },
+                                                      onPathBuild: (elapsed) {
+                                                        if (_perfEnabled &&
+                                                            _instrumentationEnabled) {
+                                                          _pathBuildCount++;
+                                                          final us = elapsed
+                                                              .inMicroseconds;
+                                                          _pathBuildTotalUs +=
+                                                              us;
+                                                          _pathBuildMaxUs =
+                                                              math.max(
+                                                                  _pathBuildMaxUs,
+                                                                  us);
+                                                        }
+                                                      },
+                                                      onIncrementalPathBuild:
+                                                          (elapsed) {
+                                                        if (_perfEnabled &&
+                                                            _instrumentationEnabled) {
+                                                          _incrementalSegmentBuildCount++;
+                                                          final us = elapsed
+                                                              .inMicroseconds;
+                                                          _incrementalBuildTotalUs +=
+                                                              us;
+                                                          _incrementalBuildMaxUs =
+                                                              math.max(
+                                                                  _incrementalBuildMaxUs,
+                                                                  us);
+                                                        }
+                                                      },
+                                                      onFullPathRebuild: () {
+                                                        if (_perfEnabled &&
+                                                            _instrumentationEnabled) {
+                                                          _fullPathRebuildCount++;
+                                                        }
+                                                      },
+                                                      onActivePaint: (elapsed) {
+                                                        if (_perfEnabled) {
+                                                          final us = elapsed
+                                                              .inMicroseconds;
+                                                          _activePaintTotalUs +=
+                                                              us;
+                                                          _activePaintMaxUs =
+                                                              math.max(
+                                                                  _activePaintMaxUs,
+                                                                  us);
+                                                          _activePaintSamples++;
+                                                        }
+                                                      },
+                                                      onPictureDraw: (elapsed) {
+                                                        if (_perfEnabled &&
+                                                            _instrumentationEnabled) {
+                                                          final us = elapsed
+                                                              .inMicroseconds;
+                                                          _pictureDrawSamples++;
+                                                          _pictureDrawTotalUs +=
+                                                              us;
+                                                          _pictureDrawMaxUs =
+                                                              math.max(
+                                                                  _pictureDrawMaxUs,
+                                                                  us);
+                                                        }
+                                                      },
+                                                      onActivePathDraw:
+                                                          (elapsed) {
+                                                        if (_perfEnabled &&
+                                                            _instrumentationEnabled) {
+                                                          final us = elapsed
+                                                              .inMicroseconds;
+                                                          _activePathDrawSamples++;
+                                                          _activePathDrawTotalUs +=
+                                                              us;
+                                                          _activePathDrawMaxUs =
+                                                              math.max(
+                                                                  _activePathDrawMaxUs,
+                                                                  us);
+                                                        }
+                                                      },
+                                                      onOverlayPaint:
+                                                          (elapsed) {
+                                                        if (_perfEnabled) {
+                                                          final us = elapsed
+                                                              .inMicroseconds;
+                                                          _overlayPaintTotalUs +=
+                                                              us;
+                                                          _overlayPaintMaxUs =
+                                                              math.max(
+                                                                  _overlayPaintMaxUs,
+                                                                  us);
+                                                          _overlayPaintSamples++;
+                                                        }
+                                                      }),
                                                 ),
-                                              ),
-                                              child: DrawingCanvas(
-                                                  key: ValueKey(pageIndex),
-                                                  strokes: strokes,
-                                                  texts: texts,
-                                                  images: images,
-                                                  imageCache: imageCache,
-                                                  hiddenTextId: editingText?.id,
-                                                  shapes: shapes,
-                                                  activePoints: active,
-                                                  activeShape: activeShape,
-                                                  tool: tool,
-                                                  color: activeColor,
-                                                  width: activeWidth,
-                                                  pageTemplateId:
-                                                      widget.pageTemplateId,
-                                                  onStart: _start,
-                                                  onMove: _move,
-                                                  onEnd: _end,
-                                                  lassoPath: lassoPath,
-                                                  selectedStrokeIds:
-                                                      selectedStrokeIds,
-                                                  selectedShapeIds:
-                                                      selectedShapeIds,
-                                                  selectedTextIds:
-                                                      selectedTextIds,
-                                                  selectedImageIds:
-                                                      selectedImageIds,
-                                                  onSelectionStart:
-                                                      _selectionStart,
-                                                  onSelectionMove:
-                                                      _selectionMove,
-                                                  onSelectionEnd: _selectionEnd,
-                                                  onTextTap: _textTap,
-                                                  onImageTap: _imageTap,
-                                                  repaint: canvasRevision,
-                                                  staticRepaint:
-                                                      staticRevisionNotifier,
-                                                  revision:
-                                                      canvasRevision.value,
-                                                  staticRevision:
-                                                      staticRevision,
-                                                  useIncrementalActivePath:
-                                                      _useIncrementalActivePath,
-                                                  instrumentationEnabled:
-                                                      _instrumentationEnabled,
-                                                  onPaint: () {
-                                                    if (_perfEnabled) {
-                                                      _painterRepaints++;
-                                                      _activePainterRepaints++;
-                                                    }
-                                                  },
-                                                  onStaticPaint: () {
-                                                    if (_perfEnabled) {
-                                                      _staticPainterRepaints++;
-                                                    }
-                                                  },
-                                                  onStaticObjectPaint: () {
-                                                    if (_perfEnabled) {
-                                                      _staticObjectPaintCount++;
-                                                    }
-                                                  },
-                                                  onPathBuild: (elapsed) {
-                                                    if (_perfEnabled &&
-                                                        _instrumentationEnabled) {
-                                                      _pathBuildCount++;
-                                                      final us = elapsed
-                                                          .inMicroseconds;
-                                                      _pathBuildTotalUs += us;
-                                                      _pathBuildMaxUs =
-                                                          math.max(
-                                                              _pathBuildMaxUs,
-                                                              us);
-                                                    }
-                                                  },
-                                                  onIncrementalPathBuild:
-                                                      (elapsed) {
-                                                    if (_perfEnabled &&
-                                                        _instrumentationEnabled) {
-                                                      _incrementalSegmentBuildCount++;
-                                                      final us = elapsed
-                                                          .inMicroseconds;
-                                                      _incrementalBuildTotalUs +=
-                                                          us;
-                                                      _incrementalBuildMaxUs =
-                                                          math.max(
-                                                              _incrementalBuildMaxUs,
-                                                              us);
-                                                    }
-                                                  },
-                                                  onFullPathRebuild: () {
-                                                    if (_perfEnabled &&
-                                                        _instrumentationEnabled) {
-                                                      _fullPathRebuildCount++;
-                                                    }
-                                                  },
-                                                  onActivePaint: (elapsed) {
-                                                    if (_perfEnabled) {
-                                                      final us = elapsed
-                                                          .inMicroseconds;
-                                                      _activePaintTotalUs += us;
-                                                      _activePaintMaxUs =
-                                                          math.max(
-                                                              _activePaintMaxUs,
-                                                              us);
-                                                      _activePaintSamples++;
-                                                    }
-                                                  },
-                                                  onPictureDraw: (elapsed) {
-                                                    if (_perfEnabled &&
-                                                        _instrumentationEnabled) {
-                                                      final us = elapsed
-                                                          .inMicroseconds;
-                                                      _pictureDrawSamples++;
-                                                      _pictureDrawTotalUs += us;
-                                                      _pictureDrawMaxUs =
-                                                          math.max(
-                                                              _pictureDrawMaxUs,
-                                                              us);
-                                                    }
-                                                  },
-                                                  onActivePathDraw: (elapsed) {
-                                                    if (_perfEnabled &&
-                                                        _instrumentationEnabled) {
-                                                      final us = elapsed
-                                                          .inMicroseconds;
-                                                      _activePathDrawSamples++;
-                                                      _activePathDrawTotalUs +=
-                                                          us;
-                                                      _activePathDrawMaxUs =
-                                                          math.max(
-                                                              _activePathDrawMaxUs,
-                                                              us);
-                                                    }
-                                                  },
-                                                  onOverlayPaint: (elapsed) {
-                                                    if (_perfEnabled) {
-                                                      final us = elapsed
-                                                          .inMicroseconds;
-                                                      _overlayPaintTotalUs +=
-                                                          us;
-                                                      _overlayPaintMaxUs =
-                                                          math.max(
-                                                              _overlayPaintMaxUs,
-                                                              us);
-                                                      _overlayPaintSamples++;
-                                                    }
-                                                  }),
-                                            ),
-                                            if (editingText case final text?)
-                                              Positioned(
-                                                left: text.position.x *
-                                                    constraints.maxWidth,
-                                                top: text.position.y *
-                                                    constraints.maxHeight,
-                                                width: text.maxWidth *
-                                                    constraints.maxWidth,
-                                                child: TextField(
-                                                  controller: textController,
-                                                  focusNode: textFocus,
-                                                  minLines: 1,
-                                                  maxLines: null,
-                                                  style: TextStyle(
-                                                      color: text.color,
-                                                      fontSize: text.fontSize,
-                                                      height: 1.25),
-                                                  decoration:
-                                                      const InputDecoration(
-                                                          isDense: true,
-                                                          border:
-                                                              InputBorder.none),
-                                                ),
-                                              ),
-                                          ])),
-                                ))))),
+                                                if (editingText
+                                                    case final text?)
+                                                  Positioned(
+                                                    left: text.position.x *
+                                                        constraints.maxWidth,
+                                                    top: text.position.y *
+                                                        constraints.maxHeight,
+                                                    width: text.maxWidth *
+                                                        constraints.maxWidth,
+                                                    child: TextField(
+                                                      controller:
+                                                          textController,
+                                                      focusNode: textFocus,
+                                                      minLines: 1,
+                                                      maxLines: null,
+                                                      style: TextStyle(
+                                                          color: text.color,
+                                                          fontSize:
+                                                              text.fontSize,
+                                                          height: 1.25),
+                                                      decoration:
+                                                          const InputDecoration(
+                                                              isDense: true,
+                                                              border:
+                                                                  InputBorder
+                                                                      .none),
+                                                    ),
+                                                  ),
+                                              ])),
+                                    )))))),
                 if (toolbarVisible)
                   Positioned(
                     top: 0,
@@ -2502,6 +2612,7 @@ class _PageNavigatorSheet extends StatelessWidget {
     required this.onAddPage,
     required this.onDuplicatePage,
     required this.onDeletePage,
+    required this.onDeletePages,
     required this.onMovePage,
     required this.onMovePageTo,
   });
@@ -2514,6 +2625,7 @@ class _PageNavigatorSheet extends StatelessWidget {
   final VoidCallback onAddPage;
   final ValueChanged<int> onDuplicatePage;
   final ValueChanged<int> onDeletePage;
+  final ValueChanged<Set<int>> onDeletePages;
   final void Function(int page, int direction) onMovePage;
   final void Function(int source, int target) onMovePageTo;
 
@@ -2547,6 +2659,11 @@ class _PageNavigatorSheet extends StatelessWidget {
                 onPressed: onAddPage,
                 tooltip: '페이지 추가',
                 icon: const Icon(Icons.add),
+              ),
+              IconButton(
+                onPressed: () => _showMultiDelete(context),
+                tooltip: '여러 페이지 삭제',
+                icon: const Icon(Icons.checklist_outlined),
               ),
             ]),
             const SizedBox(height: 12),
@@ -2725,6 +2842,54 @@ class _PageNavigatorSheet extends StatelessWidget {
           ),
         ),
       );
+
+  Future<void> _showMultiDelete(BuildContext context) async {
+    final selected = <int>{};
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('페이지 여러 장 관리'),
+          content: SizedBox(
+            width: 320,
+            height: 300,
+            child: ListView.builder(
+              itemCount: pageCount,
+              itemBuilder: (_, index) {
+                final page = index + 1;
+                return CheckboxListTile(
+                  dense: true,
+                  title: Text('$page페이지'),
+                  value: selected.contains(page),
+                  onChanged: pageCount - selected.length <= 1 &&
+                          !selected.contains(page)
+                      ? null
+                      : (value) => setState(() {
+                            if (value == true) {
+                              selected.add(page);
+                            } else {
+                              selected.remove(page);
+                            }
+                          }),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('취소')),
+            FilledButton(
+                onPressed: selected.isEmpty
+                    ? null
+                    : () => Navigator.pop(dialogContext, true),
+                child: const Text('선택 페이지 삭제')),
+          ],
+        ),
+      ),
+    );
+    if (result == true && selected.isNotEmpty) onDeletePages(selected);
+  }
 }
 
 class _PageActionButton extends StatelessWidget {
@@ -3141,6 +3306,7 @@ class _IntegratedEditorToolbar extends StatelessWidget {
             height: 42,
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
               child: Row(children: [
                 _EditorToolButton(Icons.gesture_rounded, StrokeTool.lasso,
                     selected, onToolChanged, '올가미'),
@@ -3161,6 +3327,7 @@ class _IntegratedEditorToolbar extends StatelessWidget {
                   onPressed: onInsertTap,
                   icon: const Icon(Icons.add_rounded),
                 ),
+                const SizedBox(width: 12),
               ]),
             ),
           ),
@@ -4683,7 +4850,9 @@ bool _sameImages(List<DrawingImage> before, List<DrawingImage> after) {
         a.position.x != b.position.x ||
         a.position.y != b.position.y ||
         a.width != b.width ||
-        a.height != b.height) return false;
+        a.height != b.height) {
+      return false;
+    }
   }
   return true;
 }
@@ -4698,7 +4867,9 @@ bool _sameTexts(List<DrawingText> before, List<DrawingText> after) {
         a.position.x != b.position.x ||
         a.position.y != b.position.y ||
         a.fontSize != b.fontSize ||
-        a.color != b.color) return false;
+        a.color != b.color) {
+      return false;
+    }
   }
   return true;
 }
@@ -4744,8 +4915,8 @@ Rect _pointsBounds(List<StrokePoint> points) {
       xs.reduce(math.max), ys.reduce(math.max));
 }
 
-bool _imageIsInsideLasso(DrawingImage image, List<StrokePoint> polygon,
-    Rect polygonBounds) {
+bool _imageIsInsideLasso(
+    DrawingImage image, List<StrokePoint> polygon, Rect polygonBounds) {
   final rect = _imageRectNormalized(image);
   if (!rect.overlaps(polygonBounds)) return false;
   final points = [
@@ -4758,8 +4929,8 @@ bool _imageIsInsideLasso(DrawingImage image, List<StrokePoint> polygon,
   return points.where((point) => _pointInPolygon(point, polygon)).length >= 3;
 }
 
-bool _textIsInsideLasso(DrawingText text, List<StrokePoint> polygon,
-    Rect polygonBounds) {
+bool _textIsInsideLasso(
+    DrawingText text, List<StrokePoint> polygon, Rect polygonBounds) {
   final rect = _textRectNormalized(text);
   if (!rect.overlaps(polygonBounds)) return false;
   final points = [
@@ -4980,8 +5151,8 @@ List<StrokePoint> _shapeSelectionPoints(DrawingShape shape) {
   ].map((point) => _rotatePoint(point, pivot, shape.rotationRadians)).toList();
 }
 
-bool _strokeIsInsideLasso(Stroke stroke, List<StrokePoint> polygon,
-    Rect polygonBounds) {
+bool _strokeIsInsideLasso(
+    Stroke stroke, List<StrokePoint> polygon, Rect polygonBounds) {
   if (stroke.points.isEmpty) return false;
   if (!_pointsBounds(stroke.points).overlaps(polygonBounds)) return false;
   // Selecting an ink stroke should work when the lasso contains it *or*
@@ -4999,8 +5170,8 @@ bool _strokeIsInsideLasso(Stroke stroke, List<StrokePoint> polygon,
   return false;
 }
 
-bool _shapeIsInsideLasso(DrawingShape shape, List<StrokePoint> polygon,
-    Rect polygonBounds) {
+bool _shapeIsInsideLasso(
+    DrawingShape shape, List<StrokePoint> polygon, Rect polygonBounds) {
   final points = _shapeSelectionPoints(shape);
   if (!_pointsBounds(points).overlaps(polygonBounds)) return false;
   final start = points.first;
@@ -5016,7 +5187,9 @@ bool _shapeIsInsideLasso(DrawingShape shape, List<StrokePoint> polygon,
   if (corners.any((point) => _pointInPolygon(point, polygon))) return true;
   for (var index = 0; index < 4; index++) {
     if (_segmentIntersectsPolygon(
-        points[index], points[(index + 1) % 4], polygon)) return true;
+        points[index], points[(index + 1) % 4], polygon)) {
+      return true;
+    }
   }
   return false;
 }
@@ -5928,7 +6101,9 @@ class StrokePainter extends CustomPainter {
     if (selectedStrokeIds.isEmpty &&
         selectedShapeIds.isEmpty &&
         selectedTextIds.isEmpty &&
-        selectedImageIds.isEmpty) return;
+        selectedImageIds.isEmpty) {
+      return;
+    }
     final selected = strokes
         .where((stroke) => selectedStrokeIds.contains(stroke.id))
         .expand((stroke) => stroke.points)

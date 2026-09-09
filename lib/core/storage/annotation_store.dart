@@ -142,4 +142,33 @@ class AnnotationStore {
       await temporary.rename(second.path);
     }
   }
+
+  /// Inserts a copy slot immediately after [sourcePage] by shifting later
+  /// serialized pages upward. Files are renamed in descending order so no
+  /// existing page is overwritten during the operation.
+  Future<void> insertNotebookPage(
+    String documentId, {
+    required int sourcePage,
+    required int pageCount,
+  }) async {
+    final directory = await _documentDirectory(documentId);
+    final targetPage = sourcePage + 1;
+    for (var page = pageCount; page >= targetPage; page--) {
+      final source = File('${directory.path}/page_$page.json');
+      if (!await source.exists()) continue;
+      await source.rename('${directory.path}/page_${page + 1}.json');
+    }
+    final source = File('${directory.path}/page_$sourcePage.json');
+    final target = File('${directory.path}/page_$targetPage.json');
+    if (await source.exists()) {
+      await source.copy(target.path);
+    } else {
+      await target.writeAsString(jsonEncode({
+        'strokes': const [],
+        'shapes': const [],
+        'texts': const [],
+        'images': const [],
+      }));
+    }
+  }
 }

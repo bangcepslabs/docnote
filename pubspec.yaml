@@ -19,6 +19,7 @@ dependencies:
   pdf: ^3.11.3
   share_plus: ^11.0.0
   archive: ^4.0.7
+  crypto: ^3.0.6
   flutter_svg: ^2.2.3
   flutter_rhwp:
     path: third_party/flutter_rhwp
