@@ -14,6 +14,8 @@ class DrawingText {
     required this.maxWidth,
     required this.order,
     required this.createdAt,
+    this.bold = false,
+    this.alignment = 'left',
   });
 
   final String id;
@@ -26,6 +28,8 @@ class DrawingText {
   final double maxWidth;
   final int order;
   final DateTime createdAt;
+  final bool bold;
+  final String alignment;
 
   DrawingText copyWith({
     String? text,
@@ -33,6 +37,8 @@ class DrawingText {
     double? fontSize,
     Color? color,
     double? maxWidth,
+    bool? bold,
+    String? alignment,
   }) =>
       DrawingText(
         id: id,
@@ -45,6 +51,8 @@ class DrawingText {
         maxWidth: maxWidth ?? this.maxWidth,
         order: order,
         createdAt: createdAt,
+        bold: bold ?? this.bold,
+        alignment: alignment ?? this.alignment,
       );
 
   Map<String, dynamic> toJson() => {
@@ -58,6 +66,8 @@ class DrawingText {
         'maxWidth': maxWidth,
         'order': order,
         'createdAt': createdAt.toIso8601String(),
+        'bold': bold,
+        'alignment': alignment,
       };
 
   factory DrawingText.fromJson(Map<String, dynamic> json) => DrawingText(
@@ -72,5 +82,7 @@ class DrawingText {
         maxWidth: (json['maxWidth'] as num).toDouble(),
         order: (json['order'] as num).toInt(),
         createdAt: DateTime.parse(json['createdAt'] as String),
+        bold: json['bold'] as bool? ?? false,
+        alignment: json['alignment'] as String? ?? 'left',
       );
 }

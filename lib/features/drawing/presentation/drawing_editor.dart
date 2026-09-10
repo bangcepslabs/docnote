@@ -21,6 +21,12 @@ enum EraserMode { partial, wholeStroke }
 enum LassoMode { freeform, rectangle }
 
 const _drawingPerfEnabled = kDebugMode || kProfileMode;
+const _toolbarPopupAnimation = AnimationStyle(
+  curve: Curves.easeOutCubic,
+  reverseCurve: Curves.easeInCubic,
+  duration: Duration(milliseconds: 160),
+  reverseDuration: Duration(milliseconds: 120),
+);
 
 class DrawingEditorPage extends StatefulWidget {
   const DrawingEditorPage(
@@ -117,6 +123,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   final textController = TextEditingController();
   final textFocus = FocusNode();
   double textFontSize = 18;
+  bool textBold = false;
+  String textAlignment = 'left';
   _PageSnapshot? selectionMoveBaseline;
   _PageSnapshot? eraserBaseline;
   StrokePoint? selectionMoveOrigin;
@@ -271,16 +279,17 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
               runSpacing: 12,
               children: [
                 for (final swatch in const [
-                  Colors.black,
-                  Color(0xff3f6f9f),
-                  Color(0xffc95656),
-                  Color(0xff4e8b68),
-                  Color(0xffd58b3a),
+                  (color: Colors.black, label: '검정'),
+                  (color: Color(0xff3f6f9f), label: '파랑'),
+                  (color: Color(0xffc95656), label: '빨강'),
+                  (color: Color(0xff4e8b68), label: '초록'),
+                  (color: Color(0xffd58b3a), label: '주황'),
                 ])
                   _PaletteColorButton(
-                    color: swatch,
-                    selected: swatch == currentColor,
-                    onTap: () => Navigator.pop(sheetContext, swatch),
+                    color: swatch.color,
+                    label: swatch.label,
+                    selected: swatch.color == currentColor,
+                    onTap: () => Navigator.pop(sheetContext, swatch.color),
                   ),
               ],
             ),
@@ -1431,7 +1440,15 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
           maxWidth: (1 - normalized.x - .04).clamp(.16, .92),
           order: texts.length,
           createdAt: DateTime.now(),
+          bold: textBold,
+          alignment: textAlignment,
         );
+    if (hit != null) {
+      textFontSize = hit.fontSize;
+      penColor = hit.color;
+      textBold = hit.bold;
+      textAlignment = hit.alignment;
+    }
     textController
       ..text = hit?.text ?? ''
       ..selection = TextSelection.collapsed(offset: hit?.text.length ?? 0);
@@ -1447,7 +1464,13 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     final baseline = textEditBaseline;
     final existing = texts.indexWhere((text) => text.id == editing.id);
     if (next.isNotEmpty) {
-      final value = editing.copyWith(text: next);
+      final value = editing.copyWith(
+        text: next,
+        fontSize: textFontSize,
+        color: penColor,
+        bold: textBold,
+        alignment: textAlignment,
+      );
       if (existing >= 0) {
         texts[existing] = value;
       } else {
@@ -1943,6 +1966,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         maxWidth: text.maxWidth,
         order: texts.length + copiedTextIds.length - 1,
         createdAt: DateTime.now(),
+        bold: text.bold,
+        alignment: text.alignment,
       );
     });
     final copiedImages = images
@@ -2027,6 +2052,58 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       }
     }
     _scheduleSave();
+    setState(() {});
+  }
+
+  Future<void> _showSelectedTextColor() async {
+    if (selectedTextIds.isEmpty) return;
+    final current =
+        texts.firstWhere((text) => selectedTextIds.contains(text.id)).color;
+    final selected = await showModalBottomSheet<Color>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('텍스트 색상',
+                  style: Theme.of(context).textTheme.titleMedium),
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 12,
+              children: [
+                for (final swatch in const [
+                  (color: Colors.black, label: '검정'),
+                  (color: Color(0xff3f6f9f), label: '파랑'),
+                  (color: Color(0xffc95656), label: '빨강'),
+                  (color: Color(0xff4e8b68), label: '초록'),
+                  (color: Color(0xffd58b3a), label: '주황'),
+                ])
+                  _PaletteColorButton(
+                    color: swatch.color,
+                    label: swatch.label,
+                    selected: swatch.color == current,
+                    onTap: () => Navigator.pop(sheetContext, swatch.color),
+                  ),
+              ],
+            ),
+          ]),
+        ),
+      ),
+    );
+    if (selected == null || !mounted) return;
+    _recordHistory();
+    for (var index = 0; index < texts.length; index++) {
+      if (selectedTextIds.contains(texts[index].id)) {
+        texts[index] = texts[index].copyWith(color: selected);
+      }
+    }
+    _scheduleSave();
+    _bumpCanvas(staticLayer: true);
     setState(() {});
   }
 
@@ -2425,7 +2502,13 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
                                                           color: text.color,
                                                           fontSize:
                                                               text.fontSize,
+                                                          fontWeight: text.bold
+                                                              ? FontWeight.w700
+                                                              : FontWeight.w400,
                                                           height: 1.25),
+                                                      textAlign:
+                                                          _textAlignValue(
+                                                              text.alignment),
                                                       decoration:
                                                           const InputDecoration(
                                                               isDense: true,
@@ -2434,6 +2517,34 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
                                                                       .none),
                                                     ),
                                                   ),
+                                                if (tool == StrokeTool.lasso &&
+                                                    editingText == null)
+                                                  if (_selectedBounds()
+                                                      case final bounds?)
+                                                    _SelectionContextMenuOverlay(
+                                                      bounds: bounds,
+                                                      canvasSize: constraints,
+                                                      hasShapeSelection:
+                                                          selectedShapeIds
+                                                              .isNotEmpty,
+                                                      hasTextSelection:
+                                                          selectedTextIds
+                                                              .isNotEmpty,
+                                                      hasSingleImageSelection:
+                                                          selectedImageIds
+                                                                  .length ==
+                                                              1,
+                                                      onDuplicate:
+                                                          _duplicateSelection,
+                                                      onShapeStyle:
+                                                          _showSelectedShapeStyle,
+                                                      onTextColor:
+                                                          _showSelectedTextColor,
+                                                      onCrop:
+                                                          _cropSelectedImage,
+                                                      onDelete:
+                                                          _deleteSelection,
+                                                    ),
                                               ])),
                                     )))))),
                 if (toolbarVisible)
@@ -2484,6 +2595,128 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         onDuplicateSelection: _duplicateSelection,
         onShapeStyleRequested: _showSelectedShapeStyle,
         onCropRequested: _cropSelectedImage,
+        textBold: textBold,
+        textAlignment: textAlignment,
+        onTextBoldChanged: (value) => setState(() => textBold = value),
+        onTextAlignmentChanged: (value) =>
+            setState(() => textAlignment = value),
+      );
+}
+
+class _SelectionContextMenuOverlay extends StatelessWidget {
+  const _SelectionContextMenuOverlay({
+    required this.bounds,
+    required this.canvasSize,
+    required this.hasShapeSelection,
+    required this.hasTextSelection,
+    required this.hasSingleImageSelection,
+    required this.onDuplicate,
+    required this.onShapeStyle,
+    required this.onTextColor,
+    required this.onCrop,
+    required this.onDelete,
+  });
+
+  final Rect bounds;
+  final BoxConstraints canvasSize;
+  final bool hasShapeSelection;
+  final bool hasTextSelection;
+  final bool hasSingleImageSelection;
+  final VoidCallback onDuplicate;
+  final VoidCallback onShapeStyle;
+  final VoidCallback onTextColor;
+  final VoidCallback onCrop;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    const menuWidth = 208.0;
+    final left = (bounds.center.dx * canvasSize.maxWidth - menuWidth / 2)
+        .clamp(8.0, math.max(8.0, canvasSize.maxWidth - menuWidth))
+        .toDouble();
+    final above = bounds.top * canvasSize.maxHeight - 48;
+    final top = above >= 6
+        ? above
+        : (bounds.bottom * canvasSize.maxHeight + 8)
+            .clamp(6.0, math.max(6.0, canvasSize.maxHeight - 44))
+            .toDouble();
+    return Positioned(
+      left: left,
+      top: top,
+      width: menuWidth,
+      height: 40,
+      child: Material(
+        color: scheme.surface,
+        elevation: 3,
+        shadowColor: Colors.black.withValues(alpha: .16),
+        borderRadius: BorderRadius.circular(10),
+        clipBehavior: Clip.antiAlias,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _SelectionMenuButton(
+              icon: Icons.content_copy_outlined,
+              label: '복제',
+              onPressed: onDuplicate,
+            ),
+            if (hasShapeSelection)
+              _SelectionMenuButton(
+                icon: Icons.palette_outlined,
+                label: '스타일',
+                onPressed: onShapeStyle,
+              ),
+            if (hasTextSelection)
+              _SelectionMenuButton(
+                icon: Icons.palette_outlined,
+                label: '색상',
+                onPressed: onTextColor,
+              ),
+            if (hasSingleImageSelection)
+              _SelectionMenuButton(
+                icon: Icons.crop_outlined,
+                label: '자르기',
+                onPressed: onCrop,
+              ),
+            _SelectionMenuButton(
+              icon: Icons.delete_outline_rounded,
+              label: '삭제',
+              color: scheme.error,
+              onPressed: onDelete,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SelectionMenuButton extends StatelessWidget {
+  const _SelectionMenuButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    this.color,
+  });
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: label,
+        child: Tooltip(
+          message: label,
+          child: IconButton(
+            onPressed: onPressed,
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            icon: Icon(icon, size: 19, color: color),
+          ),
+        ),
       );
 }
 
@@ -3070,6 +3303,10 @@ class DrawingToolbar extends StatefulWidget {
     required this.onDuplicateSelection,
     required this.onShapeStyleRequested,
     required this.onCropRequested,
+    required this.textBold,
+    required this.textAlignment,
+    required this.onTextBoldChanged,
+    required this.onTextAlignmentChanged,
     super.key,
   });
   final StrokeTool selectedTool;
@@ -3100,6 +3337,10 @@ class DrawingToolbar extends StatefulWidget {
   final VoidCallback onDuplicateSelection;
   final VoidCallback onShapeStyleRequested;
   final VoidCallback onCropRequested;
+  final bool textBold;
+  final String textAlignment;
+  final ValueChanged<bool> onTextBoldChanged;
+  final ValueChanged<String> onTextAlignmentChanged;
 
   @override
   State<DrawingToolbar> createState() => _DrawingToolbarState();
@@ -3115,10 +3356,30 @@ class _DrawingToolbarState extends State<DrawingToolbar> {
       context: context,
       position: RelativeRect.fromLTRB(
           MediaQuery.sizeOf(context).width - 150, 92, 12, 0),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      color: Theme.of(context).colorScheme.surface,
+      elevation: 3,
+      popUpAnimationStyle: _toolbarPopupAnimation,
+      menuPadding: const EdgeInsets.symmetric(vertical: 4),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       items: const [
-        PopupMenuItem(value: 'text', child: Text('텍스트')),
-        PopupMenuItem(value: 'image', child: Text('이미지')),
+        PopupMenuItem(
+          value: 'text',
+          height: 44,
+          child: Row(children: [
+            Icon(Icons.text_fields_rounded, size: 19),
+            SizedBox(width: 10),
+            Text('텍스트'),
+          ]),
+        ),
+        PopupMenuItem(
+          value: 'image',
+          height: 44,
+          child: Row(children: [
+            Icon(Icons.image_outlined, size: 19),
+            SizedBox(width: 10),
+            Text('이미지'),
+          ]),
+        ),
       ],
     );
     if (!mounted || choice == null) return;
@@ -3293,78 +3554,91 @@ class _IntegratedEditorToolbar extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final selected = toolbar.selectedTool;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      child: Material(
-        color: scheme.surface,
-        elevation: 2,
-        shadowColor: Colors.black.withValues(alpha: .10),
-        borderRadius: BorderRadius.circular(16),
-        clipBehavior: Clip.antiAlias,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          SizedBox(
-            height: 42,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(children: [
-                _EditorToolButton(Icons.gesture_rounded, StrokeTool.lasso,
-                    selected, onToolChanged, '올가미'),
-                _EditorToolButton(Icons.edit_rounded, StrokeTool.pen, selected,
-                    onToolChanged, '펜'),
-                _EditorToolButton(Icons.cleaning_services_outlined,
-                    StrokeTool.eraser, selected, onToolChanged, '지우개'),
-                _EditorToolButton(Icons.border_color_outlined,
-                    StrokeTool.highlighter, selected, onToolChanged, '형광펜'),
-                _EditorToolButton(Icons.category_outlined, StrokeTool.shapeLine,
-                    selected, onToolChanged, '도형'),
-                _EditorToolButton(Icons.text_fields_rounded, StrokeTool.text,
-                    selected, onToolChanged, '텍스트'),
-                _EditorToolButton(Icons.image_outlined, StrokeTool.image,
-                    selected, onToolChanged, '이미지'),
-                IconButton(
-                  tooltip: '삽입 도구',
-                  onPressed: onInsertTap,
-                  icon: const Icon(Icons.add_rounded),
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Material(
+            color: scheme.surface,
+            elevation: 2,
+            shadowColor: Colors.black.withValues(alpha: .10),
+            borderRadius: BorderRadius.circular(16),
+            clipBehavior: Clip.antiAlias,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(
+                height: 42,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  child: Row(children: [
+                    _EditorToolButton(Icons.select_all_rounded,
+                        StrokeTool.lasso, selected, onToolChanged, '올가미'),
+                    _EditorToolButton(Icons.draw_rounded, StrokeTool.pen,
+                        selected, onToolChanged, '펜'),
+                    _EditorToolButton(Icons.backspace_outlined,
+                        StrokeTool.eraser, selected, onToolChanged, '지우개'),
+                    _EditorToolButton(Icons.highlight_rounded,
+                        StrokeTool.highlighter, selected, onToolChanged, '형광펜'),
+                    _EditorToolButton(Icons.polyline_rounded,
+                        StrokeTool.shapeLine, selected, onToolChanged, '도형'),
+                    _EditorToolButton(Icons.text_fields_rounded,
+                        StrokeTool.text, selected, onToolChanged, '텍스트'),
+                    _EditorToolButton(Icons.image_rounded, StrokeTool.image,
+                        selected, onToolChanged, '이미지'),
+                    IconButton(
+                      tooltip: '삽입 도구',
+                      onPressed: onInsertTap,
+                      icon: const Icon(Icons.add_rounded),
+                    ),
+                    const SizedBox(width: 12),
+                  ]),
                 ),
-                const SizedBox(width: 12),
-              ]),
-            ),
+              ),
+              Divider(
+                  height: 1,
+                  thickness: 1,
+                  color: scheme.outlineVariant.withValues(alpha: .35)),
+              ToolOptionsBar(
+                selectedTool: selected,
+                width: toolbar.width,
+                color: toolbar.color,
+                highlighterOpacity: toolbar.highlighterOpacity,
+                eraserMode: toolbar.eraserMode,
+                lassoMode: toolbar.lassoMode,
+                lassoIncludeStrokes: toolbar.lassoIncludeStrokes,
+                lassoIncludeTexts: toolbar.lassoIncludeTexts,
+                lassoIncludeImages: toolbar.lassoIncludeImages,
+                onWidthChanged: toolbar.onWidthChanged,
+                onColorChanged: toolbar.onColorChanged,
+                onHighlighterOpacityChanged:
+                    toolbar.onHighlighterOpacityChanged,
+                onEraserModeChanged: toolbar.onEraserModeChanged,
+                onLassoModeChanged: toolbar.onLassoModeChanged,
+                onLassoIncludeStrokesChanged:
+                    toolbar.onLassoIncludeStrokesChanged,
+                onLassoIncludeTextsChanged: toolbar.onLassoIncludeTextsChanged,
+                onLassoIncludeImagesChanged:
+                    toolbar.onLassoIncludeImagesChanged,
+                onPaletteRequested: toolbar.onPaletteRequested,
+                shapeType: toolbar.shapeType,
+                onShapeTypeChanged: toolbar.onShapeTypeChanged,
+                hasSelection: toolbar.hasSelection,
+                hasShapeSelection: toolbar.hasShapeSelection,
+                hasSingleImageSelection: toolbar.hasSingleImageSelection,
+                onDeleteSelection: toolbar.onDeleteSelection,
+                onDuplicateSelection: toolbar.onDuplicateSelection,
+                onShapeStyleRequested: toolbar.onShapeStyleRequested,
+                onCropRequested: toolbar.onCropRequested,
+                textBold: toolbar.textBold,
+                textAlignment: toolbar.textAlignment,
+                onTextBoldChanged: toolbar.onTextBoldChanged,
+                onTextAlignmentChanged: toolbar.onTextAlignmentChanged,
+              ),
+            ]),
           ),
-          Divider(
-              height: 1,
-              thickness: 1,
-              color: scheme.outlineVariant.withValues(alpha: .35)),
-          ToolOptionsBar(
-            selectedTool: selected,
-            width: toolbar.width,
-            color: toolbar.color,
-            highlighterOpacity: toolbar.highlighterOpacity,
-            eraserMode: toolbar.eraserMode,
-            lassoMode: toolbar.lassoMode,
-            lassoIncludeStrokes: toolbar.lassoIncludeStrokes,
-            lassoIncludeTexts: toolbar.lassoIncludeTexts,
-            lassoIncludeImages: toolbar.lassoIncludeImages,
-            onWidthChanged: toolbar.onWidthChanged,
-            onColorChanged: toolbar.onColorChanged,
-            onHighlighterOpacityChanged: toolbar.onHighlighterOpacityChanged,
-            onEraserModeChanged: toolbar.onEraserModeChanged,
-            onLassoModeChanged: toolbar.onLassoModeChanged,
-            onLassoIncludeStrokesChanged: toolbar.onLassoIncludeStrokesChanged,
-            onLassoIncludeTextsChanged: toolbar.onLassoIncludeTextsChanged,
-            onLassoIncludeImagesChanged: toolbar.onLassoIncludeImagesChanged,
-            onPaletteRequested: toolbar.onPaletteRequested,
-            shapeType: toolbar.shapeType,
-            onShapeTypeChanged: toolbar.onShapeTypeChanged,
-            hasSelection: toolbar.hasSelection,
-            hasShapeSelection: toolbar.hasShapeSelection,
-            hasSingleImageSelection: toolbar.hasSingleImageSelection,
-            onDeleteSelection: toolbar.onDeleteSelection,
-            onDuplicateSelection: toolbar.onDuplicateSelection,
-            onShapeStyleRequested: toolbar.onShapeStyleRequested,
-            onCropRequested: toolbar.onCropRequested,
-          ),
-        ]),
+        ),
       ),
     );
   }
@@ -3384,25 +3658,52 @@ class _EditorToolButton extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final isSelected = tool == selectedTool ||
         (_isShapeToolValue(tool) && _isShapeToolValue(selectedTool));
-    return Tooltip(
-      message: label,
-      child: InkWell(
-        onTap: () => onTap(tool),
-        borderRadius: BorderRadius.circular(10),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          width: 40,
-          height: 36,
-          margin: const EdgeInsets.symmetric(horizontal: 1),
-          decoration: BoxDecoration(
-            color: isSelected
-                ? scheme.primaryContainer.withValues(alpha: .72)
-                : null,
-            borderRadius: BorderRadius.circular(10),
+    return Semantics(
+      button: true,
+      selected: isSelected,
+      label: label,
+      child: Tooltip(
+        message: label,
+        child: InkWell(
+          onTap: () => onTap(tool),
+          borderRadius: BorderRadius.circular(10),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            width: 40,
+            height: 36,
+            margin: const EdgeInsets.symmetric(horizontal: 1),
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? scheme.primaryContainer.withValues(alpha: .82)
+                  : null,
+              border: isSelected
+                  ? Border.all(
+                      color: scheme.primary.withValues(alpha: .12), width: 1)
+                  : null,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Icon(icon,
+                    size: 21,
+                    color:
+                        isSelected ? scheme.primary : scheme.onSurfaceVariant),
+                if (isSelected)
+                  Positioned(
+                    bottom: 2,
+                    child: Container(
+                      width: 12,
+                      height: 2,
+                      decoration: BoxDecoration(
+                        color: scheme.primary,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
-          child: Icon(icon,
-              size: 21,
-              color: isSelected ? scheme.primary : scheme.onSurfaceVariant),
         ),
       ),
     );
@@ -3543,6 +3844,10 @@ class ToolOptionsBar extends StatelessWidget {
       required this.onDuplicateSelection,
       required this.onShapeStyleRequested,
       required this.onCropRequested,
+      this.textBold = false,
+      this.textAlignment = 'left',
+      this.onTextBoldChanged,
+      this.onTextAlignmentChanged,
       super.key});
   final StrokeTool selectedTool;
   final double width;
@@ -3571,6 +3876,10 @@ class ToolOptionsBar extends StatelessWidget {
   final VoidCallback onDuplicateSelection;
   final VoidCallback onShapeStyleRequested;
   final VoidCallback onCropRequested;
+  final bool textBold;
+  final String textAlignment;
+  final ValueChanged<bool>? onTextBoldChanged;
+  final ValueChanged<String>? onTextAlignmentChanged;
   @override
   Widget build(BuildContext context) {
     if (selectedTool == StrokeTool.pen) {
@@ -3639,7 +3948,11 @@ class ToolOptionsBar extends StatelessWidget {
         color: color,
         onWidthChanged: onWidthChanged,
         onColorChanged: onColorChanged,
-        onPaletteRequested: onPaletteRequested);
+        onPaletteRequested: onPaletteRequested,
+        bold: textBold,
+        alignment: textAlignment,
+        onBoldChanged: onTextBoldChanged,
+        onAlignmentChanged: onTextAlignmentChanged);
   }
 
   bool _isShapeTool(StrokeTool tool) => _isShapeToolValue(tool);
@@ -3911,6 +4224,10 @@ class _ShapeDetailsButton extends StatelessWidget {
   Widget build(BuildContext context) => PopupMenuButton<String>(
         tooltip: '도형 선과 색상 설정',
         padding: EdgeInsets.zero,
+        elevation: 3,
+        color: Theme.of(context).colorScheme.surface,
+        popUpAnimationStyle: _toolbarPopupAnimation,
+        menuPadding: const EdgeInsets.symmetric(vertical: 4),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         onSelected: (value) {
           switch (value) {
@@ -3924,12 +4241,55 @@ class _ShapeDetailsButton extends StatelessWidget {
               onPaletteRequested();
           }
         },
-        itemBuilder: (_) => const [
-          PopupMenuItem(value: 'thin', child: Text('얇은 선')),
-          PopupMenuItem(value: 'medium', child: Text('보통 선')),
-          PopupMenuItem(value: 'thick', child: Text('굵은 선')),
-          PopupMenuDivider(),
-          PopupMenuItem(value: 'color', child: Text('색상 선택')),
+        itemBuilder: (_) => [
+          PopupMenuItem(
+            value: 'thin',
+            height: 40,
+            child: _ShapeSettingRow(
+                label: '얇은 선', width: 2, selected: width <= 2, color: color),
+          ),
+          PopupMenuItem(
+            value: 'medium',
+            height: 40,
+            child: _ShapeSettingRow(
+                label: '보통 선',
+                width: 5,
+                selected: width > 2 && width < 8,
+                color: color),
+          ),
+          PopupMenuItem(
+            value: 'thick',
+            height: 40,
+            child: _ShapeSettingRow(
+                label: '굵은 선', width: 9, selected: width >= 8, color: color),
+          ),
+          const PopupMenuDivider(),
+          PopupMenuItem(
+            value: 'color',
+            height: 40,
+            child: Row(children: [
+              Icon(Icons.palette_outlined,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+              const SizedBox(width: 10),
+              const Text('색상 선택'),
+              const Spacer(),
+              Container(
+                width: 16,
+                height: 16,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .outlineVariant
+                        .withValues(alpha: .7),
+                  ),
+                ),
+              ),
+            ]),
+          ),
         ],
         child: Padding(
           padding: const EdgeInsets.all(8),
@@ -3937,6 +4297,43 @@ class _ShapeDetailsButton extends StatelessWidget {
               size: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
       );
+}
+
+class _ShapeSettingRow extends StatelessWidget {
+  const _ShapeSettingRow({
+    required this.label,
+    required this.width,
+    required this.selected,
+    required this.color,
+  });
+  final String label;
+  final double width;
+  final bool selected;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(children: [
+      SizedBox(
+        width: 28,
+        child: Center(
+          child: Container(
+            width: 22,
+            height: width.clamp(2, 8),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Text(label),
+      const Spacer(),
+      if (selected) Icon(Icons.check_rounded, size: 18, color: scheme.primary),
+    ]);
+  }
 }
 
 class LassoOptionsBar extends StatelessWidget {
@@ -3981,6 +4378,12 @@ class LassoOptionsBar extends StatelessWidget {
           PopupMenuButton<String>(
             tooltip: '선택 대상 옵션',
             padding: EdgeInsets.zero,
+            elevation: 3,
+            color: Theme.of(context).colorScheme.surface,
+            popUpAnimationStyle: _toolbarPopupAnimation,
+            menuPadding: const EdgeInsets.symmetric(vertical: 4),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             onSelected: (value) {
               switch (value) {
                 case 'strokes':
@@ -3992,18 +4395,21 @@ class LassoOptionsBar extends StatelessWidget {
               }
             },
             itemBuilder: (_) => [
-              CheckedPopupMenuItem(
+              _lassoIncludeItem(
                   value: 'strokes',
-                  checked: includeStrokes,
-                  child: const Text('필기 포함')),
-              CheckedPopupMenuItem(
+                  label: '필기 포함',
+                  icon: Icons.draw_outlined,
+                  checked: includeStrokes),
+              _lassoIncludeItem(
                   value: 'texts',
-                  checked: includeTexts,
-                  child: const Text('텍스트 포함')),
-              CheckedPopupMenuItem(
+                  label: '텍스트 포함',
+                  icon: Icons.text_fields_rounded,
+                  checked: includeTexts),
+              _lassoIncludeItem(
                   value: 'images',
-                  checked: includeImages,
-                  child: const Text('이미지 포함')),
+                  label: '이미지 포함',
+                  icon: Icons.image_outlined,
+                  checked: includeImages),
             ],
             child: const Padding(
               padding: EdgeInsets.all(6),
@@ -4026,6 +4432,24 @@ class LassoOptionsBar extends StatelessWidget {
                 color: Theme.of(context).colorScheme.error,
                 icon: const Icon(Icons.delete_outline, size: 20)),
           ],
+        ]),
+      );
+
+  PopupMenuItem<String> _lassoIncludeItem({
+    required String value,
+    required String label,
+    required IconData icon,
+    required bool checked,
+  }) =>
+      PopupMenuItem(
+        value: value,
+        height: 40,
+        child: Row(children: [
+          Icon(icon, size: 18),
+          const SizedBox(width: 10),
+          Text(label),
+          const Spacer(),
+          if (checked) const Icon(Icons.check_rounded, size: 18),
         ]),
       );
 }
@@ -4104,6 +4528,10 @@ class TextOptionsBar extends StatelessWidget {
     required this.onWidthChanged,
     required this.onColorChanged,
     required this.onPaletteRequested,
+    this.bold = false,
+    this.alignment = 'left',
+    this.onBoldChanged,
+    this.onAlignmentChanged,
     super.key,
   });
   final double width;
@@ -4111,6 +4539,10 @@ class TextOptionsBar extends StatelessWidget {
   final ValueChanged<double> onWidthChanged;
   final ValueChanged<Color> onColorChanged;
   final VoidCallback onPaletteRequested;
+  final bool bold;
+  final String alignment;
+  final ValueChanged<bool>? onBoldChanged;
+  final ValueChanged<String>? onAlignmentChanged;
 
   @override
   Widget build(BuildContext context) => _InkOptionsLayout(
@@ -4123,7 +4555,92 @@ class TextOptionsBar extends StatelessWidget {
         onWidthChanged: onWidthChanged,
         onColorChanged: onColorChanged,
         onPaletteRequested: onPaletteRequested,
+        trailing: _TextFormattingButton(
+          bold: bold,
+          alignment: alignment,
+          onBoldChanged: onBoldChanged,
+          onAlignmentChanged: onAlignmentChanged,
+        ),
         widthSuffix: 'pt',
+      );
+}
+
+class _TextFormattingButton extends StatelessWidget {
+  const _TextFormattingButton({
+    required this.bold,
+    required this.alignment,
+    required this.onBoldChanged,
+    required this.onAlignmentChanged,
+  });
+  final bool bold;
+  final String alignment;
+  final ValueChanged<bool>? onBoldChanged;
+  final ValueChanged<String>? onAlignmentChanged;
+
+  @override
+  Widget build(BuildContext context) => PopupMenuButton<String>(
+        tooltip: '텍스트 서식',
+        padding: EdgeInsets.zero,
+        elevation: 3,
+        color: Theme.of(context).colorScheme.surface,
+        popUpAnimationStyle: _toolbarPopupAnimation,
+        menuPadding: const EdgeInsets.symmetric(vertical: 4),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        onSelected: (value) {
+          if (value == 'bold') {
+            onBoldChanged?.call(!bold);
+          } else {
+            onAlignmentChanged?.call(value);
+          }
+        },
+        itemBuilder: (_) => [
+          PopupMenuItem(
+            value: 'bold',
+            height: 40,
+            child: Row(children: [
+              Icon(Icons.format_bold_rounded,
+                  size: 18,
+                  color: bold
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.onSurfaceVariant),
+              const SizedBox(width: 10),
+              const Text('굵게'),
+              const Spacer(),
+              if (bold)
+                Icon(Icons.check_rounded,
+                    size: 18, color: Theme.of(context).colorScheme.primary),
+            ]),
+          ),
+          const PopupMenuDivider(),
+          for (final entry in const [
+            (value: 'left', label: '왼쪽 정렬', icon: Icons.format_align_left),
+            (value: 'center', label: '가운데 정렬', icon: Icons.format_align_center),
+            (value: 'right', label: '오른쪽 정렬', icon: Icons.format_align_right),
+          ])
+            PopupMenuItem(
+              value: entry.value,
+              height: 40,
+              child: Row(children: [
+                Icon(entry.icon, size: 18),
+                const SizedBox(width: 10),
+                Text(entry.label),
+                const Spacer(),
+                if (alignment == entry.value)
+                  Icon(Icons.check_rounded,
+                      size: 18, color: Theme.of(context).colorScheme.primary),
+              ]),
+            ),
+        ],
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(
+            bold ? Icons.format_bold_rounded : Icons.format_align_left,
+            size: 18,
+            color: bold
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
       );
 }
 
@@ -4211,7 +4728,7 @@ class _InkOptionsLayout extends StatelessWidget {
               ),
             ),
           const SizedBox(width: 4),
-          _PaletteButton(onTap: onPaletteRequested),
+          _PaletteButton(color: color, onTap: onPaletteRequested),
         ]),
       );
 
@@ -4351,11 +4868,16 @@ class _OpacityButton extends StatelessWidget {
   Widget build(BuildContext context) => PopupMenuButton<double>(
         tooltip: '형광펜 강도',
         padding: EdgeInsets.zero,
+        elevation: 3,
+        color: Theme.of(context).colorScheme.surface,
+        popUpAnimationStyle: _toolbarPopupAnimation,
+        menuPadding: const EdgeInsets.symmetric(vertical: 4),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         onSelected: onChanged,
-        itemBuilder: (_) => const [
-          PopupMenuItem(value: .2, child: Text('연하게 20%')),
-          PopupMenuItem(value: .35, child: Text('보통 35%')),
-          PopupMenuItem(value: .5, child: Text('진하게 50%')),
+        itemBuilder: (_) => [
+          _opacityItem(context, '연하게', .2),
+          _opacityItem(context, '보통', .35),
+          _opacityItem(context, '진하게', .5),
         ],
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
@@ -4377,6 +4899,23 @@ class _OpacityButton extends StatelessWidget {
                     )),
           ]),
         ),
+      );
+
+  PopupMenuItem<double> _opacityItem(
+          BuildContext context, String label, double value) =>
+      PopupMenuItem(
+        value: value,
+        height: 40,
+        child: Row(children: [
+          Icon(Icons.opacity_outlined,
+              size: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
+          const SizedBox(width: 10),
+          Text('$label ${(value * 100).round()}%'),
+          const Spacer(),
+          if ((value - this.value).abs() < .01)
+            Icon(Icons.check_rounded,
+                size: 18, color: Theme.of(context).colorScheme.primary),
+        ]),
       );
 }
 
@@ -4575,7 +5114,8 @@ class _ShapeTypeButton extends StatelessWidget {
 }
 
 class _PaletteButton extends StatelessWidget {
-  const _PaletteButton({required this.onTap});
+  const _PaletteButton({required this.color, required this.onTap});
+  final Color color;
   final VoidCallback onTap;
   @override
   Widget build(BuildContext context) => Semantics(
@@ -4583,13 +5123,31 @@ class _PaletteButton extends StatelessWidget {
         label: '색상 팔레트 열기',
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(18),
-          child: const SizedBox(
-            width: 28,
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            width: 34,
             height: 28,
-            child: Center(
-              child: Icon(Icons.palette_outlined,
-                  size: 20, color: Color(0xff5f6b76)),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .outlineVariant
+                          .withValues(alpha: .7),
+                    ),
+                  ),
+                  child: const SizedBox(width: 11, height: 11),
+                ),
+                const SizedBox(width: 3),
+                Icon(Icons.palette_outlined,
+                    size: 17,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ],
             ),
           ),
         ),
@@ -4598,28 +5156,40 @@ class _PaletteButton extends StatelessWidget {
 
 class _PaletteColorButton extends StatelessWidget {
   const _PaletteColorButton(
-      {required this.color, required this.selected, required this.onTap});
+      {required this.color,
+      required this.selected,
+      required this.onTap,
+      this.label});
   final Color color;
   final bool selected;
   final VoidCallback onTap;
+  final String? label;
   @override
   Widget build(BuildContext context) => InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(24),
-        child: Container(
-          width: 48,
-          height: 48,
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(
-                color: selected
-                    ? const Color(0xff377ab7)
-                    : const Color(0xffd9e0e5),
-                width: selected ? 2 : 1),
-          ),
-          child: DecoratedBox(
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        child: Semantics(
+          button: true,
+          selected: selected,
+          label: label ?? '색상 선택',
+          child: Container(
+            width: 48,
+            height: 48,
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                  color: selected
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context)
+                          .colorScheme
+                          .outlineVariant
+                          .withValues(alpha: .75),
+                  width: selected ? 2 : 1),
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
           ),
         ),
       );
@@ -4867,7 +5437,9 @@ bool _sameTexts(List<DrawingText> before, List<DrawingText> after) {
         a.position.x != b.position.x ||
         a.position.y != b.position.y ||
         a.fontSize != b.fontSize ||
-        a.color != b.color) {
+        a.color != b.color ||
+        a.bold != b.bold ||
+        a.alignment != b.alignment) {
       return false;
     }
   }
@@ -4898,6 +5470,12 @@ Rect _textRectNormalized(DrawingText text) {
   final height = (text.fontSize * 1.25 * lines / 900).clamp(.02, .6);
   return Rect.fromLTWH(text.position.x, text.position.y, text.maxWidth, height);
 }
+
+TextAlign _textAlignValue(String value) => switch (value) {
+      'center' => TextAlign.center,
+      'right' => TextAlign.right,
+      _ => TextAlign.left,
+    };
 
 Rect _textRect(DrawingText text, Size size) => Rect.fromLTWH(
     text.position.x * size.width,
@@ -5989,9 +6567,13 @@ class StrokePainter extends CustomPainter {
     final painter = TextPainter(
       text: TextSpan(
           text: text.text,
-          style: TextStyle(color: text.color, fontSize: text.fontSize)),
+          style: TextStyle(
+              color: text.color,
+              fontSize: text.fontSize,
+              fontWeight: text.bold ? FontWeight.w700 : FontWeight.w400)),
       textDirection: TextDirection.ltr,
       maxLines: null,
+      textAlign: _textAlignValue(text.alignment),
     )..layout(maxWidth: text.maxWidth * size.width);
     painter.paint(canvas, restorePoint(text.position, size));
   }
