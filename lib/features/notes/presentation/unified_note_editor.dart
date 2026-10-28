@@ -11,8 +11,10 @@ class UnifiedNoteEditor extends StatefulWidget {
       {required this.document,
       required this.onSave,
       required this.onDelete,
+      this.embeddedInWorkspace = false,
       super.key});
   final DocumentItem document;
+  final bool embeddedInWorkspace;
   final Future<void> Function(DocumentItem) onSave;
   final Future<void> Function(String) onDelete;
   @override
@@ -41,7 +43,7 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
     titleController.addListener(_changed);
     bodyController.addListener(_changed);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) bodyFocus.requestFocus();
+      if (mounted && widget.document.body.isEmpty) bodyFocus.requestFocus();
     });
   }
 
@@ -113,8 +115,11 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
       },
       child: Scaffold(
           appBar: AppBar(
-              leading: IconButton(
-                  onPressed: _close, icon: const Icon(Icons.arrow_back)),
+              automaticallyImplyLeading: !widget.embeddedInWorkspace,
+              leading: widget.embeddedInWorkspace
+                  ? null
+                  : IconButton(
+                      onPressed: _close, icon: const Icon(Icons.arrow_back)),
               title: TextField(
                 controller: titleController,
                 maxLines: 1,
@@ -122,6 +127,10 @@ class _UnifiedNoteEditorState extends State<UnifiedNoteEditor>
                 decoration: InputDecoration(
                   hintText: '제목',
                   border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  filled: false,
+                  contentPadding: EdgeInsets.zero,
                   isDense: true,
                   hintStyle: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,

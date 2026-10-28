@@ -9,8 +9,17 @@ import '../../features/drawing/domain/drawing_text.dart';
 import '../../features/drawing/domain/drawing_image.dart';
 
 class AnnotationStore {
+  AnnotationStore({this.documentsDirectoryProvider});
+
+  /// Injectable for isolated storage tests; production defaults to the app's
+  /// private documents directory.
+  final Future<Directory> Function()? documentsDirectoryProvider;
+
+  Future<Directory> _rootDirectory() async =>
+      documentsDirectoryProvider?.call() ?? getApplicationDocumentsDirectory();
+
   Future<Directory> _documentDirectory(String documentId) async {
-    final root = await getApplicationDocumentsDirectory();
+    final root = await _rootDirectory();
     final directory =
         Directory('${root.path}/documents/$documentId/annotations');
     await directory.create(recursive: true);
@@ -23,7 +32,7 @@ class AnnotationStore {
   /// Keeps drawing images in the same document-owned attachment area used by
   /// note attachments, rather than retaining a fragile gallery/cache URI.
   Future<File> copyImageAttachment(String documentId, File source) async {
-    final root = await getApplicationDocumentsDirectory();
+    final root = await _rootDirectory();
     final directory =
         Directory('${root.path}/documents/$documentId/attachments');
     await directory.create(recursive: true);
@@ -131,7 +140,8 @@ class AnnotationStore {
     final first = File('${directory.path}/page_$firstPage.json');
     final second = File('${directory.path}/page_$secondPage.json');
     if (!await first.exists() && !await second.exists()) return;
-    final temporary = File('${directory.path}/.page_swap_${DateTime.now().microsecondsSinceEpoch}.tmp');
+    final temporary = File(
+        '${directory.path}/.page_swap_${DateTime.now().microsecondsSinceEpoch}.tmp');
     if (await first.exists()) {
       await first.rename(temporary.path);
     }
@@ -170,5 +180,30 @@ class AnnotationStore {
         'images': const [],
       }));
     }
+  }
+
+  /// Inserts an empty notebook page immediately after [sourcePage]. This uses
+  /// the same descending rename order as [insertNotebookPage], but deliberately
+  /// does not copy the source page contents.
+  Future<void> insertBlankNotebookPage(
+    String documentId, {
+    required int sourcePage,
+    required int pageCount,
+  }) async {
+    final directory = await _documentDirectory(documentId);
+    final targetPage = sourcePage + 1;
+    for (var page = pageCount; page >= targetPage; page--) {
+      final source = File('${directory.path}/page_$page.json');
+      if (!await source.exists()) continue;
+      await source.rename('${directory.path}/page_${page + 1}.json');
+    }
+    await File('${directory.path}/page_$targetPage.json').writeAsString(
+      jsonEncode({
+        'strokes': const [],
+        'shapes': const [],
+        'texts': const [],
+        'images': const [],
+      }),
+    );
   }
 }

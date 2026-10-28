@@ -858,19 +858,35 @@ impl DocumentCore {
 
         // 구역의 초기 ColumnDef 찾기 (find_initial_column_def와 동일 로직)
         let mut found = false;
+        let mut start_para = 0;
         let paragraphs = &mut self.document.sections[section_idx].paragraphs;
-        for para in paragraphs.iter_mut() {
+        for (para_idx, para) in paragraphs.iter_mut().enumerate() {
             for ctrl in para.controls.iter_mut() {
                 if let Control::ColumnDef(ref mut cd) = ctrl {
                     cd.column_count = column_count;
                     cd.column_type = col_type;
                     cd.same_width = same_width;
                     cd.spacing = spacing_hu;
+                    // The serializer preserves raw_attr when present. Update
+                    // only the edited bits so reopening keeps the new columns
+                    // without discarding direction/reserved bits.
+                    if cd.raw_attr != 0 {
+                        let type_bits = match col_type {
+                            ColumnType::Normal => 0,
+                            ColumnType::Distribute => 1,
+                            ColumnType::Parallel => 2,
+                        };
+                        cd.raw_attr = (cd.raw_attr & !0x13ff)
+                            | type_bits
+                            | ((column_count & 0xff) << 2)
+                            | if same_width { 0x1000 } else { 0 };
+                    }
                     if same_width {
                         cd.widths.clear();
                         cd.gaps.clear();
                     }
                     found = true;
+                    start_para = para_idx;
                     break;
                 }
             }
@@ -892,6 +908,23 @@ impl DocumentCore {
                     .controls.push(Control::ColumnDef(cd));
             }
         }
+
+        // Column geometry changes invalidate the imported line breaks as well as
+        // the composed page. Recomposition alone retains the old full-width
+        // LineSegs, so text can run across neighbouring columns.
+        // A later ColumnDef starts a separate column range. Its line widths
+        // must not be rewritten by a change to the initial definition.
+        let paragraphs = &self.document.sections[section_idx].paragraphs;
+        let end_para = ((start_para + 1)..paragraphs.len())
+            .find(|&i| paragraphs[i].controls.iter().any(|c| matches!(c, Control::ColumnDef(_))))
+            .unwrap_or(paragraphs.len());
+        for para_idx in start_para..end_para {
+            self.reflow_paragraph(section_idx, para_idx);
+        }
+        crate::renderer::composer::recalculate_section_vpos(
+            &mut self.document.sections[section_idx].paragraphs,
+            start_para,
+        );
 
         // 조판 갱신
         self.document.sections[section_idx].raw_stream = None;

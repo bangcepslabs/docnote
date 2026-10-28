@@ -48,4 +48,14 @@ void main() {
     expect(document.favorite, isFalse);
     expect(document.trashed, isFalse);
   });
+
+  test('알 수 없는 기존 문서 유형은 안전한 메모 유형으로 읽는다', () {
+    final document = DocumentItem.fromJson({
+      'id': 'legacy-unknown',
+      'title': '이전 버전 문서',
+      'type': 'legacyScan',
+    });
+
+    expect(document.type, DocumentType.textNote);
+  });
 }

@@ -19,6 +19,7 @@ PDF·HWP/HWPX 문서와 일반 메모, 벡터 필기를 한 곳에서 관리하�
 - 즐겨찾기, 제목·본문·문서 유형·즐겨찾기 검색 필터, 문서 이름 변경
 - 휴지통 이동·복원·영구 삭제, 최근 열람 시각 기록
 - 필기 노트 생성, 페이지 추가·삭제·이동 및 페이지별 저장
+- 수동 로컬 백업/복원(`.docnote` ZIP): 문서 파일·첨부·페이지 메타데이터와 앱 설정을 포함
 - PDF 가져오기 시 첫 페이지 썸네일 생성 및 문서 목록 미리보기
 - `documents/{id}/original`, `working`, `annotations`, `thumbnails`, `exports`, `metadata`로 확장 가능한 저장 정책
 - HWP/HWPX 엔진 인터페이스를 `lib/features/hwp/domain/hwp_engine.dart`에 분리
@@ -61,7 +62,26 @@ PDF 화면은 보기 모드와 필기 모드를 분리합니다. 보기 모드�
 
 ## HWP/rhwp
 
-검증되지 않은 rhwp API를 추측해 사용하지 않았습니다. Flutter에서 직접 호출 가능한 공식/유지보수 패키지가 확인되지 않는 환경에서는 `HwpEngine` 인터페이스와 안전한 플레이스홀더로 앱 전체 흐름을 유지하고, 실제 rhwp 연동은 Rust FFI 또는 별도 Android 모듈을 검증한 뒤 연결합니다. HWP 본문 직접 편집과 100% 한컴오피스 동일 렌더링은 MVP 범위에서 제외합니다.
+현재 `flutter_rhwp`의 Rust bridge를 통해 HWP/HWPX 열기, 편집 화면 표시, HWP로 내보내기를 연결했습니다. 다만 한컴오피스와의 완전한 레이아웃 호환성이나 모든 암호화·복잡 문서 구조가 보장되는 것은 아니므로 실제 사용자 문서 표본으로 호환성을 확인해야 합니다.
+
+## 로컬 백업과 복원
+
+`.docnote` 파일은 암호화되지 않은 ZIP 기반 백업입니다. 문서 파일은 선택된 백업 문서 ID 아래의 앱 내부 파일만 포함하며, 복원 시 manifest와 포함 파일의 SHA-256을 확인합니다. 문서별 페이지 회전/책갈피/섹션과 앱 설정도 저장합니다. 다른 기기에서는 앱의 복원 기능으로 파일을 선택하면 됩니다. 민감 문서는 공유 대상이 암호화를 제공하는지 확인하거나 암호화된 저장 위치를 사용하세요. 서버 계정이나 자동 동기화는 사용하지 않습니다.
+
+문서 목록/폴더 메타데이터는 현재 로컬 `SharedPreferences` JSON 저장소를 사용합니다. 이 MVP 규모에서는 별도 DB 서버가 필요하지 않지만, 대량 라이브러리와 손상 복구를 운영 기준으로 보장하려면 로컬 DB 마이그레이션 및 복구 정책을 별도로 검토해야 합니다.
+
+## Android 릴리즈 서명
+
+릴리즈 빌드는 디버그 키로 서명하지 않습니다. 업로드 키를 안전한 위치에 만들고 `android/key.properties`를 로컬에 생성합니다(이 파일은 Git에서 제외됨).
+
+```properties
+storeFile=../upload-keystore.jks
+storePassword=YOUR_STORE_PASSWORD
+keyAlias=upload
+keyPassword=YOUR_KEY_PASSWORD
+```
+
+또는 CI에서는 `DOCNOTE_UPLOAD_STORE_FILE`, `DOCNOTE_UPLOAD_STORE_PASSWORD`, `DOCNOTE_UPLOAD_KEY_ALIAS`, `DOCNOTE_UPLOAD_KEY_PASSWORD` 환경 변수를 설정합니다. 키 파일과 비밀번호를 저장소에 커밋하지 마세요. 업로드 키를 분실하면 업데이트 배포가 복잡해질 수 있으므로 별도의 안전한 백업을 보관해야 합니다.
 
 ## 실행 및 검증
 
@@ -71,6 +91,7 @@ flutter analyze
 flutter test
 flutter run
 flutter build apk --debug
+# android/key.properties 또는 DOCNOTE_UPLOAD_*를 설정한 뒤 실행
 flutter build appbundle --release
 ```
 
@@ -91,4 +112,22 @@ Flutter 설치 디렉터리의 Git 소유권 검사로 CLI가 중단되는 환�
 
 ## 제한사항 및 다음 우선순위
 
-PDF 필기 내보내기는 구현되어 있지만 이미지 합성 방식이라 텍스트 검색·선택이 유지되지 않습니다. PDF 내부 텍스트 검색, 고급 팜 리젝션, 폴더 관리, 설정값 영속화, HWP 렌더러는 아직 미완성입니다. 실제 Android 기기와 외부 PDF 앱에서의 결과 확인이 필요합니다.
+PDF 필기 내보내기는 구현되어 있지만 이미지 합성 방식이라 텍스트 검색·선택이 유지되지 않습니다. HWP/HWPX 동작은 연동되어 있지만 광범위한 실문서 호환성 인증은 아직 필요합니다. 실제 Android 기기와 외부 PDF 앱에서의 결과 확인이 필요합니다. 현재는 자동 클라우드 동기화, 오디오 녹음, 필기 OCR/인식, 대규모 라이브러리 성능 인증이 제공되지 않습니다.
+## Portfolio Summary
+
+DocNote is an Android-first Flutter document and handwriting MVP. It combines PDF rendering, page-level vector annotations, autosave, local document storage, and annotated PDF export in a single editing flow.
+
+## Project Highlights
+
+- Feature-first Flutter structure for a document-heavy mobile product
+- Page-level vector strokes instead of flattened drawing images
+- Separate storage for original files, working data, annotations, thumbnails, and exports
+- Safe autosave flow using temporary files before replacement
+- Explicit MVP boundaries for HWP/HWPX rendering and PDF text preservation
+
+## Portfolio Walkthrough
+
+1. Create a note or import a PDF.
+2. Open the document and switch between viewing and handwriting modes.
+3. Add page-specific annotations and verify autosave after leaving the screen.
+4. Export an annotated PDF and share it through the Android share sheet.

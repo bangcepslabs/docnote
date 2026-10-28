@@ -12,6 +12,7 @@ import '../data/pdf_export_service.dart';
 import '../data/pdf_file_validator.dart';
 import '../../drawing/domain/stroke.dart';
 import '../../drawing/presentation/drawing_editor.dart';
+import '../../drawing/presentation/editor_document_tab.dart';
 
 enum PdfInteractionMode { view, draw }
 
@@ -124,10 +125,12 @@ class PdfEditorPage extends StatefulWidget {
       {required this.documentId,
       required this.title,
       required this.path,
+      this.showDocumentTab = true,
       super.key});
   final String documentId;
   final String title;
   final String path;
+  final bool showDocumentTab;
   @override
   State<PdfEditorPage> createState() => _PdfEditorPageState();
 }
@@ -137,6 +140,7 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
   Object? error;
   final editing = PdfEditingState();
   final pageKeys = <int, GlobalKey<_PdfPageWithInkState>>{};
+  final _pageViewportKey = GlobalKey();
   bool exporting = false;
   bool toolbarVisible = true;
   PdfExportProgress? progress;
@@ -328,6 +332,14 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
   Future<void> _export() async {
     final pdf = document;
     if (pdf == null || exporting) return;
+    final viewport = _pageViewportKey.currentContext?.findRenderObject();
+    if (viewport is! RenderBox ||
+        !viewport.hasSize ||
+        viewport.size.width <= 24) {
+      return;
+    }
+    // Match the ListView's 12dp horizontal page margins, including split view.
+    final annotationReferenceWidth = viewport.size.width - 24;
     setState(() {
       exporting = true;
       progress = null;
@@ -340,6 +352,7 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
           sourcePath: widget.path,
           documentId: widget.documentId,
           title: widget.title,
+          annotationReferenceWidth: annotationReferenceWidth,
           onProgress: (value) {
             if (mounted) setState(() => progress = value);
           });
@@ -387,42 +400,61 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
     if (pdf == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+    final tabletLayout = MediaQuery.sizeOf(context).width >= 760;
     return Scaffold(
         appBar: AppBar(
-          titleSpacing: 0,
-          title: Text(
-            widget.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -.2,
-                ),
-          ),
+          automaticallyImplyLeading: !tabletLayout || widget.showDocumentTab,
+          titleSpacing: tabletLayout && !widget.showDocumentTab ? 20 : 0,
+          title: tabletLayout && widget.showDocumentTab
+              ? EditorDocumentTab(
+                  title: widget.title,
+                  onClose: () => Navigator.of(context).maybePop(),
+                )
+              : tabletLayout && !widget.showDocumentTab
+                  ? Text(
+                      '${editing.selectedPageIndex + 1} / ${pdf.pagesCount}',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                    )
+                  : Text(
+                      widget.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -.2,
+                          ),
+                    ),
           actions: [
-            IconButton(
-                onPressed: _toggleBookmark,
-                tooltip: bookmarkedPages.contains(editing.selectedPageIndex + 1)
-                    ? '현재 페이지 북마크 제거'
-                    : '현재 페이지 북마크',
-                icon: Icon(
-                    bookmarkedPages.contains(editing.selectedPageIndex + 1)
-                        ? Icons.bookmark
-                        : Icons.bookmark_border)),
-            IconButton(
-                onPressed: _showBookmarks,
-                tooltip: '북마크 목록',
-                icon: const Icon(Icons.bookmarks_outlined)),
+            if (tabletLayout)
+              IconButton(
+                  onPressed: _toggleBookmark,
+                  tooltip:
+                      bookmarkedPages.contains(editing.selectedPageIndex + 1)
+                          ? '현재 페이지 북마크 제거'
+                          : '현재 페이지 북마크',
+                  icon: Icon(
+                      bookmarkedPages.contains(editing.selectedPageIndex + 1)
+                          ? Icons.bookmark
+                          : Icons.bookmark_border)),
+            if (tabletLayout)
+              IconButton(
+                  onPressed: _showBookmarks,
+                  tooltip: '북마크 목록',
+                  icon: const Icon(Icons.bookmarks_outlined)),
             IconButton(
                 onPressed: _showPageJumpDialog,
                 tooltip: '페이지 이동',
                 icon: const Icon(Icons.find_in_page_outlined)),
-            IconButton(
-                onPressed: () =>
-                    setState(() => toolbarVisible = !toolbarVisible),
-                tooltip: toolbarVisible ? '편집 도구 숨기기' : '편집 도구 열기',
-                icon: Icon(
-                    toolbarVisible ? Icons.keyboard_arrow_up : Icons.edit)),
+            if (tabletLayout)
+              IconButton(
+                  onPressed: () =>
+                      setState(() => toolbarVisible = !toolbarVisible),
+                  tooltip: toolbarVisible ? '편집 도구 숨기기' : '편집 도구 열기',
+                  icon: Icon(
+                      toolbarVisible ? Icons.keyboard_arrow_up : Icons.edit)),
             if (exporting)
               Padding(
                   padding: const EdgeInsets.all(16),
@@ -434,19 +466,46 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
                               value: progress == null
                                   ? null
                                   : progress!.current / progress!.total)))),
-            IconButton(
-                onPressed: exporting ? null : _export,
-                tooltip: 'PDF 내보내기',
-                icon: const Icon(Icons.picture_as_pdf)),
-            IconButton(
-                onPressed: () => SharePlus.instance.share(ShareParams(
-                    files: [XFile(widget.path)], text: widget.title)),
-                icon: const Icon(Icons.share)),
+            if (!exporting)
+              IconButton(
+                  onPressed: exporting ? null : _export,
+                  tooltip: 'PDF 내보내기',
+                  icon: const Icon(Icons.picture_as_pdf)),
+            if (tabletLayout)
+              IconButton(
+                  onPressed: () => SharePlus.instance.share(ShareParams(
+                      files: [XFile(widget.path)], text: widget.title)),
+                  icon: const Icon(Icons.share)),
             PopupMenuButton<String>(
                 onSelected: (value) {
                   if (value == 'clear') _confirmClearAll();
+                  if (value == 'bookmark') _toggleBookmark();
+                  if (value == 'bookmarks') _showBookmarks();
+                  if (value == 'toolbar') {
+                    setState(() => toolbarVisible = !toolbarVisible);
+                  }
+                  if (value == 'share') {
+                    SharePlus.instance.share(ShareParams(
+                        files: [XFile(widget.path)], text: widget.title));
+                  }
                 },
                 itemBuilder: (_) => [
+                      if (!tabletLayout) ...[
+                        PopupMenuItem(
+                            value: 'bookmark',
+                            child: Text(bookmarkedPages
+                                    .contains(editing.selectedPageIndex + 1)
+                                ? '현재 페이지 북마크 제거'
+                                : '현재 페이지 북마크')),
+                        const PopupMenuItem(
+                            value: 'bookmarks', child: Text('북마크 목록')),
+                        PopupMenuItem(
+                            value: 'toolbar',
+                            child: Text(
+                                toolbarVisible ? '편집 도구 숨기기' : '편집 도구 열기')),
+                        const PopupMenuItem(
+                            value: 'share', child: Text('원본 PDF 공유')),
+                      ],
                       const PopupMenuItem(
                           value: 'clear', child: Text('전체 문서 필기 모두 지우기'))
                     ])
@@ -454,47 +513,39 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
         ),
         body: Column(children: [
           if (toolbarVisible)
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                border: Border(
-                  bottom: BorderSide(
-                      color: Theme.of(context).colorScheme.outlineVariant),
-                ),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                child: PdfDrawingToolbar(
-                    state: editing,
-                    onView: () => _setMode(PdfInteractionMode.view),
-                    onPenTypeChanged: (type) => setState(() {
-                          editing.selectPenType(type);
-                          editing.mode = PdfInteractionMode.draw;
-                        }),
-                    onPenWidthChanged: (width) =>
-                        setState(() => editing.setWidth(width)),
-                    onPresetChanged: (preset) =>
-                        setState(() => editing.applyPreset(preset)),
-                    onShapeChanged: (shape) =>
-                        setState(() => editing.shapeKind = shape),
-                    onToolChanged: (tool) => setState(() {
-                          editing.selectTool(tool);
-                          editing.mode = PdfInteractionMode.draw;
-                        }),
-                    onColorChanged: (color) =>
-                        setState(() => editing.selectedColor = color),
-                    onWidthChanged: (width) =>
-                        setState(() => editing.setWidth(width)),
-                    onOpacityChanged: (opacity) =>
-                        setState(() => editing.setOpacity(opacity)),
-                    onUndo: _undo,
-                    onRedo: _redo,
-                    onClear: () => _confirmClearCurrent()),
-              ),
+            SizedBox(
+              width: double.infinity,
+              child: PdfDrawingToolbar(
+                  state: editing,
+                  onView: () => _setMode(PdfInteractionMode.view),
+                  onPenTypeChanged: (type) => setState(() {
+                        editing.selectPenType(type);
+                        editing.mode = PdfInteractionMode.draw;
+                      }),
+                  onPenWidthChanged: (width) =>
+                      setState(() => editing.setWidth(width)),
+                  onPresetChanged: (preset) =>
+                      setState(() => editing.applyPreset(preset)),
+                  onShapeChanged: (shape) =>
+                      setState(() => editing.shapeKind = shape),
+                  onToolChanged: (tool) => setState(() {
+                        editing.selectTool(tool);
+                        editing.mode = PdfInteractionMode.draw;
+                      }),
+                  onColorChanged: (color) =>
+                      setState(() => editing.selectedColor = color),
+                  onWidthChanged: (width) =>
+                      setState(() => editing.setWidth(width)),
+                  onOpacityChanged: (opacity) =>
+                      setState(() => editing.setOpacity(opacity)),
+                  onUndo: _undo,
+                  onRedo: _redo,
+                  onClear: () => _confirmClearCurrent()),
             ),
           Expanded(
             child: Stack(children: [
               ListView.builder(
+                  key: _pageViewportKey,
                   padding: const EdgeInsets.fromLTRB(12, 16, 12, 24),
                   physics: editing.mode == PdfInteractionMode.draw
                       ? const NeverScrollableScrollPhysics()
@@ -517,39 +568,40 @@ class _PdfEditorPageState extends State<PdfEditorPage> {
                         onPageActivated: () => _activatePage(index),
                         onStateChanged: () => _pageStateChanged(index));
                   }),
-              Positioned(
-                right: 16,
-                bottom: 16,
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .surface
-                          .withValues(alpha: .96),
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: .08),
-                          blurRadius: 4,
-                          offset: const Offset(0, 1),
+              if (!tabletLayout || widget.showDocumentTab)
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surface
+                            .withValues(alpha: .96),
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: .08),
+                            blurRadius: 4,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 9, vertical: 5),
+                        child: Text(
+                          '${editing.selectedPageIndex + 1} / ${pdf.pagesCount}',
+                          style:
+                              Theme.of(context).textTheme.labelMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                         ),
-                      ],
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 9, vertical: 5),
-                      child: Text(
-                        '${editing.selectedPageIndex + 1} / ${pdf.pagesCount}',
-                        style:
-                            Theme.of(context).textTheme.labelMedium?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                ),
                       ),
                     ),
                   ),
                 ),
-              ),
             ]),
           ),
         ]));
@@ -662,40 +714,27 @@ class PdfDrawingToolbar extends StatelessWidget {
         ),
       ]),
       _divider(context),
-      IconButton(
-        onPressed: onClear,
-        tooltip: '현재 페이지 필기 지우기',
-        style: IconButton.styleFrom(
-            fixedSize: const Size.square(32),
-            minimumSize: const Size(30, 30),
-            padding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            foregroundColor: scheme.error,
-            backgroundColor: scheme.errorContainer.withValues(alpha: .55)),
-        icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-      ),
       PopupMenuButton<String>(
-        tooltip: '더보기',
+        tooltip: '페이지 작업',
+        icon: const Icon(Icons.more_horiz, size: 20),
+        color: scheme.surface,
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         itemBuilder: (_) => const [
-          PopupMenuItem(value: 'text', child: Text('텍스트 도구')),
-          PopupMenuItem(value: 'image', child: Text('이미지')),
-          PopupMenuItem(value: 'sticker', child: Text('스티커')),
+          PopupMenuItem(value: 'clear', child: Text('현재 페이지 필기 지우기')),
         ],
-        onSelected: (_) {},
-        padding: EdgeInsets.zero,
-        child: const SizedBox.square(
-            dimension: 32,
-            child: Center(child: Icon(Icons.more_horiz, size: 20))),
+        onSelected: (value) {
+          if (value == 'clear') onClear();
+        },
       ),
     ];
     return Material(
-      color: Theme.of(context).colorScheme.surface,
+      color: scheme.surface,
       child: DecoratedBox(
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(
-              color: Theme.of(context).colorScheme.outlineVariant,
+              color: scheme.outlineVariant.withValues(alpha: .65),
             ),
           ),
         ),
@@ -703,10 +742,12 @@ class PdfDrawingToolbar extends StatelessWidget {
           top: false,
           bottom: false,
           child: SizedBox(
-            height: 60,
+            height: 52,
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: EdgeInsets.symmetric(
+                  horizontal:
+                      MediaQuery.sizeOf(context).width >= 760 ? 18 : 12),
               child: Row(children: children),
             ),
           ),
@@ -715,13 +756,24 @@ class PdfDrawingToolbar extends StatelessWidget {
     );
   }
 
-  Widget _section(BuildContext context, List<Widget> children) =>
-      Row(children: children);
+  Widget _section(BuildContext context, List<Widget> children) {
+    final gap = MediaQuery.sizeOf(context).width >= 760 ? 6.0 : 0.0;
+    return Row(
+      children: [
+        for (final child in children)
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: gap),
+            child: child,
+          ),
+      ],
+    );
+  }
 
   Widget _divider(BuildContext context) => Container(
       width: 1,
       height: 28,
-      margin: const EdgeInsets.symmetric(horizontal: 2),
+      margin: EdgeInsets.symmetric(
+          horizontal: MediaQuery.sizeOf(context).width >= 760 ? 10 : 2),
       color: Theme.of(context).colorScheme.outlineVariant);
 
   Widget _viewButton(BuildContext context) {
@@ -795,18 +847,22 @@ class PdfDrawingToolbar extends StatelessWidget {
   Widget _presets(BuildContext context) => Row(
         children: [
           for (final preset in state.presets)
-            Tooltip(
-              message: '펜 프리셋 · ${_presetName(preset)}',
-              child: IconButton(
-                onPressed: () => onPresetChanged(preset),
-                style: IconButton.styleFrom(
-                    fixedSize: const Size.square(32),
-                    minimumSize: const Size(30, 30),
-                    padding: EdgeInsets.zero,
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                color: preset.color,
-                icon: Icon(_presetIcon(preset), size: 19),
+            Padding(
+              padding: EdgeInsets.symmetric(
+                  horizontal: MediaQuery.sizeOf(context).width >= 760 ? 6 : 0),
+              child: Tooltip(
+                message: '펜 프리셋 · ${_presetName(preset)}',
+                child: IconButton(
+                  onPressed: () => onPresetChanged(preset),
+                  style: IconButton.styleFrom(
+                      fixedSize: const Size.square(32),
+                      minimumSize: const Size(30, 30),
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                  color: preset.color,
+                  icon: Icon(_presetIcon(preset), size: 19),
+                ),
               ),
             ),
         ],
@@ -1056,6 +1112,8 @@ class _PdfPageWithInkState extends State<PdfPageWithInk> {
   double ratio = .707;
   bool loading = true;
   bool movingSelection = false;
+  int _canvasRevision = 0;
+  int _staticRevision = 0;
   late final TransformationController transform;
   bool get canUndo => strokes.isNotEmpty;
   bool get canRedo => redoStrokes.isNotEmpty;
@@ -1081,6 +1139,7 @@ class _PdfPageWithInkState extends State<PdfPageWithInk> {
       image = rendered?.bytes;
       strokes.addAll(
           await store.load(widget.documentId, 'page_${widget.pageNumber}'));
+      _staticRevision++;
     } catch (e, stack) {
       developer.log(
           'page render failed id=${widget.documentId} page=${widget.pageNumber}: $e',
@@ -1110,6 +1169,7 @@ class _PdfPageWithInkState extends State<PdfPageWithInk> {
   }
 
   Future<void> _schedule() async {
+    _staticRevision++;
     saveTimer?.cancel();
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool('docnote.settings.autoSave') ?? true) {
@@ -1160,6 +1220,7 @@ class _PdfPageWithInkState extends State<PdfPageWithInk> {
         active
           ..clear()
           ..add(point);
+        _staticRevision++;
         setState(() {});
         return;
       }
@@ -1421,6 +1482,9 @@ class _PdfPageWithInkState extends State<PdfPageWithInk> {
 
   @override
   Widget build(BuildContext context) {
+    // This PDF adapter rebuilds on input; the shared canvas requires explicit
+    // revisions because both point and stroke collections are mutated in place.
+    final canvasRevision = ++_canvasRevision;
     if (loading) {
       return const Padding(
           padding: EdgeInsets.all(24),
@@ -1446,6 +1510,8 @@ class _PdfPageWithInkState extends State<PdfPageWithInk> {
                     child: IgnorePointer(
                         ignoring: !widget.editMode,
                         child: DrawingCanvas(
+                            revision: canvasRevision,
+                            staticRevision: _staticRevision,
                             strokes: strokes,
                             activePoints: active,
                             tool: _strokeTool,

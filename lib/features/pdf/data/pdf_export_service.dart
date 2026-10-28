@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -9,6 +8,7 @@ import 'package:pdfx/pdfx.dart' as pdfx;
 
 import '../../../core/storage/annotation_store.dart';
 import '../../drawing/domain/stroke.dart';
+import 'pdf_annotation_renderer.dart';
 
 class PdfExportProgress {
   const PdfExportProgress(this.current, this.total, this.message);
@@ -25,7 +25,12 @@ class PdfExportService {
       {required String sourcePath,
       required String documentId,
       required String title,
+      required double annotationReferenceWidth,
       void Function(PdfExportProgress progress)? onProgress}) async {
+    if (!annotationReferenceWidth.isFinite || annotationReferenceWidth <= 0) {
+      throw ArgumentError.value(
+          annotationReferenceWidth, 'annotationReferenceWidth');
+    }
     final source = await pdfx.PdfDocument.openFile(sourcePath);
     final exports = Directory('${File(sourcePath).parent.parent.path}/exports');
     await exports.create(recursive: true);
@@ -54,8 +59,8 @@ class PdfExportService {
             format: pdfx.PdfPageImageFormat.png,
             backgroundColor: '#FFFFFF');
         final strokes = await annotationStore.load(documentId, 'page_$number');
-        final composite = await _composite(
-            rendered?.bytes, width.toInt(), height.toInt(), strokes);
+        final composite = await _composite(rendered?.bytes, width.toInt(),
+            height.toInt(), strokes, annotationReferenceWidth);
         result.addPage(pw.Page(
             pageFormat: pw_pdf.PdfPageFormat(page.width, page.height),
             margin: pw.EdgeInsets.zero,
@@ -77,8 +82,8 @@ class PdfExportService {
     }
   }
 
-  Future<Uint8List> _composite(
-      Uint8List? pageBytes, int width, int height, List<Stroke> strokes) async {
+  Future<Uint8List> _composite(Uint8List? pageBytes, int width, int height,
+      List<Stroke> strokes, double referenceWidth) async {
     if (pageBytes == null) throw StateError('PDF 페이지 렌더링 결과가 없습니다.');
     final codec = await ui.instantiateImageCodec(pageBytes);
     final pageImage = (await codec.getNextFrame()).image;
@@ -90,105 +95,21 @@ class PdfExportService {
             0, 0, pageImage.width.toDouble(), pageImage.height.toDouble()),
         ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
         ui.Paint());
-    for (final stroke in strokes) {
-      if (stroke.points.isEmpty) continue;
-      final paint = ui.Paint()
-        ..color = stroke.color.withValues(alpha: _opacityFor(stroke))
-        ..strokeCap = ui.StrokeCap.round
-        ..strokeJoin = ui.StrokeJoin.round
-        ..style = ui.PaintingStyle.stroke;
-      if (stroke.tool == StrokeTool.shapeLine ||
-          stroke.tool == StrokeTool.shapeRectangle ||
-          stroke.tool == StrokeTool.shapeEllipse ||
-          stroke.tool == StrokeTool.shapeArrow ||
-          stroke.tool == StrokeTool.shapeTriangle) {
-        final start = ui.Offset(
-            stroke.points.first.x * width, stroke.points.first.y * height);
-        final end = ui.Offset(
-            stroke.points.last.x * width, stroke.points.last.y * height);
-        paint.strokeWidth = stroke.width * width / 1000;
-        final rect = ui.Rect.fromPoints(start, end);
-        switch (stroke.tool) {
-          case StrokeTool.shapeLine:
-            canvas.drawLine(start, end, paint);
-          case StrokeTool.shapeRectangle:
-            canvas.drawRect(rect, paint);
-          case StrokeTool.shapeEllipse:
-            canvas.drawOval(rect, paint);
-          case StrokeTool.shapeArrow:
-            canvas.drawLine(start, end, paint);
-            final direction = end - start;
-            final angle = math.atan2(direction.dy, direction.dx);
-            const wing = math.pi / 7;
-            final length = 12.0 + paint.strokeWidth * 1.5;
-            final left = end -
-                ui.Offset(math.cos(angle - wing) * length,
-                    math.sin(angle - wing) * length);
-            final right = end -
-                ui.Offset(math.cos(angle + wing) * length,
-                    math.sin(angle + wing) * length);
-            canvas.drawLine(end, left, paint);
-            canvas.drawLine(end, right, paint);
-          case StrokeTool.shapeTriangle:
-            final triangle = ui.Path()
-              ..moveTo(rect.center.dx, rect.top)
-              ..lineTo(rect.right, rect.bottom)
-              ..lineTo(rect.left, rect.bottom)
-              ..close();
-            canvas.drawPath(triangle, paint);
-          case StrokeTool.text:
-          case StrokeTool.image:
-          case StrokeTool.pen:
-          case StrokeTool.highlighter:
-          case StrokeTool.eraser:
-          case StrokeTool.lasso:
-            break;
-        }
-        continue;
+    paintPdfAnnotations(canvas, ui.Size(width.toDouble(), height.toDouble()),
+        referenceWidth, strokes);
+    final picture = recorder.endRecording();
+    try {
+      final image = await picture.toImage(width, height);
+      try {
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        return data!.buffer.asUint8List();
+      } finally {
+        image.dispose();
       }
-      for (var index = 0; index < stroke.points.length - 1; index++) {
-        final start = stroke.points[index];
-        final end = stroke.points[index + 1];
-        paint.strokeWidth = _widthFor(stroke, start, width.toDouble(), end);
-        canvas.drawLine(ui.Offset(start.x * width, start.y * height),
-            ui.Offset(end.x * width, end.y * height), paint);
-      }
-      if (stroke.points.length == 1) {
-        final point = stroke.points.first;
-        paint.strokeWidth = _widthFor(stroke, point, width.toDouble(), point);
-        canvas.drawCircle(ui.Offset(point.x * width, point.y * height),
-            paint.strokeWidth / 2, paint);
-      }
+    } finally {
+      picture.dispose();
+      pageImage.dispose();
+      codec.dispose();
     }
-    final image = await recorder.endRecording().toImage(width, height);
-    final data = await image.toByteData(format: ui.ImageByteFormat.png);
-    return data!.buffer.asUint8List();
   }
-
-  double _widthFor(
-      Stroke stroke, StrokePoint start, double width, StrokePoint end) {
-    double pointWidth(StrokePoint point) => stroke.tool == StrokeTool.pen
-        ? stroke.width *
-            _penWidthFactor(stroke.penType) *
-            (.65 + point.pressure * .7) *
-            width /
-            1000
-        : stroke.width * width / 1000;
-    return (pointWidth(start) + pointWidth(end)) / 2;
-  }
-
-  double _penWidthFactor(PenType type) => switch (type) {
-        PenType.ballpoint => 1,
-        PenType.fountain => 1.15,
-        PenType.pencil => .85,
-        PenType.marker => 1.25,
-      };
-
-  double _opacityFor(Stroke stroke) => stroke.tool == StrokeTool.pen
-      ? stroke.opacity *
-          switch (stroke.penType) {
-            PenType.pencil => .78,
-            _ => 1,
-          }
-      : stroke.opacity;
 }

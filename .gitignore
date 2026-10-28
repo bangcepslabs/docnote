@@ -2,6 +2,7 @@
 *.class
 *.log
 *.pyc
+__pycache__/
 *.swp
 .DS_Store
 .atom/
@@ -33,6 +34,7 @@ migrate_working_dir/
 /build/
 /android/build/
 /third_party/.flutter_rhwp-git-backup/
+/third_party/flutter_rhwp/example/android/build/
 /coverage/
 
 # Symbolication related
@@ -45,3 +47,4 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/key.properties

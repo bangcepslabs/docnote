@@ -12,13 +12,17 @@ import '../database/document_model.dart';
 /// Portable, local-first backup format. It deliberately contains no absolute
 /// paths so an archive can be restored on another device.
 class BackupService {
-  const BackupService();
+  const BackupService({this.documentsDirectoryProvider});
+  final Future<Directory> Function()? documentsDirectoryProvider;
+
+  Future<Directory> _documentsDirectory() =>
+      documentsDirectoryProvider?.call() ?? getApplicationDocumentsDirectory();
   static const _manifestName = 'manifest.json';
   static const _formatVersion = 1;
   static const maxRetainedBackups = 5;
 
   Future<File> createBackup(List<DocumentItem> documents) async {
-    final root = await getApplicationDocumentsDirectory();
+    final root = await _documentsDirectory();
     final fileHashes = <String, String>{};
     final prefs = await SharedPreferences.getInstance();
     final rotations = <String, int>{};
@@ -36,6 +40,7 @@ class BackupService {
       await for (final entity in documentsRoot.list(recursive: true)) {
         if (entity is! File) continue;
         final relative = _relativePath(documentsRoot.path, entity.path);
+        if (!_belongsToDocuments(relative, documents)) continue;
         fileHashes[relative] = await _hashFile(entity);
       }
     }
@@ -48,6 +53,7 @@ class BackupService {
           .toList(),
       'files': fileHashes,
       'pageRotations': rotations,
+      'preferences': _backupPreferences(prefs, documents),
     });
     final backupDir = Directory('${root.path}/backups');
     await backupDir.create(recursive: true);
@@ -60,6 +66,7 @@ class BackupService {
       await for (final entity in documentsRoot.list(recursive: true)) {
         if (entity is! File) continue;
         final relative = _relativePath(documentsRoot.path, entity.path);
+        if (!_belongsToDocuments(relative, documents)) continue;
         await encoder.addFile(entity, 'files/$relative');
       }
     }
@@ -91,7 +98,9 @@ class BackupService {
   }
 
   Future<List<DocumentItem>> restoreBackup(File backup,
-      {bool writeFiles = true, Set<String>? documentIds}) async {
+      {bool writeFiles = true,
+      Set<String>? documentIds,
+      bool restoreGlobalPreferences = false}) async {
     // Decode from a file stream instead of readAsBytes(). Large backups can
     // contain several PDFs/attachments and holding the complete archive (and
     // its decoded copy) in memory causes an avoidable OOM on mobile devices.
@@ -113,7 +122,7 @@ class BackupService {
       if (version != _formatVersion) {
         throw FormatException('지원하지 않는 백업 버전입니다: $version');
       }
-      final root = await getApplicationDocumentsDirectory();
+      final root = await _documentsDirectory();
       staging = writeFiles
           ? Directory(
               '${root.path}/.restore_${DateTime.now().microsecondsSinceEpoch}')
@@ -122,34 +131,40 @@ class BackupService {
       final expectedHashes = (manifest['files'] as Map?)?.map(
               (key, value) => MapEntry(key.toString(), value.toString())) ??
           const <String, String>{};
+      final seenFiles = <String>{};
       for (final entry in archive) {
         if (!entry.isFile || !entry.name.startsWith('files/')) continue;
         final relative = entry.name.substring('files/'.length);
-        if (!_isSafeRelativePath(relative)) continue;
-        if (documentIds != null &&
-            (relative.split('/').isEmpty ||
-                !documentIds.contains(relative.split('/').first))) {
-          continue;
+        if (!_isSafeRelativePath(relative)) {
+          throw const FormatException('백업에 안전하지 않은 파일 경로가 있습니다.');
+        }
+        final expected = expectedHashes[relative];
+        if (expected == null || !seenFiles.add(relative)) {
+          throw const FormatException('백업 파일 목록이 manifest와 일치하지 않습니다.');
         }
         final content = entry.content as List<int>;
-        final expected = expectedHashes[relative];
-        if (expected != null &&
-            sha256.convert(content).toString() != expected) {
+        if (sha256.convert(content).toString() != expected) {
           throw const FormatException('백업 파일 무결성 검증에 실패했습니다.');
+        }
+        if (documentIds != null &&
+            !documentIds.contains(relative.split('/').first)) {
+          continue;
         }
         if (!writeFiles) continue;
         final target = File('${staging!.path}/$relative');
         await target.parent.create(recursive: true);
         await target.writeAsBytes(content, flush: true);
       }
+      if (seenFiles.length != expectedHashes.length ||
+          !seenFiles.containsAll(expectedHashes.keys)) {
+        throw const FormatException('백업 파일이 누락되었거나 manifest와 일치하지 않습니다.');
+      }
       final rawDocuments = manifest['documents'];
       if (rawDocuments is! List) {
         throw const FormatException('백업 문서 목록이 없습니다.');
       }
       if (writeFiles) {
-        // All entries and hashes have been validated in the staging folder.
-        // Commit only after the manifest has also been validated, so a failed
-        // restore never leaves a partially written document tree behind.
+        // Validate archive entries before writing them into the document tree.
         final destination = Directory('${root.path}/documents');
         await destination.create(recursive: true);
         await for (final entity in staging!.list(recursive: true)) {
@@ -177,6 +192,12 @@ class BackupService {
           await prefs.setInt(
               'docnote.pageRotation.${parts.first}.${parts.last}', entry.value);
         }
+        await _restorePreferences(
+          manifest['preferences'],
+          prefs,
+          documentIds: documentIds,
+          restoreGlobalPreferences: restoreGlobalPreferences,
+        );
       }
       return rawDocuments
           .whereType<Map>()
@@ -191,6 +212,73 @@ class BackupService {
       final pending = staging;
       if (pending != null && !committed && await pending.exists()) {
         await pending.delete(recursive: true);
+      }
+    }
+  }
+
+  bool _belongsToDocuments(String relative, List<DocumentItem> documents) {
+    final firstSegment = relative.split('/').first;
+    return documents.any((document) => document.id == firstSegment);
+  }
+
+  Map<String, Object> _backupPreferences(
+      SharedPreferences prefs, List<DocumentItem> documents) {
+    final ids = documents.map((document) => document.id).toSet();
+    final result = <String, Object>{};
+    for (final key in prefs.getKeys()) {
+      final isGlobal = key.startsWith('docnote.settings.') ||
+          key.startsWith('docnote.editor.tool.') ||
+          key == 'docnote.folders';
+      final isDocumentScoped = ids.any((id) =>
+          key == 'docnote.pageBookmarks.$id' ||
+          key == 'docnote.pageSections.$id' ||
+          key == 'docnote.pdf.bookmarks.$id' ||
+          key.startsWith('docnote.pageRotation.$id.'));
+      if (!isGlobal && !isDocumentScoped) continue;
+      final value = prefs.get(key);
+      if (value == null) continue;
+      if (value is String || value is bool || value is int || value is double) {
+        result[key] = value;
+      } else if (value is List<String>) {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
+  Future<void> _restorePreferences(
+    Object? rawPreferences,
+    SharedPreferences prefs, {
+    required Set<String>? documentIds,
+    required bool restoreGlobalPreferences,
+  }) async {
+    if (rawPreferences is! Map) return;
+    for (final entry in rawPreferences.entries) {
+      final key = entry.key.toString();
+      final isGlobal = key.startsWith('docnote.settings.') ||
+          key.startsWith('docnote.editor.tool.') ||
+          key == 'docnote.folders';
+      final belongsToSelectedDocument = documentIds == null ||
+          documentIds.any((id) =>
+              key == 'docnote.pageBookmarks.$id' ||
+              key == 'docnote.pageSections.$id' ||
+              key == 'docnote.pdf.bookmarks.$id' ||
+              key.startsWith('docnote.pageRotation.$id.'));
+      if ((!isGlobal && !belongsToSelectedDocument) ||
+          (isGlobal && !restoreGlobalPreferences)) {
+        continue;
+      }
+      final value = entry.value;
+      if (value is String) {
+        await prefs.setString(key, value);
+      } else if (value is bool) {
+        await prefs.setBool(key, value);
+      } else if (value is int) {
+        await prefs.setInt(key, value);
+      } else if (value is double) {
+        await prefs.setDouble(key, value);
+      } else if (value is List && value.every((item) => item is String)) {
+        await prefs.setStringList(key, value.cast<String>());
       }
     }
   }

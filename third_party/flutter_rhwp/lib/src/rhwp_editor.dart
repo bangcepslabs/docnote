@@ -12185,6 +12185,7 @@ class _RhwpEditorState extends State<RhwpEditor> with TextInputClient {
     _textRefreshHeldForFocusedInput = false;
     _textInputUndoBatchOpen = false;
     widget.onChanged?.call(widget.document);
+    unawaited(_loadPageCount());
     unawaited(_refreshSearchMatchesAfterEdit());
   }
 
@@ -12270,6 +12271,7 @@ class _RhwpEditorState extends State<RhwpEditor> with TextInputClient {
         );
       } else {
         widget.onChanged?.call(widget.document);
+        unawaited(_loadPageCount());
         if (refreshSearchAfterEdit) {
           unawaited(_refreshSearchMatchesAfterEdit());
         }
@@ -12357,6 +12359,7 @@ class _RhwpEditorState extends State<RhwpEditor> with TextInputClient {
         _renderPages = null;
       });
       widget.onChanged?.call(widget.document);
+      unawaited(_loadPageCount());
       unawaited(_refreshSearchMatchesAfterEdit());
     } catch (error) {
       rollbackStack.add(targetSnapshot);
@@ -18106,6 +18109,8 @@ class _EditorToolbar extends StatefulWidget {
 class _EditorToolbarState extends State<_EditorToolbar> {
   var _activeTab = _EditorTab.insert;
   var _responsiveTabInitialized = false;
+  final _ribbonScrollController = ScrollController();
+  double _ribbonMaxExtent = -1;
   final _toolbarFontSizeController = TextEditingController(text: '10.0');
   var _searchKeySubmitHandled = false;
   var _replaceKeySubmitHandled = false;
@@ -18120,11 +18125,16 @@ class _EditorToolbarState extends State<_EditorToolbar> {
     }
     setState(() {
       _activeTab = tab;
+      _ribbonMaxExtent = -1;
     });
+    if (_ribbonScrollController.hasClients) {
+      _ribbonScrollController.jumpTo(0);
+    }
   }
 
   @override
   void dispose() {
+    _ribbonScrollController.dispose();
     _toolbarFontSizeController.dispose();
     super.dispose();
   }
@@ -18149,10 +18159,12 @@ class _EditorToolbarState extends State<_EditorToolbar> {
         widget.tableCellSelection != null &&
         _activeTab != _EditorTab.tools) {
       _activeTab = _EditorTab.table;
+      _ribbonMaxExtent = -1;
     } else if (oldWidget.objectSelection == null &&
         widget.objectSelection != null &&
         _activeTab != _EditorTab.tools) {
       _activeTab = _EditorTab.edit;
+      _ribbonMaxExtent = -1;
     }
   }
 
@@ -18195,12 +18207,24 @@ class _EditorToolbarState extends State<_EditorToolbar> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    if (!compact) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_ribbonScrollController.hasClients) return;
+        final extent = _ribbonScrollController.position.maxScrollExtent;
+        if ((_ribbonMaxExtent - extent).abs() > 1) {
+          setState(() => _ribbonMaxExtent = extent);
+        }
+      });
+    }
     return Material(
       color: colors.surface,
       child: DecoratedBox(
         decoration: BoxDecoration(
           border: Border(
-            bottom: BorderSide(color: colors.outlineVariant.withValues(alpha: .65)),
+            bottom: BorderSide(
+              color: colors.outlineVariant.withValues(alpha: .65),
+            ),
           ),
         ),
         child: Column(
@@ -18218,84 +18242,130 @@ class _EditorToolbarState extends State<_EditorToolbar> {
                     ),
                   ),
                 ),
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Row(
                   children: [
-                    for (final tab in _EditorTab.values)
-                      _EditorTabButton(
-                        tab: tab,
-                        selected: tab == _activeTab,
-                        onPressed: () {
-                          activateTab(tab);
-                        },
+                    Expanded(
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        children: [
+                          for (final tab in _EditorTab.values)
+                            _EditorTabButton(
+                              tab: tab,
+                              selected: tab == _activeTab,
+                              onPressed: () => activateTab(tab),
+                            ),
+                        ],
                       ),
+                    ),
+                    if (compact)
+                      IconButton.filledTonal(
+                        onPressed: () => _showMobileOptions(context),
+                        tooltip: '도구 옵션',
+                        icon: const Icon(Icons.tune, size: 18),
+                        style: IconButton.styleFrom(
+                          minimumSize: const Size(38, 38),
+                          maximumSize: const Size(38, 38),
+                          padding: EdgeInsets.zero,
+                          backgroundColor: colors.primaryContainer.withValues(
+                            alpha: .55,
+                          ),
+                          foregroundColor: colors.primary,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                        ),
+                      ),
+                    if (compact) const SizedBox(width: 8),
                   ],
                 ),
               ),
             ),
-            DecoratedBox(
-              decoration: BoxDecoration(color: colors.surfaceContainerLow),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  if (constraints.maxWidth < 600) {
-                    return _buildMobileOptionsBar(context);
-                  }
-                  return SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 7,
+            if (!compact)
+              DecoratedBox(
+                decoration: BoxDecoration(color: colors.surface),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: SingleChildScrollView(
+                        controller: _ribbonScrollController,
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: _ribbonChildren(),
+                        ),
+                      ),
                     ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: _ribbonChildren(),
+                    AnimatedBuilder(
+                      animation: _ribbonScrollController,
+                      builder: (context, _) {
+                        final position = _ribbonScrollController.hasClients
+                            ? _ribbonScrollController.position
+                            : null;
+                        final canGoBack =
+                            position != null && position.pixels > 1;
+                        final canGoForward =
+                            position != null &&
+                            position.pixels < position.maxScrollExtent - 1;
+                        if (_ribbonMaxExtent <= 1) {
+                          return const SizedBox.shrink();
+                        }
+                        return SizedBox(
+                          width: 96,
+                          child: Row(
+                            children: [
+                              if (canGoBack)
+                                IconButton(
+                                  tooltip: '이전 도구',
+                                  icon: const Icon(
+                                    Icons.chevron_left,
+                                    size: 20,
+                                  ),
+                                  onPressed: () => _scrollRibbon(false),
+                                )
+                              else
+                                const SizedBox(width: 48),
+                              if (canGoForward)
+                                IconButton(
+                                  tooltip: '다음 도구',
+                                  icon: const Icon(
+                                    Icons.chevron_right,
+                                    size: 20,
+                                  ),
+                                  onPressed: () => _scrollRibbon(true),
+                                )
+                              else
+                                const SizedBox(width: 48),
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                  );
-                },
+                  ],
+                ),
               ),
-            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildMobileOptionsBar(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: 58,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-        child: Row(
-          children: [
-            Icon(_tabIcon(_activeTab), size: 20, color: colors.primary),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _tabLabel(_activeTab),
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.2,
-                  ),
-              ),
-            ),
-            FilledButton.tonalIcon(
-              onPressed: () => _showMobileOptions(context),
-              icon: const Icon(Icons.tune, size: 17),
-              label: const Text('도구 옵션'),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(0, 38),
-                padding: const EdgeInsets.symmetric(horizontal: 13),
-                textStyle: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+  void _scrollRibbon(bool forward) {
+    if (!_ribbonScrollController.hasClients) return;
+    final position = _ribbonScrollController.position;
+    final delta = position.viewportDimension * .65;
+    final target = (position.pixels + (forward ? delta : -delta)).clamp(
+      0.0,
+      position.maxScrollExtent,
+    );
+    _ribbonScrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
     );
   }
 
@@ -18333,7 +18403,7 @@ class _EditorToolbarState extends State<_EditorToolbar> {
       showDragHandle: true,
       backgroundColor: colors.surface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
       clipBehavior: Clip.antiAlias,
       builder: (sheetContext) {
@@ -18354,11 +18424,11 @@ class _EditorToolbarState extends State<_EditorToolbar> {
                       const SizedBox(width: 9),
                       Expanded(
                         child: Text(
-                        '${_tabLabel(_activeTab)} 옵션',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(sheetContext).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w800),
+                          '${_tabLabel(_activeTab)} 옵션',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(sheetContext).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
                         ),
                       ),
                     ],
@@ -18367,16 +18437,20 @@ class _EditorToolbarState extends State<_EditorToolbar> {
                 Expanded(
                   child: ListView.separated(
                     controller: scrollController,
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
                     itemCount: _activeGroups().length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    separatorBuilder: (_, __) => Divider(
+                      height: 22,
+                      thickness: 0.5,
+                      color: colors.outlineVariant.withValues(alpha: 0.55),
+                    ),
                     itemBuilder: (_, index) => _activeGroups()[index],
                   ),
                 ),
               ],
             ),
-            ),
-          );
+          ),
+        );
       },
     );
   }
@@ -18681,7 +18755,7 @@ class _EditorToolbarState extends State<_EditorToolbar> {
                   : widget.onNextPage,
             ),
             _ToolbarIconButton(
-              tooltip: 'Go to page',
+              tooltip: '페이지 이동',
               buttonKey: const ValueKey('rhwp-editor-go-to-page'),
               icon: Icons.find_in_page_outlined,
               onPressed:
@@ -19262,61 +19336,61 @@ class _EditorToolbarState extends State<_EditorToolbar> {
         child: Row(
           children: [
             _ToolbarIconButton(
-              tooltip: 'Page setup',
+              tooltip: '용지 설정',
               buttonKey: const ValueKey('rhwp-editor-page-setup'),
               icon: Icons.description_outlined,
               onPressed: widget.busy ? null : widget.onPageSetup,
             ),
             _ToolbarIconButton(
-              tooltip: 'Page border/background',
+              tooltip: '쪽 테두리와 배경',
               buttonKey: const ValueKey('rhwp-editor-page-border-fill'),
               icon: Icons.border_outer,
               onPressed: widget.busy ? null : widget.onPageBorderFill,
             ),
             _ToolbarIconButton(
-              tooltip: 'Page hide',
+              tooltip: '쪽 요소 숨기기',
               buttonKey: const ValueKey('rhwp-editor-page-hide'),
               icon: Icons.visibility_off_outlined,
               onPressed: widget.busy ? null : widget.onPageHide,
             ),
             _ToolbarIconButton(
-              tooltip: 'Start new page number',
+              tooltip: '새 쪽 번호로 시작',
               buttonKey: const ValueKey('rhwp-editor-insert-new-number'),
               icon: Icons.format_list_numbered,
               onPressed: widget.busy ? null : widget.onInsertNewNumber,
             ),
             _ToolbarIconButton(
-              tooltip: 'Single column',
+              tooltip: '1단',
               buttonKey: const ValueKey('rhwp-editor-column-count-1'),
               icon: Icons.crop_square_outlined,
               onPressed: widget.busy ? null : () => widget.onSetColumnCount(1),
             ),
             _ToolbarIconButton(
-              tooltip: 'Two columns',
+              tooltip: '2단',
               buttonKey: const ValueKey('rhwp-editor-column-count-2'),
               icon: Icons.view_column_outlined,
               onPressed: widget.busy ? null : () => widget.onSetColumnCount(2),
             ),
             _ToolbarIconButton(
-              tooltip: 'Three columns',
+              tooltip: '3단',
               buttonKey: const ValueKey('rhwp-editor-column-count-3'),
               icon: Icons.view_week_outlined,
               onPressed: widget.busy ? null : () => widget.onSetColumnCount(3),
             ),
             _ToolbarIconButton(
-              tooltip: 'Column settings',
+              tooltip: '단 설정',
               buttonKey: const ValueKey('rhwp-editor-column-settings'),
               icon: Icons.tune,
               onPressed: widget.busy ? null : widget.onColumnSettings,
             ),
             _ToolbarIconButton(
-              tooltip: 'Section settings',
+              tooltip: '구역 설정',
               buttonKey: const ValueKey('rhwp-editor-section-settings'),
               icon: Icons.segment,
               onPressed: widget.busy ? null : widget.onSectionSettings,
             ),
             _ToolbarIconButton(
-              tooltip: 'Header/footer list',
+              tooltip: '머리말·꼬리말 목록',
               buttonKey: const ValueKey('rhwp-editor-header-footer-list'),
               icon: Icons.view_headline,
               onPressed: widget.busy ? null : widget.onHeaderFooterManager,
@@ -25087,18 +25161,18 @@ class _EditorTabButton extends StatelessWidget {
         backgroundColor: selected
             ? colors.primaryContainer
             : Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        minimumSize: const Size(0, 40),
-        textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        minimumSize: const Size(0, 36),
+        textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
         overlayColor: colors.primary.withValues(alpha: 0.10),
       ),
       onPressed: onPressed,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(_tabIcon(tab), size: 17),
-          const SizedBox(width: 5),
+          Icon(_tabIcon(tab), size: 16),
+          const SizedBox(width: 4),
           Text(_tabLabel(tab)),
         ],
       ),
@@ -25140,60 +25214,40 @@ class _RibbonGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
     final colors = Theme.of(context).colorScheme;
     final compactSheet = MediaQuery.sizeOf(context).width < 600;
     return Padding(
       padding: compactSheet
           ? EdgeInsets.zero
           : const EdgeInsets.symmetric(horizontal: 5),
-      child: DecoratedBox(
-        decoration: compactSheet
-            ? BoxDecoration(
-                color: colors.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: colors.outlineVariant),
-              )
-            : const BoxDecoration(),
-        child: Padding(
-          padding: compactSheet
-              ? const EdgeInsets.fromLTRB(14, 11, 14, 12)
-              : EdgeInsets.zero,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment:
-                compactSheet ? CrossAxisAlignment.start : CrossAxisAlignment.center,
-            children: [
-              if (compactSheet) ...[
-                Text(
-                  label,
-                  style: textTheme.labelLarge?.copyWith(
-                    color: colors.onSurfaceVariant,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 8),
-              ],
-              ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 44),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Align(alignment: Alignment.center, child: child),
+      child: Padding(
+        padding: compactSheet
+            ? const EdgeInsets.symmetric(vertical: 4)
+            : EdgeInsets.zero,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: compactSheet
+              ? CrossAxisAlignment.start
+              : CrossAxisAlignment.center,
+          children: [
+            if (compactSheet) ...[
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: colors.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-              if (!compactSheet) ...[
-                const SizedBox(height: 2),
-                Text(
-                  label,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.labelSmall?.copyWith(
-                    color: colors.onSurfaceVariant,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
+              const SizedBox(height: 8),
             ],
-          ),
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Align(alignment: Alignment.center, child: child),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -25601,14 +25655,15 @@ class _GoToPageDialogState extends State<_GoToPageDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Go to page'),
+      title: const Text('페이지 이동'),
+      scrollable: true,
       content: SizedBox(
         width: 280,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Page 1 - ${widget.pageCount}'),
+            Text('1 ~ ${widget.pageCount}페이지'),
             const SizedBox(height: 12),
             TextField(
               key: const ValueKey('rhwp-go-to-page-field'),
@@ -25617,7 +25672,7 @@ class _GoToPageDialogState extends State<_GoToPageDialog> {
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               decoration: InputDecoration(
-                labelText: 'Page',
+                labelText: '페이지 번호',
                 errorText: _errorText,
                 border: const OutlineInputBorder(),
               ),
@@ -25629,12 +25684,12 @@ class _GoToPageDialogState extends State<_GoToPageDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: const Text('취소'),
         ),
         FilledButton(
           key: const ValueKey('rhwp-go-to-page-apply'),
           onPressed: _submit,
-          child: const Text('Go'),
+          child: const Text('이동'),
         ),
       ],
     );
@@ -25644,7 +25699,7 @@ class _GoToPageDialogState extends State<_GoToPageDialog> {
     final value = int.tryParse(_pageController.text);
     if (value == null || value < 1 || value > widget.pageCount) {
       setState(() {
-        _errorText = 'Enter a page from 1 to ${widget.pageCount}.';
+        _errorText = '1 ~ ${widget.pageCount} 사이의 페이지를 입력해 주세요.';
       });
       return;
     }
@@ -25660,9 +25715,11 @@ class _ToolbarDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 1,
-      height: 32,
-      margin: const EdgeInsets.symmetric(horizontal: 8),
-      color: Theme.of(context).dividerColor,
+      height: 24,
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+      color: Theme.of(
+        context,
+      ).colorScheme.outlineVariant.withValues(alpha: .55),
     );
   }
 }
@@ -26270,9 +26327,14 @@ class _EditorStatusBar extends StatelessWidget {
                 flex: 4,
                 child: TextButton.icon(
                   onPressed: canOpenGoToPage ? onGoToPage : null,
+                  style: TextButton.styleFrom(
+                    foregroundColor: colors.onSurfaceVariant,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    textStyle: Theme.of(context).textTheme.labelLarge,
+                  ),
                   icon: const Icon(Icons.description_outlined, size: 18),
                   label: Text(
-                    _pageStatusText(),
+                    '${currentPage + 1} / ${pageCount ?? '—'}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -26289,19 +26351,19 @@ class _EditorStatusBar extends StatelessWidget {
                 ),
               ),
               _StatusBarIconButton(
-                tooltip: 'Fit page',
+                tooltip: '페이지에 맞춤',
                 buttonKey: const ValueKey('rhwp-editor-status-fit-page'),
                 icon: Icons.fit_screen,
                 onPressed: onFitPage,
               ),
               _StatusBarIconButton(
-                tooltip: 'Previous page',
+                tooltip: '이전 페이지',
                 buttonKey: const ValueKey('rhwp-editor-status-previous-page'),
                 icon: Icons.chevron_left,
                 onPressed: currentPage <= 0 ? null : onPreviousPage,
               ),
               _StatusBarIconButton(
-                tooltip: 'Next page',
+                tooltip: '다음 페이지',
                 buttonKey: const ValueKey('rhwp-editor-status-next-page'),
                 icon: Icons.chevron_right,
                 onPressed: pageCount != null && currentPage >= pageCount! - 1
@@ -26367,7 +26429,7 @@ class _EditorStatusBar extends StatelessWidget {
                 onPressed: currentPage <= 0 ? null : onPreviousPage,
               ),
               Tooltip(
-                message: canOpenGoToPage ? 'Go to page' : _pageStatusText(),
+              message: canOpenGoToPage ? '페이지 이동' : _pageStatusText(),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(4),
                   onTap: canOpenGoToPage ? onGoToPage : null,
@@ -26575,7 +26637,7 @@ class _ZoomPresetMenuButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return PopupMenuButton<double>(
       key: buttonKey,
-      tooltip: 'Zoom presets',
+              tooltip: '확대 비율',
       padding: EdgeInsets.zero,
       onSelected: onSelected,
       itemBuilder: (context) => [
@@ -26630,24 +26692,43 @@ class _NumberField extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     return SizedBox(
       width: 64,
-      child: TextField(
-        key: fieldKey,
-        controller: controller,
-        keyboardType: TextInputType.number,
-        decoration: InputDecoration(
-          isDense: true,
-          filled: true,
-          fillColor: colors.surfaceContainerHighest.withValues(alpha: 0.55),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide.none,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            maxLines: 1,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: colors.onSurfaceVariant,
+              fontSize: 10,
+            ),
           ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: colors.primary, width: 1.5),
+          const SizedBox(height: 2),
+          SizedBox(
+            height: 32,
+            child: TextField(
+              key: fieldKey,
+              controller: controller,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: colors.surfaceContainerLow,
+                contentPadding: const EdgeInsets.symmetric(vertical: 6),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(7),
+                  borderSide: BorderSide.none,
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(7),
+                  borderSide: BorderSide(color: colors.primary, width: 1),
+                ),
+              ),
+            ),
           ),
-          labelText: label,
-        ),
+        ],
       ),
     );
   }

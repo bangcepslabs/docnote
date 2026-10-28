@@ -15,6 +15,8 @@ class DrawingText {
     required this.order,
     required this.createdAt,
     this.bold = false,
+    this.italic = false,
+    this.underline = false,
     this.alignment = 'left',
   });
 
@@ -29,6 +31,8 @@ class DrawingText {
   final int order;
   final DateTime createdAt;
   final bool bold;
+  final bool italic;
+  final bool underline;
   final String alignment;
 
   DrawingText copyWith({
@@ -38,6 +42,8 @@ class DrawingText {
     Color? color,
     double? maxWidth,
     bool? bold,
+    bool? italic,
+    bool? underline,
     String? alignment,
   }) =>
       DrawingText(
@@ -52,6 +58,8 @@ class DrawingText {
         order: order,
         createdAt: createdAt,
         bold: bold ?? this.bold,
+        italic: italic ?? this.italic,
+        underline: underline ?? this.underline,
         alignment: alignment ?? this.alignment,
       );
 
@@ -67,6 +75,8 @@ class DrawingText {
         'order': order,
         'createdAt': createdAt.toIso8601String(),
         'bold': bold,
+        'italic': italic,
+        'underline': underline,
         'alignment': alignment,
       };
 
@@ -83,6 +93,8 @@ class DrawingText {
         order: (json['order'] as num).toInt(),
         createdAt: DateTime.parse(json['createdAt'] as String),
         bold: json['bold'] as bool? ?? false,
+        italic: json['italic'] as bool? ?? false,
+        underline: json['underline'] as bool? ?? false,
         alignment: json['alignment'] as String? ?? 'left',
       );
 }

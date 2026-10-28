@@ -1,26 +1,32 @@
 import 'dart:developer' as developer;
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_rhwp/flutter_rhwp.dart';
+import '../data/hwp_working_store.dart';
+import 'hwp_exit_guard.dart';
 
 class HwpEditorPage extends StatefulWidget {
   const HwpEditorPage({
     required this.documentId,
     required this.title,
     required this.path,
+    this.showDocumentTab = true,
+    this.onPageCountResolved,
     super.key,
   });
   final String documentId;
   final String title;
   final String path;
+  final bool showDocumentTab;
+  final Future<void> Function(int)? onPageCountResolved;
 
   @override
   State<HwpEditorPage> createState() => _HwpEditorPageState();
 }
 
 class _HwpEditorPageState extends State<HwpEditorPage> {
+  final _editorController = RhwpEditorController();
   dynamic document;
   Object? error;
   bool loading = true;
@@ -36,7 +42,7 @@ class _HwpEditorPageState extends State<HwpEditorPage> {
 
   Future<void> _open() async {
     try {
-      final file = File(widget.path);
+      final file = await HwpWorkingStore(widget.path).fileToOpen();
       if (!await file.exists()) {
         throw StateError('HWP 파일을 찾을 수 없습니다.');
       }
@@ -61,7 +67,20 @@ class _HwpEditorPageState extends State<HwpEditorPage> {
       final baseName = originalName.replaceFirst(RegExp(r'\.[^.]+$'), '');
       final parserName = '$baseName.${isHwpx ? 'hwpx' : 'hwp'}';
       detectedFormat = isHwpx ? 'HWPX' : 'HWP';
-      document = await Rhwp.open(bytes, fileName: parserName);
+      final opened = await Rhwp.open(bytes, fileName: parserName);
+      if (!mounted) {
+        await opened.close();
+        return;
+      }
+      document = opened;
+      try {
+        final count = await opened.pageCount;
+        if (mounted && count > 0) await widget.onPageCountResolved?.call(count);
+      } catch (e, stack) {
+        // Metadata lookup must not turn a readable document into an error page.
+        developer.log('HWP page count unavailable',
+            name: 'docnote.hwp', error: e, stackTrace: stack);
+      }
     } catch (e, stack) {
       developer.log('HWP open failed id=${widget.documentId}: $e',
           name: 'docnote.hwp', error: e, stackTrace: stack);
@@ -70,25 +89,28 @@ class _HwpEditorPageState extends State<HwpEditorPage> {
     if (mounted) setState(() => loading = false);
   }
 
-  Future<void> _save() async {
-    if (document == null || saving) return;
+  Future<bool> _save() async {
+    if (document == null || saving) return false;
+    FocusManager.instance.primaryFocus?.unfocus();
     setState(() => saving = true);
     try {
       final exported = await document.exportDocument(RhwpExportFormat.hwp,
           sourceFileName: widget.title);
       final bytes = exported.bytes;
       if (bytes is Uint8List) {
-        await File(widget.path).writeAsBytes(bytes, flush: true);
+        await HwpWorkingStore(widget.path).save(bytes);
       } else if (bytes is List<int>) {
-        await File(widget.path).writeAsBytes(bytes, flush: true);
+        await HwpWorkingStore(widget.path).save(bytes);
       } else {
         throw StateError('HWP 저장 결과가 올바르지 않습니다.');
       }
       dirty = false;
+      if (mounted) _editorController.markClean();
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('HWP 문서를 저장했습니다.')));
       }
+      return true;
     } catch (e, stack) {
       developer.log('HWP save failed id=${widget.documentId}: $e',
           name: 'docnote.hwp', error: e, stackTrace: stack);
@@ -96,6 +118,7 @@ class _HwpEditorPageState extends State<HwpEditorPage> {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('HWP 문서 저장에 실패했습니다.')));
       }
+      return false;
     } finally {
       if (mounted) setState(() => saving = false);
     }
@@ -103,92 +126,112 @@ class _HwpEditorPageState extends State<HwpEditorPage> {
 
   @override
   void dispose() {
+    _editorController.dispose();
     document?.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final wide = MediaQuery.sizeOf(context).width >= 600;
     if (loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (error != null || document == null) {
       return Scaffold(
-          appBar: AppBar(title: Text(widget.title)),
+          appBar: AppBar(
+              automaticallyImplyLeading: widget.showDocumentTab,
+              title: Text(widget.showDocumentTab ? widget.title : 'HWP 문서')),
           body: Center(
               child: Padding(
                   padding: const EdgeInsets.all(24),
                   child: Text(_friendlyError(error),
                       textAlign: TextAlign.center))));
     }
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 0,
-        title: Text(
-          widget.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-                letterSpacing: -.2,
-              ),
-        ),
-        actions: [
-          if (dirty)
-            const Padding(
-              padding: EdgeInsets.only(right: 4),
-              child: Center(
-                  child: Icon(Icons.circle,
-                      size: 7, color: Color(0xff5c86aa))),
+    return HwpExitGuard(
+      dirty: dirty,
+      saving: saving,
+      onSave: _save,
+      child: Scaffold(
+        appBar: AppBar(
+          toolbarHeight: wide ? 48 : null,
+          automaticallyImplyLeading: widget.showDocumentTab,
+          titleSpacing: widget.showDocumentTab ? 0 : 20,
+          title: Text(
+            widget.showDocumentTab ? widget.title : (detectedFormat ?? 'HWP'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: (wide
+                    ? Theme.of(context).textTheme.labelLarge
+                    : Theme.of(context).textTheme.titleMedium)
+                ?.copyWith(
+              color:
+                  wide ? Theme.of(context).colorScheme.onSurfaceVariant : null,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -.2,
             ),
-          IconButton(
-              onPressed: saving ? null : _save,
-              tooltip: 'HWP 저장',
-              icon: saving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.save_outlined, size: 22)),
-          PopupMenuButton<String>(
-            tooltip: '더보기',
-            icon: const Icon(Icons.more_horiz),
-            onSelected: (value) {
-              if (value == 'info') {
-                showDialog<void>(
-                  context: context,
-                  builder: (_) => AlertDialog(
-                    title: const Text('문서 정보'),
-                    content: Text(
-                      '형식: ${detectedFormat ?? 'HWP'}\n경로: ${widget.path}',
-                      maxLines: 4,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('확인'),
-                      ),
-                    ],
-                  ),
-                );
-              }
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'info', child: Text('문서 정보')),
-            ],
           ),
-          const SizedBox(width: 2),
-        ],
-      ),
-      body: ColoredBox(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        child: RhwpNativeEditor(
-          document: document,
-          convertToEditableOnLoad: true,
-          onDirtyChanged: (value) {
-            if (mounted) setState(() => dirty = value);
-          },
+          actions: [
+            if (dirty)
+              const Padding(
+                padding: EdgeInsets.only(right: 4),
+                child: Center(
+                    child:
+                        Icon(Icons.circle, size: 7, color: Color(0xff5c86aa))),
+              ),
+            IconButton(
+                onPressed: saving ? null : _save,
+                tooltip: 'HWP 저장',
+                icon: saving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.save_outlined, size: 22)),
+            PopupMenuButton<String>(
+              tooltip: '더보기',
+              icon: const Icon(Icons.more_horiz),
+              onSelected: (value) {
+                if (value == 'info') {
+                  showDialog<void>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('문서 정보'),
+                      content: Text(
+                        '형식: ${detectedFormat ?? 'HWP'}\n경로: ${widget.path}',
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('확인'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'info', child: Text('문서 정보')),
+              ],
+            ),
+            const SizedBox(width: 2),
+          ],
+        ),
+        body: ColoredBox(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          child: AbsorbPointer(
+            absorbing: saving,
+            child: RhwpNativeEditor(
+              controller: _editorController,
+              document: document,
+              convertToEditableOnLoad: true,
+              onDirtyChanged: (value) {
+                if (mounted) setState(() => dirty = value);
+              },
+            ),
+          ),
         ),
       ),
     );

@@ -1,8 +1,31 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+val signingProperties = Properties().apply {
+    val propertiesFile = rootProject.file("key.properties")
+    if (propertiesFile.exists()) {
+        propertiesFile.inputStream().use { load(it) }
+    }
+}
+fun signingValue(property: String, environment: String): String? =
+    System.getenv(environment)?.takeIf { it.isNotBlank() }
+        ?: signingProperties.getProperty(property)?.takeIf { it.isNotBlank() }
+
+val releaseStoreFile = signingValue("storeFile", "DOCNOTE_UPLOAD_STORE_FILE")
+val releaseStorePassword = signingValue("storePassword", "DOCNOTE_UPLOAD_STORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "DOCNOTE_UPLOAD_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "DOCNOTE_UPLOAD_KEY_PASSWORD")
+val releaseSigningConfigured = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { it != null }
 
 android {
     namespace = "com.bangceps.docnote"
@@ -12,6 +35,17 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    if (releaseSigningConfigured) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(requireNotNull(releaseStoreFile))
+                storePassword = requireNotNull(releaseStorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
+            }
+        }
     }
 
     defaultConfig {
@@ -28,9 +62,24 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (releaseSigningConfigured) {
+                signingConfigs.getByName("release")
+            } else {
+                null
+            }
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == "assembleRelease" || name == "bundleRelease") {
+        doFirst {
+            if (!releaseSigningConfigured) {
+                throw GradleException(
+                    "Release signing is not configured. Add android/key.properties " +
+                        "or DOCNOTE_UPLOAD_* environment variables; debug-key signing is disabled."
+                )
+            }
         }
     }
 }

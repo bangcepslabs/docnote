@@ -5,6 +5,10 @@ abstract final class DocNoteTheme {
   static const accent = Color(0xff2f6eaa);
   static const page = Color(0xfff7f8fa);
   static const ink = Color(0xff27303d);
+  // File identity sits on paper previews, including in dark mode. These tones
+  // retain readable white labels instead of inheriting a pale error color.
+  static const pdfLabel = Color(0xffb63d45);
+  static const hwpLabel = Color(0xff367449);
   // Keep the Android surfaces on a small, predictable radius scale.
   static const radiusSm = 8.0;
   static const radiusMd = 12.0;
@@ -17,10 +21,26 @@ abstract final class DocNoteTheme {
   static const space5 = 24.0;
 
   static ThemeData light() {
-    final scheme = ColorScheme.fromSeed(
+    final seeded = ColorScheme.fromSeed(
       seedColor: accent,
       brightness: Brightness.light,
       surface: Colors.white,
+    );
+    final scheme = seeded.copyWith(
+      surface: Colors.white,
+      surfaceContainerLowest: page,
+      surfaceContainerLow: const Color(0xfff3f5f8),
+      surfaceContainer: const Color(0xffeef1f5),
+      surfaceContainerHigh: const Color(0xffe8edf3),
+      surfaceContainerHighest: const Color(0xffe1e7ef),
+      outline: const Color(0xffd6dee8),
+      outlineVariant: const Color(0xffe6ebf1),
+      onSurface: const Color(0xff1f2937),
+      onSurfaceVariant: const Color(0xff687586),
+      primary: accent,
+      onPrimary: Colors.white,
+      primaryContainer: const Color(0xffdceaff),
+      onPrimaryContainer: const Color(0xff1c4f8f),
     );
     return _base(scheme, page);
   }
@@ -45,6 +65,7 @@ abstract final class DocNoteTheme {
       onSurface: const Color(0xfff3f4f6),
       onSurfaceVariant: const Color(0xffb3b8c0),
       primary: accent,
+      onPrimary: Colors.white,
       primaryContainer: const Color(0xff294b68),
       onPrimaryContainer: const Color(0xffd7eaff),
     );
@@ -58,14 +79,14 @@ abstract final class DocNoteTheme {
       scaffoldBackgroundColor: background,
       canvasColor: background,
       textTheme: const TextTheme(
-        headlineSmall: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
-        titleLarge: TextStyle(fontSize: 21, fontWeight: FontWeight.w700),
-        titleMedium: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-        titleSmall: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+        headlineSmall: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+        titleLarge: TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
+        titleMedium: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        titleSmall: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         bodyLarge: TextStyle(fontSize: 16, height: 1.45),
         bodyMedium: TextStyle(fontSize: 14, height: 1.4),
         bodySmall: TextStyle(fontSize: 12, height: 1.35),
-        labelLarge: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+        labelLarge: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         labelMedium: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
         labelSmall: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
       ),
@@ -79,7 +100,7 @@ abstract final class DocNoteTheme {
         titleTextStyle: TextStyle(
           color: scheme.onSurface,
           fontSize: 22,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
         ),
       ),
       dialogTheme: DialogThemeData(
@@ -91,7 +112,7 @@ abstract final class DocNoteTheme {
         titleTextStyle: TextStyle(
           color: scheme.onSurface,
           fontSize: 18,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
         ),
       ),
       bottomSheetTheme: BottomSheetThemeData(
@@ -141,7 +162,83 @@ abstract final class DocNoteTheme {
         height: 76,
         indicatorColor: scheme.primaryContainer,
         labelTextStyle: WidgetStatePropertyAll(
-          TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+          TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+        ),
+      ),
+      dividerTheme: DividerThemeData(
+        color: scheme.outlineVariant,
+        thickness: 1,
+        space: 1,
+      ),
+      iconButtonTheme: IconButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: const WidgetStatePropertyAll(Size(40, 40)),
+          foregroundColor: WidgetStatePropertyAll(scheme.onSurfaceVariant),
+          overlayColor: WidgetStatePropertyAll(
+            scheme.primary.withValues(alpha: .08),
+          ),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(radiusSm)),
+          ),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: scheme.brightness == Brightness.dark
+              ? scheme.onPrimaryContainer
+              : scheme.primary,
+          minimumSize: const Size(40, 40),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(radiusSm),
+          ),
+          textStyle: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          minimumSize: const Size(48, 44),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+          elevation: 0,
+          backgroundColor: scheme.primary,
+          foregroundColor: scheme.onPrimary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(radiusMd),
+          ),
+          textStyle: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size(48, 44),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+          foregroundColor: scheme.onSurface,
+          side: BorderSide(color: scheme.outlineVariant),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(radiusMd),
+          ),
+          textStyle: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: scheme.surfaceContainerLowest,
+        isDense: true,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        hintStyle: TextStyle(color: scheme.onSurfaceVariant),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(radiusMd),
+          borderSide: BorderSide(color: scheme.outlineVariant),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(radiusMd),
+          borderSide: BorderSide(color: scheme.outlineVariant),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(radiusMd),
+          borderSide: BorderSide(color: scheme.primary, width: 1.2),
         ),
       ),
       cardTheme: CardThemeData(

@@ -18,6 +18,8 @@ void main() {
       order: 0,
       createdAt: DateTime(2024),
       bold: true,
+      italic: true,
+      underline: true,
       alignment: 'center',
     );
 
@@ -27,6 +29,8 @@ void main() {
     expect(restored.fontSize, original.fontSize);
     expect(restored.color, original.color);
     expect(restored.bold, isTrue);
+    expect(restored.italic, isTrue);
+    expect(restored.underline, isTrue);
     expect(restored.alignment, 'center');
   });
 
@@ -47,6 +51,8 @@ void main() {
     final restored = DrawingText.fromJson(legacy);
 
     expect(restored.bold, isFalse);
+    expect(restored.italic, isFalse);
+    expect(restored.underline, isFalse);
     expect(restored.alignment, 'left');
   });
 }

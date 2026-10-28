@@ -10,6 +10,20 @@ bool _readBool(dynamic value, {bool fallback = false}) {
   return fallback;
 }
 
+DocumentType _readDocumentType(dynamic value) {
+  final raw = value?.toString().trim().toLowerCase();
+  return switch (raw) {
+    'textnote' || 'note' || 'memo' => DocumentType.textNote,
+    'drawingnote' || 'drawing' || 'handwriting' => DocumentType.drawingNote,
+    'pdf' => DocumentType.pdf,
+    'hwp' => DocumentType.hwp,
+    'hwpx' => DocumentType.hwpx,
+    // A metadata value must never make the complete local library unreadable.
+    // Text-note is the safest editable fallback for legacy/unknown records.
+    _ => DocumentType.textNote,
+  };
+}
+
 class DocumentItem {
   DocumentItem(
       {required this.id,
@@ -51,13 +65,15 @@ class DocumentItem {
   DateTime created;
   DateTime modified;
   DateTime? lastOpened;
+
   /// App-created notebooks keep their editable page data in DocNote. Imported
   /// files deliberately remain a separate kind of library item.
   bool get isNotebook =>
       type == DocumentType.textNote || type == DocumentType.drawingNote;
   bool get isImportedDocument => !isNotebook;
-  String get pageStyle =>
-      (templateId == null || templateId!.trim().isEmpty) ? 'blank' : templateId!;
+  String get pageStyle => (templateId == null || templateId!.trim().isEmpty)
+      ? 'blank'
+      : templateId!;
   bool get isEmpty =>
       title.trim().isEmpty &&
       body.trim().isEmpty &&
@@ -86,7 +102,7 @@ class DocumentItem {
   factory DocumentItem.fromJson(Map<String, dynamic> json) => DocumentItem(
       id: json['id'] as String,
       title: json['title'] as String? ?? '',
-      type: DocumentType.values.byName(json['type'] as String),
+      type: _readDocumentType(json['type']),
       body: json['body'] as String? ?? '',
       favorite: _readBool(json['favorite']),
       sourcePath: json['sourcePath'] as String?,
@@ -105,7 +121,11 @@ class DocumentItem {
 }
 
 class FolderItem {
-  FolderItem({required this.id, required this.name, DateTime? created, DateTime? modified})
+  FolderItem(
+      {required this.id,
+      required this.name,
+      DateTime? created,
+      DateTime? modified})
       : created = created ?? DateTime.now(),
         modified = modified ?? DateTime.now();
   final String id;
@@ -134,9 +154,19 @@ class FolderRepository {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(key);
       if (raw == null) return [];
-      return (jsonDecode(raw) as List)
-          .map((item) => FolderItem.fromJson(item as Map<String, dynamic>))
-          .toList();
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return [];
+      final folders = <FolderItem>[];
+      for (final item in decoded) {
+        if (item is! Map) continue;
+        try {
+          final folder = FolderItem.fromJson(Map<String, dynamic>.from(item));
+          if (folder.id.trim().isNotEmpty) folders.add(folder);
+        } catch (_) {
+          // One damaged folder record must not hide the rest of the library.
+        }
+      }
+      return folders;
     } catch (_) {
       return [];
     }
@@ -144,7 +174,8 @@ class FolderRepository {
 
   Future<void> save(List<FolderItem> folders) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(key, jsonEncode(folders.map((folder) => folder.toJson()).toList()));
+    await prefs.setString(
+        key, jsonEncode(folders.map((folder) => folder.toJson()).toList()));
   }
 }
 
@@ -155,10 +186,22 @@ class DocumentRepository {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(key);
       if (raw == null) return [];
-      return (jsonDecode(raw) as List)
-          .map((item) => DocumentItem.fromJson(item as Map<String, dynamic>))
-          .toList()
-        ..sort((a, b) => b.modified.compareTo(a.modified));
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return [];
+      final documents = <DocumentItem>[];
+      for (final item in decoded) {
+        if (item is! Map) continue;
+        try {
+          final document =
+              DocumentItem.fromJson(Map<String, dynamic>.from(item));
+          if (document.id.trim().isNotEmpty) documents.add(document);
+        } catch (_) {
+          // Keep valid local documents available even when one record is
+          // damaged or written by an incompatible older build.
+        }
+      }
+      documents.sort((a, b) => b.modified.compareTo(a.modified));
+      return documents;
     } catch (_) {
       return [];
     }

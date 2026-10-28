@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -8,9 +9,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:phosphoricons_flutter/phosphoricons_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/storage/annotation_store.dart';
+import 'editor_document_tab.dart';
 import '../domain/drawing_shape.dart';
 import '../domain/drawing_text.dart';
 import '../domain/drawing_image.dart';
@@ -34,6 +37,7 @@ class DrawingEditorPage extends StatefulWidget {
       required this.title,
       this.initialPageCount = 1,
       this.pageTemplateId = 'blank',
+      this.showDocumentTab = true,
       this.onPageCountChanged,
       this.onTitleChanged,
       super.key});
@@ -41,6 +45,7 @@ class DrawingEditorPage extends StatefulWidget {
   final String title;
   final int initialPageCount;
   final String pageTemplateId;
+  final bool showDocumentTab;
   final ValueChanged<int>? onPageCountChanged;
   final Future<void> Function(String title)? onTitleChanged;
   @override
@@ -124,23 +129,47 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   final textFocus = FocusNode();
   double textFontSize = 18;
   bool textBold = false;
+  bool textItalic = false;
+  bool textUnderline = false;
   String textAlignment = 'left';
   _PageSnapshot? selectionMoveBaseline;
   _PageSnapshot? eraserBaseline;
   StrokePoint? selectionMoveOrigin;
   Rect? selectionMoveBounds;
+  _PageSnapshot? selectionClipboard;
   bool movingSelection = false;
+  bool selectionTapPending = false;
   bool resizingSelection = false;
   _ResizeHandle? activeResizeHandle;
   bool rotatingSelection = false;
   double rotationStartAngle = 0;
   DrawingShapeType shapeType = DrawingShapeType.line;
   DrawingShape? activeShape;
+  DrawingShape? _heldShapePreview;
+  List<StrokePoint>? _heldShapeSource;
+  Timer? _shapeHoldTimer;
   Timer? saveTimer;
+  Timer? toolSettingsTimer;
   StrokeTool tool = StrokeTool.pen;
   Color penColor = Colors.black;
+  List<Color> penColorPresets = const [
+    Colors.black,
+    Color(0xff3f6f9f),
+    Color(0xffc95656),
+  ];
+  PenType penType = PenType.ballpoint;
   Color highlighterColor = const Color(0xffd58b3a);
+  List<Color> highlighterColorPresets = const [
+    Color(0xffd58b3a),
+    Color(0xff70a86b),
+    Color(0xffd8758a),
+  ];
   double penWidth = 3;
+  double _activePressure = 1;
+
+  /// 0 preserves the original input path. Higher values gently pull each
+  /// accepted point toward the previous point to reduce hand jitter.
+  double penStabilization = 0;
   double highlighterWidth = 8;
   double highlighterOpacity = .35;
   double eraserWidth = 10;
@@ -155,6 +184,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   late String title = widget.title;
   int pageIndex = 1;
   int pageRotation = 0;
+  final bookmarkedPages = <int>{};
+  final pageSections = <int, String>{};
   String get pageId => 'page_$pageIndex';
   double get activeWidth => switch (tool) {
         StrokeTool.eraser => eraserWidth,
@@ -164,6 +195,138 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       };
   Color get activeColor =>
       tool == StrokeTool.highlighter ? highlighterColor : penColor;
+
+  static const _toolPrefsPrefix = 'docnote.editor.tool.';
+
+  void _loadToolSettings(SharedPreferences prefs) {
+    penWidth = prefs.getDouble('${_toolPrefsPrefix}penWidth') ?? penWidth;
+    penStabilization =
+        prefs.getDouble('${_toolPrefsPrefix}penStabilization') ?? 0;
+    highlighterWidth = prefs.getDouble('${_toolPrefsPrefix}highlighterWidth') ??
+        highlighterWidth;
+    highlighterOpacity =
+        prefs.getDouble('${_toolPrefsPrefix}highlighterOpacity') ??
+            highlighterOpacity;
+    eraserWidth =
+        prefs.getDouble('${_toolPrefsPrefix}eraserWidth') ?? eraserWidth;
+    textFontSize =
+        prefs.getDouble('${_toolPrefsPrefix}textFontSize') ?? textFontSize;
+    penColor = Color(
+        prefs.getInt('${_toolPrefsPrefix}penColor') ?? penColor.toARGB32());
+    final penTypeIndex = prefs.getInt('${_toolPrefsPrefix}penType');
+    if (penTypeIndex != null &&
+        penTypeIndex >= 0 &&
+        penTypeIndex < PenType.values.length) {
+      penType = PenType.values[penTypeIndex];
+    }
+    highlighterColor = Color(
+        prefs.getInt('${_toolPrefsPrefix}highlighterColor') ??
+            highlighterColor.toARGB32());
+    penColorPresets = _readColorPresets(
+      prefs.getStringList('${_toolPrefsPrefix}penColorPresets'),
+      penColorPresets,
+    );
+    highlighterColorPresets = _readColorPresets(
+      prefs.getStringList('${_toolPrefsPrefix}highlighterColorPresets'),
+      highlighterColorPresets,
+    );
+    eraserMode =
+        (prefs.getBool('${_toolPrefsPrefix}eraserWholeStroke') ?? false)
+            ? EraserMode.wholeStroke
+            : EraserMode.partial;
+    lassoMode = (prefs.getBool('${_toolPrefsPrefix}lassoRectangle') ?? false)
+        ? LassoMode.rectangle
+        : LassoMode.freeform;
+    lassoIncludeStrokes =
+        prefs.getBool('${_toolPrefsPrefix}lassoIncludeStrokes') ??
+            lassoIncludeStrokes;
+    lassoIncludeTexts = prefs.getBool('${_toolPrefsPrefix}lassoIncludeTexts') ??
+        lassoIncludeTexts;
+    lassoIncludeImages =
+        prefs.getBool('${_toolPrefsPrefix}lassoIncludeImages') ??
+            lassoIncludeImages;
+    textBold = prefs.getBool('${_toolPrefsPrefix}textBold') ?? textBold;
+    textItalic = prefs.getBool('${_toolPrefsPrefix}textItalic') ?? textItalic;
+    textUnderline =
+        prefs.getBool('${_toolPrefsPrefix}textUnderline') ?? textUnderline;
+    textAlignment =
+        prefs.getString('${_toolPrefsPrefix}textAlignment') ?? textAlignment;
+    final shapeIndex = prefs.getInt('${_toolPrefsPrefix}shapeType');
+    if (shapeIndex != null &&
+        shapeIndex >= 0 &&
+        shapeIndex < DrawingShapeType.values.length) {
+      shapeType = DrawingShapeType.values[shapeIndex];
+    }
+    final toolIndex = prefs.getInt('${_toolPrefsPrefix}lastTool');
+    if (toolIndex != null &&
+        toolIndex >= 0 &&
+        toolIndex < StrokeTool.values.length) {
+      tool = StrokeTool.values[toolIndex];
+    }
+  }
+
+  List<Color> _readColorPresets(List<String>? stored, List<Color> fallback) {
+    if (stored == null || stored.isEmpty) return fallback;
+    final parsed = <Color>[];
+    for (final value in stored) {
+      final argb = int.tryParse(value, radix: 16);
+      if (argb != null) parsed.add(Color(argb));
+    }
+    return parsed.isEmpty ? fallback : parsed.take(8).toList();
+  }
+
+  void _persistToolSettings() {
+    // Sliders can emit dozens of values per gesture. Persist only the final
+    // settled configuration, rather than queuing competing preference writes.
+    toolSettingsTimer?.cancel();
+    toolSettingsTimer = Timer(const Duration(milliseconds: 180), () {
+      unawaited(_writeToolSettings());
+    });
+  }
+
+  Future<void> _writeToolSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      prefs.setDouble('${_toolPrefsPrefix}penWidth', penWidth),
+      prefs.setDouble('${_toolPrefsPrefix}penStabilization', penStabilization),
+      prefs.setDouble('${_toolPrefsPrefix}highlighterWidth', highlighterWidth),
+      prefs.setDouble(
+          '${_toolPrefsPrefix}highlighterOpacity', highlighterOpacity),
+      prefs.setDouble('${_toolPrefsPrefix}eraserWidth', eraserWidth),
+      prefs.setDouble('${_toolPrefsPrefix}textFontSize', textFontSize),
+      prefs.setInt('${_toolPrefsPrefix}penColor', penColor.toARGB32()),
+      prefs.setInt('${_toolPrefsPrefix}penType', penType.index),
+      prefs.setInt(
+          '${_toolPrefsPrefix}highlighterColor', highlighterColor.toARGB32()),
+      prefs.setStringList(
+        '${_toolPrefsPrefix}penColorPresets',
+        penColorPresets
+            .map((color) => color.toARGB32().toRadixString(16))
+            .toList(),
+      ),
+      prefs.setStringList(
+        '${_toolPrefsPrefix}highlighterColorPresets',
+        highlighterColorPresets
+            .map((color) => color.toARGB32().toRadixString(16))
+            .toList(),
+      ),
+      prefs.setBool('${_toolPrefsPrefix}eraserWholeStroke',
+          eraserMode == EraserMode.wholeStroke),
+      prefs.setBool('${_toolPrefsPrefix}lassoRectangle',
+          lassoMode == LassoMode.rectangle),
+      prefs.setBool(
+          '${_toolPrefsPrefix}lassoIncludeStrokes', lassoIncludeStrokes),
+      prefs.setBool('${_toolPrefsPrefix}lassoIncludeTexts', lassoIncludeTexts),
+      prefs.setBool(
+          '${_toolPrefsPrefix}lassoIncludeImages', lassoIncludeImages),
+      prefs.setBool('${_toolPrefsPrefix}textBold', textBold),
+      prefs.setBool('${_toolPrefsPrefix}textItalic', textItalic),
+      prefs.setBool('${_toolPrefsPrefix}textUnderline', textUnderline),
+      prefs.setString('${_toolPrefsPrefix}textAlignment', textAlignment),
+      prefs.setInt('${_toolPrefsPrefix}shapeType', shapeType.index),
+      prefs.setInt('${_toolPrefsPrefix}lastTool', tool.index),
+    ]);
+  }
 
   void _bumpCanvas({bool staticLayer = false}) {
     canvasRevision.value++;
@@ -221,6 +384,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       activeShape = null;
       if (next != StrokeTool.lasso) _clearSelectionState();
     });
+    _persistToolSettings();
   }
 
   void _cancelCanvasInputForViewportGesture() {
@@ -232,72 +396,122 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     setState(() {});
   }
 
-  void _setWidth(double value) => setState(() {
-        switch (tool) {
-          case StrokeTool.eraser:
-            eraserWidth = value;
-          case StrokeTool.highlighter:
-            highlighterWidth = value;
-          case StrokeTool.text:
-            textFontSize = value;
-          default:
-            penWidth = value;
-        }
-      });
-  void _setColorForTool(StrokeTool target, Color value) => setState(() {
-        if (target == StrokeTool.highlighter) {
-          highlighterColor = value;
-        } else {
-          penColor = value;
-        }
-      });
+  void _setWidth(double value) {
+    setState(() {
+      switch (tool) {
+        case StrokeTool.eraser:
+          eraserWidth = value;
+        case StrokeTool.highlighter:
+          highlighterWidth = value;
+        case StrokeTool.text:
+          textFontSize = value;
+        default:
+          penWidth = value;
+      }
+    });
+    _persistToolSettings();
+  }
+
+  void _setColorForTool(StrokeTool target, Color value) {
+    setState(() {
+      if (target == StrokeTool.highlighter) {
+        highlighterColor = value;
+      } else {
+        penColor = value;
+      }
+    });
+    _persistToolSettings();
+  }
+
+  void _setPenType(PenType value) {
+    setState(() => penType = value);
+    _persistToolSettings();
+  }
+
+  void _setPenStabilization(double value) {
+    setState(() => penStabilization = value.clamp(0, .6));
+    _persistToolSettings();
+  }
+
+  void _setHighlighterOpacity(double value) {
+    setState(() => highlighterOpacity = value);
+    _persistToolSettings();
+  }
+
+  void _setEraserMode(EraserMode value) {
+    setState(() => eraserMode = value);
+    _persistToolSettings();
+  }
+
+  void _setLassoMode(LassoMode value) {
+    setState(() => lassoMode = value);
+    _persistToolSettings();
+  }
+
+  void _setLassoIncludeStrokes(bool value) {
+    setState(() => lassoIncludeStrokes = value);
+    _persistToolSettings();
+  }
+
+  void _setLassoIncludeTexts(bool value) {
+    setState(() => lassoIncludeTexts = value);
+    _persistToolSettings();
+  }
+
+  void _setLassoIncludeImages(bool value) {
+    setState(() => lassoIncludeImages = value);
+    _persistToolSettings();
+  }
+
+  void _setTextBold(bool value) {
+    setState(() => textBold = value);
+    _persistToolSettings();
+  }
+
+  void _setTextItalic(bool value) {
+    setState(() => textItalic = value);
+    _persistToolSettings();
+  }
+
+  void _setTextUnderline(bool value) {
+    setState(() => textUnderline = value);
+    _persistToolSettings();
+  }
+
+  void _setTextAlignment(String value) {
+    setState(() => textAlignment = value);
+    _persistToolSettings();
+  }
 
   Future<void> _showColorPalette() async {
     final targetTool = tool;
     if (targetTool == StrokeTool.eraser) return;
     final currentColor =
         targetTool == StrokeTool.highlighter ? highlighterColor : penColor;
-    final selected = await showModalBottomSheet<Color>(
+    final currentPresets = targetTool == StrokeTool.highlighter
+        ? highlighterColorPresets
+        : penColorPresets;
+    final editorPresets = currentPresets.contains(currentColor)
+        ? currentPresets
+        : [currentColor, ...currentPresets].take(8).toList();
+    final result = await showDialog<_ColorPresetSelection>(
       context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text('색상',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w700)),
-            ),
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                for (final swatch in const [
-                  (color: Colors.black, label: '검정'),
-                  (color: Color(0xff3f6f9f), label: '파랑'),
-                  (color: Color(0xffc95656), label: '빨강'),
-                  (color: Color(0xff4e8b68), label: '초록'),
-                  (color: Color(0xffd58b3a), label: '주황'),
-                ])
-                  _PaletteColorButton(
-                    color: swatch.color,
-                    label: swatch.label,
-                    selected: swatch.color == currentColor,
-                    onTap: () => Navigator.pop(sheetContext, swatch.color),
-                  ),
-              ],
-            ),
-          ]),
-        ),
+      barrierColor: Colors.black.withValues(alpha: .14),
+      builder: (_) => _ColorPresetEditorDialog(
+        initialPresets: editorPresets,
+        currentColor: currentColor,
       ),
     );
-    if (selected != null && mounted) _setColorForTool(targetTool, selected);
+    if (result == null || !mounted) return;
+    setState(() {
+      if (targetTool == StrokeTool.highlighter) {
+        highlighterColorPresets = result.presets;
+      } else {
+        penColorPresets = result.presets;
+      }
+    });
+    _setColorForTool(targetTool, result.selectedColor);
+    _persistToolSettings();
   }
 
   @override
@@ -311,13 +525,292 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   Future<void> _load() async {
     final page = await store.loadPage(widget.documentId, pageId);
     final prefs = await SharedPreferences.getInstance();
+    bookmarkedPages
+      ..clear()
+      ..addAll((prefs.getStringList(_bookmarkKey) ?? const <String>[])
+          .map(int.tryParse)
+          .whereType<int>()
+          .where((page) => page >= 1 && page <= pageCount));
+    pageSections
+      ..clear()
+      ..addAll(_decodePageSections(prefs.getString(_sectionKey)));
     pageRotation = prefs.getInt(_rotationKey(pageId)) ?? 0;
+    _loadToolSettings(prefs);
     strokes.addAll(page.strokes);
     shapes.addAll(page.shapes);
     texts.addAll(page.texts);
     images.addAll(page.images);
     await _preloadImages(page.images);
     if (mounted) setState(() => loaded = true);
+  }
+
+  String get _bookmarkKey => 'docnote.pageBookmarks.${widget.documentId}';
+  String get _sectionKey => 'docnote.pageSections.${widget.documentId}';
+
+  Map<int, String> _decodePageSections(String? raw) {
+    if (raw == null) return const {};
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return {
+        for (final entry in decoded.entries)
+          if (int.tryParse(entry.key) case final page?)
+            if (page >= 1 && page <= pageCount && entry.value is String)
+              page: entry.value as String,
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<void> _persistPageSections() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _sectionKey,
+      jsonEncode({
+        for (final entry in pageSections.entries) '${entry.key}': entry.value,
+      }),
+    );
+  }
+
+  Future<void> _assignPageSection(int page, String? section) async {
+    if (section == null || section.trim().isEmpty) {
+      pageSections.remove(page);
+    } else {
+      pageSections[page] = section.trim();
+    }
+    await _persistPageSections();
+    if (mounted) setState(() {});
+  }
+
+  void _swapPageSections(int first, int second) {
+    final firstSection = pageSections[first];
+    final secondSection = pageSections[second];
+    if (secondSection == null) {
+      pageSections.remove(first);
+    } else {
+      pageSections[first] = secondSection;
+    }
+    if (firstSection == null) {
+      pageSections.remove(second);
+    } else {
+      pageSections[second] = firstSection;
+    }
+  }
+
+  void _shiftPageSectionsAfterInsert(int sourcePage) {
+    final inheritedSection = pageSections[sourcePage];
+    final shifted = <int, String>{};
+    for (final entry in pageSections.entries) {
+      shifted[entry.key > sourcePage ? entry.key + 1 : entry.key] = entry.value;
+    }
+    if (inheritedSection != null) shifted[sourcePage + 1] = inheritedSection;
+    pageSections
+      ..clear()
+      ..addAll(shifted);
+  }
+
+  void _shiftPageSectionsAfterDelete(int removedPage) {
+    final shifted = <int, String>{};
+    for (final entry in pageSections.entries) {
+      if (entry.key == removedPage) continue;
+      shifted[entry.key > removedPage ? entry.key - 1 : entry.key] =
+          entry.value;
+    }
+    pageSections
+      ..clear()
+      ..addAll(shifted);
+  }
+
+  Future<String?> _requestSectionName({String initialValue = ''}) async {
+    final controller = TextEditingController(text: initialValue);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(initialValue.isEmpty ? '새 섹션' : '섹션 이름 변경'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 32,
+          decoration: const InputDecoration(hintText: '예: 1주차, 강의 노트'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('저장'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    final trimmed = value?.trim() ?? '';
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  Future<void> _showPageSectionPicker(int page) async {
+    final sections = pageSections.values.toSet().toList()..sort();
+    final selection = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text('섹션 없음'),
+              leading: const Icon(Icons.remove_circle_outline),
+              onTap: () => Navigator.pop(sheetContext, ''),
+            ),
+            ...sections.map((section) => ListTile(
+                  title: Text(section),
+                  leading: const Icon(Icons.folder_outlined),
+                  trailing: pageSections[page] == section
+                      ? Icon(Icons.check_rounded,
+                          color: Theme.of(context).colorScheme.primary)
+                      : null,
+                  onTap: () => Navigator.pop(sheetContext, section),
+                )),
+            ListTile(
+              title: const Text('새 섹션 만들기'),
+              leading: const Icon(Icons.create_new_folder_outlined),
+              onTap: () => Navigator.pop(sheetContext, '__create__'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (selection == null) return;
+    if (selection == '__create__') {
+      final name = await _requestSectionName();
+      if (name != null) await _assignPageSection(page, name);
+    } else {
+      await _assignPageSection(page, selection);
+    }
+  }
+
+  Future<void> _showSectionOverview() async {
+    final grouped = <String, List<int>>{};
+    for (final entry in pageSections.entries) {
+      (grouped[entry.value] ??= []).add(entry.key);
+    }
+    final names = grouped.keys.toList()..sort();
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: Text('페이지 섹션',
+                  style: Theme.of(context).textTheme.titleMedium),
+            ),
+            if (names.isEmpty)
+              const ListTile(
+                leading: Icon(Icons.info_outline),
+                title: Text('섹션이 없습니다'),
+                subtitle: Text('페이지 메뉴에서 섹션을 지정해 보세요.'),
+              ),
+            ...names.map((name) {
+              final pages = grouped[name]!..sort();
+              return ListTile(
+                leading: const Icon(Icons.folder_open_outlined),
+                title: Text(name),
+                subtitle: Text('${pages.length}페이지 · ${pages.join(', ')}'),
+                trailing: IconButton(
+                  tooltip: '섹션 이름 변경',
+                  icon: const Icon(Icons.edit_outlined, size: 19),
+                  onPressed: () async {
+                    final next = await _requestSectionName(initialValue: name);
+                    if (next == null || next == name) return;
+                    for (final page in pages) {
+                      pageSections[page] = next;
+                    }
+                    await _persistPageSections();
+                    if (mounted) setState(() {});
+                    if (sheetContext.mounted) Navigator.pop(sheetContext);
+                    await _showSectionOverview();
+                  },
+                ),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  await _switchPage(pages.first);
+                },
+              );
+            }),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+              child: FilledButton.tonalIcon(
+                onPressed: () async {
+                  Navigator.pop(sheetContext);
+                  final name = await _requestSectionName();
+                  if (name != null) await _assignPageSection(pageIndex, name);
+                },
+                icon: const Icon(Icons.create_new_folder_outlined),
+                label: const Text('현재 페이지에 새 섹션 만들기'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _persistBookmarks() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _bookmarkKey,
+      (bookmarkedPages.toList()..sort()).map((page) => '$page').toList(),
+    );
+  }
+
+  Future<void> _toggleBookmark(int page) async {
+    if (bookmarkedPages.contains(page)) {
+      bookmarkedPages.remove(page);
+    } else {
+      bookmarkedPages.add(page);
+    }
+    await _persistBookmarks();
+    if (mounted) setState(() {});
+  }
+
+  void _swapBookmarkPages(int first, int second) {
+    final firstMarked = bookmarkedPages.contains(first);
+    final secondMarked = bookmarkedPages.contains(second);
+    bookmarkedPages
+      ..remove(first)
+      ..remove(second);
+    if (firstMarked) bookmarkedPages.add(second);
+    if (secondMarked) bookmarkedPages.add(first);
+  }
+
+  void _shiftBookmarksAfterInsert(int sourcePage, int oldPageCount) {
+    final shifted = <int>{};
+    for (final page in bookmarkedPages) {
+      shifted.add(page > sourcePage ? page + 1 : page);
+    }
+    bookmarkedPages
+      ..clear()
+      ..addAll(shifted);
+  }
+
+  void _shiftBookmarksAfterDelete(int removedPage, int oldPageCount) {
+    final shifted = <int>{};
+    for (final page in bookmarkedPages) {
+      if (page == removedPage) continue;
+      shifted.add(page > removedPage ? page - 1 : page);
+    }
+    bookmarkedPages
+      ..clear()
+      ..addAll(shifted);
   }
 
   Future<void> _preloadImages(Iterable<DrawingImage> values) async {
@@ -346,6 +839,9 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     canvasRevision.dispose();
     staticRevisionNotifier.dispose();
     saveTimer?.cancel();
+    toolSettingsTimer?.cancel();
+    _shapeHoldTimer?.cancel();
+    unawaited(_writeToolSettings());
     // Decoded page images are native resources; release them when leaving the
     // editor so long editing sessions do not retain bitmap memory.
     for (final image in imageCache.values) {
@@ -379,6 +875,13 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       pageId,
       DrawingPageData(
           strokes: strokes, shapes: shapes, texts: texts, images: images));
+
+  Future<void> _closeDocumentTab() async {
+    _finishTextEdit();
+    saveTimer?.cancel();
+    await _save();
+    if (mounted) Navigator.of(context).maybePop();
+  }
 
   _PageSnapshot _snapshot() => _PageSnapshot(
       strokes: List.of(strokes),
@@ -741,6 +1244,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     selectedTextIds.clear();
     selectedImageIds.clear();
     selectionMoveBaseline = null;
+    selectionTapPending = false;
     selectionMoveOrigin = null;
     selectionMoveBounds = null;
     movingSelection = false;
@@ -863,51 +1367,168 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
 
   Future<void> _deletePage() => _deletePageAt(pageIndex);
 
-  Future<void> _showPageNavigator() => showModalBottomSheet<void>(
+  Future<void> _showPageNavigator() async {
+    final tablet = MediaQuery.sizeOf(context).width >= 760;
+    if (!tablet) {
+      await showModalBottomSheet<void>(
         context: context,
         showDragHandle: true,
         isScrollControlled: true,
         backgroundColor: Theme.of(context).colorScheme.surface,
-        builder: (sheetContext) => _PageNavigatorSheet(
-          documentId: widget.documentId,
-          pageCount: pageCount,
-          selectedPage: pageIndex,
-          templateId: widget.pageTemplateId,
-          onPageSelected: (next) async {
-            Navigator.of(sheetContext).pop();
-            await _switchPage(next);
-          },
-          onAddPage: () async {
-            Navigator.of(sheetContext).pop();
-            await _addPage();
-          },
-          onDuplicatePage: (sourcePage) async {
-            Navigator.of(sheetContext).pop();
-            await _duplicatePage(sourcePage);
-          },
-          onDeletePage: (targetPage) async {
-            Navigator.of(sheetContext).pop();
-            await _deletePageAt(targetPage);
-          },
-          onDeletePages: (pages) async {
-            Navigator.of(sheetContext).pop();
-            await _deletePages(pages);
-          },
-          onMovePage: (page, direction) async {
-            Navigator.of(sheetContext).pop();
-            await _movePage(page, direction);
-          },
-          onMovePageTo: (source, target) async {
-            Navigator.of(sheetContext).pop();
-            final direction = source < target ? 1 : -1;
-            var current = source;
-            while (current != target) {
-              await _movePage(current, direction);
-              current += direction;
-            }
+        builder: (sheetContext) => _buildPageNavigator(sheetContext),
+      );
+      return;
+    }
+
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '페이지 탐색 닫기',
+      barrierColor: Colors.black.withValues(alpha: .22),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (routeContext, _, __) => SafeArea(
+        child: LayoutBuilder(builder: (context, constraints) {
+          final panelWidth = math.min(380.0, constraints.maxWidth * .42);
+          return Align(
+            alignment: Alignment.centerLeft,
+            child: Material(
+              color: Theme.of(context).colorScheme.surface,
+              elevation: 8,
+              shadowColor: Colors.black.withValues(alpha: .12),
+              borderRadius: const BorderRadius.horizontal(
+                right: Radius.circular(14),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: SizedBox(
+                width: panelWidth,
+                height: constraints.maxHeight,
+                child: _buildPageNavigator(
+                  routeContext,
+                  sidebar: true,
+                  panelHeight: constraints.maxHeight,
+                ),
+              ),
+            ),
+          );
+        }),
+      ),
+      transitionBuilder: (context, animation, secondaryAnimation, child) =>
+          SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(-.12, 0),
+          end: Offset.zero,
+        ).animate(CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        )),
+        child: child,
+      ),
+    );
+  }
+
+  Widget _buildPageNavigator(
+    BuildContext routeContext, {
+    bool sidebar = false,
+    double? panelHeight,
+  }) =>
+      _PageNavigatorSheet(
+        documentId: widget.documentId,
+        pageCount: pageCount,
+        selectedPage: pageIndex,
+        bookmarkedPages: bookmarkedPages,
+        pageSections: pageSections,
+        templateId: widget.pageTemplateId,
+        sidebar: sidebar,
+        panelHeight: panelHeight,
+        onClose: () => Navigator.of(routeContext).pop(),
+        onJumpToPage: (target) async {
+          Navigator.of(routeContext).pop();
+          await _switchPage(target);
+        },
+        onPageSelected: (next) async {
+          Navigator.of(routeContext).pop();
+          await _switchPage(next);
+        },
+        onAddPage: () async {
+          Navigator.of(routeContext).pop();
+          await _addPage();
+        },
+        onDuplicatePage: (sourcePage) async {
+          Navigator.of(routeContext).pop();
+          await _duplicatePage(sourcePage);
+        },
+        onInsertBlankPage: (sourcePage) async {
+          Navigator.of(routeContext).pop();
+          await _insertBlankPageAfter(sourcePage);
+        },
+        onDeletePage: (targetPage) async {
+          Navigator.of(routeContext).pop();
+          await _deletePageAt(targetPage);
+        },
+        onDeletePages: (pages) async {
+          Navigator.of(routeContext).pop();
+          await _deletePages(pages);
+        },
+        onMovePage: (page, direction) async {
+          Navigator.of(routeContext).pop();
+          await _movePage(page, direction);
+        },
+        onMovePageTo: (source, target) async {
+          Navigator.of(routeContext).pop();
+          final direction = source < target ? 1 : -1;
+          var current = source;
+          while (current != target) {
+            await _movePage(current, direction);
+            current += direction;
+          }
+        },
+        onToggleBookmark: _toggleBookmark,
+        onAssignSection: _showPageSectionPicker,
+        onShowSections: () {
+          Navigator.of(routeContext).pop();
+          unawaited(_showSectionOverview());
+        },
+        onShowBookmarks: bookmarkedPages.isEmpty
+            ? null
+            : () {
+                Navigator.of(routeContext).pop();
+                unawaited(_showBookmarkedPages());
+              },
+      );
+
+  Future<void> _showBookmarkedPages() async {
+    final pages = bookmarkedPages.toList()..sort();
+    if (pages.isEmpty || !mounted) return;
+    final selected = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: ListView.separated(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+          itemCount: pages.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 4),
+          itemBuilder: (context, index) {
+            final page = pages[index];
+            return ListTile(
+              leading: const Icon(Icons.bookmark_rounded),
+              title: Text('$page페이지'),
+              subtitle: Text(
+                page == pageIndex ? '현재 페이지' : '북마크한 페이지',
+              ),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => Navigator.of(sheetContext).pop(page),
+            );
           },
         ),
-      );
+      ),
+    );
+    if (selected != null && selected != pageIndex) {
+      await _switchPage(selected);
+    }
+  }
 
   Future<void> _movePage(int sourcePage, int direction) async {
     final targetPage = sourcePage + direction;
@@ -915,6 +1536,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     await _save();
     await store.swapNotebookPages(widget.documentId,
         firstPage: sourcePage, secondPage: targetPage);
+    _swapBookmarkPages(sourcePage, targetPage);
+    await _persistBookmarks();
+    _swapPageSections(sourcePage, targetPage);
+    await _persistPageSections();
     final prefs = await SharedPreferences.getInstance();
     final sourceRotation = prefs.getInt(_rotationKey('page_$sourcePage')) ?? 0;
     final targetRotation = prefs.getInt(_rotationKey('page_$targetPage')) ?? 0;
@@ -938,14 +1563,47 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     await _save();
     final source = await store.loadPage(widget.documentId, 'page_$sourcePage');
     await _shiftRotationKeysAfterInsert(sourcePage, pageCount);
+    _shiftBookmarksAfterInsert(sourcePage, pageCount);
+    await _persistBookmarks();
     await store.insertNotebookPage(widget.documentId,
         sourcePage: sourcePage, pageCount: pageCount);
+    _shiftPageSectionsAfterInsert(sourcePage);
+    await _persistPageSections();
     await store.savePage(widget.documentId, 'page_${sourcePage + 1}', source);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_rotationKey('page_${sourcePage + 1}'),
         prefs.getInt(_rotationKey('page_$sourcePage')) ?? 0);
     pageCount++;
     if (pageIndex > sourcePage) pageIndex++;
+    widget.onPageCountChanged?.call(pageCount);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _insertBlankPageAfter(int sourcePage) async {
+    await _save();
+    saveTimer?.cancel();
+    await _shiftRotationKeysAfterInsert(sourcePage, pageCount);
+    _shiftPageSectionsAfterInsert(sourcePage);
+    await _persistPageSections();
+    _shiftBookmarksAfterInsert(sourcePage, pageCount);
+    await _persistBookmarks();
+    await store.insertBlankNotebookPage(
+      widget.documentId,
+      sourcePage: sourcePage,
+      pageCount: pageCount,
+    );
+    pageCount++;
+    pageIndex = sourcePage + 1;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_rotationKey('page_$pageIndex'));
+    pageRotation = 0;
+    _replaceLoadedPage(
+      await store.loadPage(widget.documentId, 'page_$pageIndex'),
+    );
+    await _preloadImages(images);
+    undoHistory.clear();
+    redoHistory.clear();
+    _clearSelectionState();
     widget.onPageCountChanged?.call(pageCount);
     if (mounted) setState(() {});
   }
@@ -981,6 +1639,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     );
     if (ok != true) return;
     await _save();
+    _shiftBookmarksAfterDelete(targetPage, pageCount);
+    await _persistBookmarks();
+    _shiftPageSectionsAfterDelete(targetPage);
+    await _persistPageSections();
     await _shiftRotationKeysAfterDelete(targetPage, pageCount);
     await store.deleteNotebookPageAndShift(
       widget.documentId,
@@ -1004,6 +1666,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     if (targets.isEmpty || targets.length >= pageCount) return;
     await _save();
     for (final target in targets.toList()..sort((a, b) => b.compareTo(a))) {
+      _shiftBookmarksAfterDelete(target, pageCount);
+      await _persistBookmarks();
+      _shiftPageSectionsAfterDelete(target);
+      await _persistPageSections();
       await _shiftRotationKeysAfterDelete(target, pageCount);
       await store.deleteNotebookPageAndShift(widget.documentId,
           removedPage: target, pageCount: pageCount);
@@ -1051,6 +1717,9 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   }
 
   void _start(Offset p, double pressure, Size size) {
+    _shapeHoldTimer?.cancel();
+    _heldShapePreview = null;
+    _heldShapeSource = null;
     if (_perfEnabled) {
       _editorBuilds = 0;
       _painterRepaints = 0;
@@ -1105,9 +1774,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       _erase(p, size);
       return;
     }
+    _activePressure = pressure.clamp(0.0, 1.0);
     active
       ..clear()
-      ..add(normalizePoint(p, size, pressure: pressure));
+      ..add(normalizePoint(p, size, pressure: _activePressure));
     _bumpCanvas();
   }
 
@@ -1126,9 +1796,29 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       _erase(p, size);
       return;
     }
+    if (_heldShapePreview != null) {
+      // The user continued moving after the hold: restore the original ink
+      // rather than committing an unexpected conversion.
+      active
+        ..clear()
+        ..addAll(_heldShapeSource ?? const []);
+      activeShape = null;
+      _heldShapePreview = null;
+      _heldShapeSource = null;
+    }
     if (active.isEmpty) return;
-    final next = normalizePoint(p, size, pressure: pressure);
+    final sampledPressure = tool == StrokeTool.pen
+        ? _smoothPressure(pressure)
+        : pressure.clamp(0.0, 1.0);
+    final rawNext = normalizePoint(p, size, pressure: sampledPressure);
     final previous = active.last;
+    final next = penStabilization > 0 && tool == StrokeTool.pen
+        ? StrokePoint(
+            previous.x + (rawNext.x - previous.x) * (1 - penStabilization),
+            previous.y + (rawNext.y - previous.y) * (1 - penStabilization),
+            rawNext.pressure,
+          )
+        : rawNext;
     // Keep the latest pressure sample but avoid storing near-identical move
     // events. This reduces stroke size and repaint work without changing the
     // normalized coordinate model or the visible path.
@@ -1153,7 +1843,17 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       active.add(next);
       _acceptedPoints++;
     }
+    _scheduleShapeHoldPreview();
     _bumpActiveCanvas();
+  }
+
+  /// Stylus pressure events can fluctuate by a few hundredths between
+  /// adjacent Android samples. A short exponential filter keeps width
+  /// changes expressive without producing visible segment-to-segment jitter.
+  double _smoothPressure(double pressure) {
+    final next = pressure.clamp(0.0, 1.0);
+    _activePressure = _activePressure * .68 + next * .32;
+    return _activePressure;
   }
 
   List<double> _timingStats(List<int> values) {
@@ -1166,6 +1866,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   }
 
   void _end() {
+    _shapeHoldTimer?.cancel();
     if (tool == StrokeTool.shapeLine ||
         tool == StrokeTool.shapeRectangle ||
         tool == StrokeTool.shapeEllipse ||
@@ -1182,6 +1883,10 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       eraserBaseline = null;
       return;
     }
+    if (_heldShapePreview case final preview?) {
+      _commitHeldShape(preview);
+      return;
+    }
     if (active.isEmpty) return;
     _flushActiveCanvas();
     _recordHistory();
@@ -1190,6 +1895,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         documentId: widget.documentId,
         pageId: pageId,
         tool: tool,
+        penType: penType,
         points: List.of(active),
         color: activeColor,
         width: activeWidth,
@@ -1291,6 +1997,111 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     }
   }
 
+  void _scheduleShapeHoldPreview() {
+    if (tool != StrokeTool.pen || active.length < 5) return;
+    _shapeHoldTimer?.cancel();
+    _shapeHoldTimer = Timer(const Duration(milliseconds: 520), () {
+      if (!mounted || tool != StrokeTool.pen || active.length < 5) return;
+      final candidate = _recognizeHeldShape(active);
+      if (candidate == null) return;
+      setState(() {
+        _heldShapeSource = List.of(active);
+        _heldShapePreview = candidate;
+        active.clear();
+        activeShape = candidate;
+      });
+      _bumpCanvas();
+    });
+  }
+
+  DrawingShape? _recognizeHeldShape(List<StrokePoint> points) {
+    final minX = points.map((point) => point.x).reduce(math.min);
+    final maxX = points.map((point) => point.x).reduce(math.max);
+    final minY = points.map((point) => point.y).reduce(math.min);
+    final maxY = points.map((point) => point.y).reduce(math.max);
+    final width = maxX - minX;
+    final height = maxY - minY;
+    final major = math.max(width, height);
+    if (major < .035) return null;
+
+    final start = points.first;
+    final end = points.last;
+    final closed =
+        math.sqrt(math.pow(end.x - start.x, 2) + math.pow(end.y - start.y, 2)) <
+            major * .28;
+    DrawingShapeType? type;
+    if (closed) {
+      final centerX = (minX + maxX) / 2;
+      final centerY = (minY + maxY) / 2;
+      final averageRadius = points
+              .map((point) => math.sqrt(math.pow(point.x - centerX, 2) +
+                  math.pow(point.y - centerY, 2)))
+              .reduce((a, b) => a + b) /
+          points.length;
+      final radialVariance = points
+              .map((point) => (math.sqrt(math.pow(point.x - centerX, 2) +
+                          math.pow(point.y - centerY, 2)) -
+                      averageRadius)
+                  .abs())
+              .reduce((a, b) => a + b) /
+          points.length;
+      type = radialVariance < major * .13
+          ? DrawingShapeType.ellipse
+          : DrawingShapeType.rectangle;
+    } else {
+      final dx = end.x - start.x;
+      final dy = end.y - start.y;
+      final length = math.sqrt(dx * dx + dy * dy);
+      if (length < .035) return null;
+      final maxDeviation = points
+          .map((point) =>
+              ((point.x - start.x) * dy - (point.y - start.y) * dx).abs() /
+              length)
+          .reduce(math.max);
+      if (maxDeviation > major * .075) return null;
+      type = DrawingShapeType.line;
+    }
+    final shapeStart =
+        type == DrawingShapeType.line ? start : StrokePoint(minX, minY, 1);
+    final shapeEnd =
+        type == DrawingShapeType.line ? end : StrokePoint(maxX, maxY, 1);
+    return DrawingShape(
+      id: 'held-shape-preview',
+      documentId: widget.documentId,
+      pageId: pageId,
+      type: type,
+      startPoint: shapeStart,
+      endPoint: shapeEnd,
+      color: penColor,
+      strokeWidth: penWidth,
+      order: shapes.length,
+      createdAt: DateTime.now(),
+    );
+  }
+
+  void _commitHeldShape(DrawingShape preview) {
+    activeShape = null;
+    _heldShapePreview = null;
+    _heldShapeSource = null;
+    active.clear();
+    _recordHistory();
+    shapes.add(DrawingShape(
+      id: '${DateTime.now().microsecondsSinceEpoch}',
+      documentId: preview.documentId,
+      pageId: preview.pageId,
+      type: preview.type,
+      startPoint: preview.startPoint,
+      endPoint: preview.endPoint,
+      color: preview.color,
+      strokeWidth: preview.strokeWidth,
+      order: shapes.length,
+      createdAt: preview.createdAt,
+    ));
+    _scheduleSave();
+    _bumpCanvas(staticLayer: true);
+    setState(() {});
+  }
+
   void _shapeStart(Offset point, Size size) {
     final normalized = normalizePoint(point, size);
     activeShape = DrawingShape(
@@ -1334,6 +2145,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       endPoint: shape.endPoint,
       color: shape.color,
       strokeWidth: shape.strokeWidth,
+      fillColor: shape.fillColor,
+      isDashed: shape.isDashed,
       order: shapes.length,
       createdAt: shape.createdAt,
     ));
@@ -1342,17 +2155,20 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     setState(() {});
   }
 
-  void _setShapeType(DrawingShapeType value) => setState(() {
-        shapeType = value;
-        tool = switch (value) {
-          DrawingShapeType.line => StrokeTool.shapeLine,
-          DrawingShapeType.rectangle => StrokeTool.shapeRectangle,
-          DrawingShapeType.ellipse => StrokeTool.shapeEllipse,
-          DrawingShapeType.arrow => StrokeTool.shapeArrow,
-          DrawingShapeType.triangle => StrokeTool.shapeTriangle,
-        };
-        activeShape = null;
-      });
+  void _setShapeType(DrawingShapeType value) {
+    setState(() {
+      shapeType = value;
+      tool = switch (value) {
+        DrawingShapeType.line => StrokeTool.shapeLine,
+        DrawingShapeType.rectangle => StrokeTool.shapeRectangle,
+        DrawingShapeType.ellipse => StrokeTool.shapeEllipse,
+        DrawingShapeType.arrow => StrokeTool.shapeArrow,
+        DrawingShapeType.triangle => StrokeTool.shapeTriangle,
+      };
+      activeShape = null;
+    });
+    _persistToolSettings();
+  }
 
   void _erase(Offset p, Size size) {
     final n = normalizePoint(p, size);
@@ -1441,12 +2257,16 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
           order: texts.length,
           createdAt: DateTime.now(),
           bold: textBold,
+          italic: textItalic,
+          underline: textUnderline,
           alignment: textAlignment,
         );
     if (hit != null) {
       textFontSize = hit.fontSize;
       penColor = hit.color;
       textBold = hit.bold;
+      textItalic = hit.italic;
+      textUnderline = hit.underline;
       textAlignment = hit.alignment;
     }
     textController
@@ -1469,6 +2289,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         fontSize: textFontSize,
         color: penColor,
         bold: textBold,
+        italic: textItalic,
+        underline: textUnderline,
         alignment: textAlignment,
       );
       if (existing >= 0) {
@@ -1674,14 +2496,97 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     } else {
       _clearSelectionState();
       activeResizeHandle = null;
-      lassoPath.add(normalized);
+      final hit = _hitTestCanvasObject(point, normalized, size);
+      if (hit == null) {
+        lassoPath.add(normalized);
+      } else {
+        selectionTapPending = true;
+        switch (hit.$1) {
+          case 'stroke':
+            selectedStrokeIds.add(hit.$2);
+            break;
+          case 'shape':
+            selectedShapeIds.add(hit.$2);
+            break;
+          case 'text':
+            selectedTextIds.add(hit.$2);
+            break;
+          case 'image':
+            selectedImageIds.add(hit.$2);
+            break;
+        }
+        final hitBounds = _selectedBounds();
+        if (hitBounds != null) {
+          movingSelection = true;
+          selectionMoveOrigin = normalized;
+          selectionMoveBounds = hitBounds;
+          selectionMoveBaseline = _snapshot();
+        }
+        lassoPath.clear();
+      }
     }
     _bumpCanvas();
     setState(() {});
   }
 
+  (String, String)? _hitTestCanvasObject(
+      Offset point, StrokePoint normalized, Size size) {
+    const tapTolerance = 10.0;
+    for (final stroke in strokes.reversed) {
+      final points = stroke.points;
+      if (points.isEmpty) continue;
+      final tolerance = math.max(tapTolerance, stroke.width * 1.5);
+      if (points.length == 1) {
+        if ((restorePoint(points.single, size) - point).distance <= tolerance) {
+          return ('stroke', stroke.id);
+        }
+        continue;
+      }
+      for (var index = points.length - 1; index > 0; index--) {
+        final start = restorePoint(points[index - 1], size);
+        final end = restorePoint(points[index], size);
+        if (_distanceToSegment(point, start, end) <= tolerance) {
+          return ('stroke', stroke.id);
+        }
+      }
+    }
+    final normalizedPoint = Offset(normalized.x, normalized.y);
+    final normalizedTolerance =
+        tapTolerance / math.min(size.width, size.height);
+    for (final text in texts.reversed) {
+      if (_textRectNormalized(text)
+          .inflate(normalizedTolerance)
+          .contains(normalizedPoint)) {
+        return ('text', text.id);
+      }
+    }
+    for (final shape in shapes.reversed) {
+      final points = _shapeSelectionPoints(shape);
+      if (points.length >= 2 &&
+          _pointsBounds(points)
+              .inflate(normalizedTolerance)
+              .contains(normalizedPoint)) {
+        return ('shape', shape.id);
+      }
+    }
+    for (final image in images.reversed) {
+      if (_imageRectNormalized(image).contains(normalizedPoint)) {
+        return ('image', image.id);
+      }
+    }
+    return null;
+  }
+
   void _selectionMove(Offset point, Size size) {
     final normalized = normalizePoint(point, size);
+    if (selectionTapPending) {
+      final origin = selectionMoveOrigin;
+      if (origin == null) return;
+      final deltaX = (normalized.x - origin.x) * size.width;
+      final deltaY = (normalized.y - origin.y) * size.height;
+      if (math.sqrt(deltaX * deltaX + deltaY * deltaY) < 8) return;
+      selectionTapPending = false;
+    }
     if (!movingSelection && !resizingSelection && !rotatingSelection) {
       lassoPath.add(normalized);
       _bumpCanvas();
@@ -1796,6 +2701,14 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   }
 
   void _selectionEnd() {
+    if (selectionTapPending) {
+      selectionTapPending = false;
+      movingSelection = false;
+      selectionMoveBaseline = null;
+      selectionMoveOrigin = null;
+      selectionMoveBounds = null;
+      return;
+    }
     if (movingSelection || resizingSelection || rotatingSelection) {
       final baseline = selectionMoveBaseline;
       if (baseline != null && !_samePages(baseline, _snapshot())) {
@@ -1894,6 +2807,182 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     setState(() {});
   }
 
+  bool get _hasSelectedObjects =>
+      selectedStrokeIds.isNotEmpty ||
+      selectedShapeIds.isNotEmpty ||
+      selectedTextIds.isNotEmpty ||
+      selectedImageIds.isNotEmpty;
+
+  void _copySelectionToClipboard() {
+    if (!_hasSelectedObjects) return;
+    selectionClipboard = _PageSnapshot(
+      strokes: strokes
+          .where((stroke) => selectedStrokeIds.contains(stroke.id))
+          .toList(),
+      shapes:
+          shapes.where((shape) => selectedShapeIds.contains(shape.id)).toList(),
+      texts: texts.where((text) => selectedTextIds.contains(text.id)).toList(),
+      images:
+          images.where((image) => selectedImageIds.contains(image.id)).toList(),
+    );
+    HapticFeedback.selectionClick();
+    // Rebuild the contextual menu so the paste action is immediately
+    // available without requiring another selection or tool change.
+    setState(() {});
+  }
+
+  void _cutSelection() {
+    if (!_hasSelectedObjects) return;
+    _copySelectionToClipboard();
+    _recordHistory();
+    strokes.removeWhere((stroke) => selectedStrokeIds.contains(stroke.id));
+    shapes.removeWhere((shape) => selectedShapeIds.contains(shape.id));
+    texts.removeWhere((text) => selectedTextIds.contains(text.id));
+    images.removeWhere((image) => selectedImageIds.contains(image.id));
+    _clearSelectionState();
+    _scheduleSave();
+    setState(() {});
+  }
+
+  void _pasteSelection() {
+    final clipboard = selectionClipboard;
+    if (clipboard == null) return;
+    final bounds = _snapshotBounds(clipboard);
+    if (bounds == null) return;
+    _recordHistory();
+    final dx = math.min(.03, 1 - bounds.right);
+    final dy = math.min(.03, 1 - bounds.bottom);
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    final copiedStrokeIds = <String>{};
+    final copiedShapeIds = <String>{};
+    final copiedTextIds = <String>{};
+    final copiedImageIds = <String>{};
+    for (final stroke in clipboard.strokes) {
+      final id = '${stroke.id}_paste_$stamp';
+      copiedStrokeIds.add(id);
+      strokes.add(Stroke(
+        id: id,
+        documentId: stroke.documentId,
+        pageId: pageId,
+        tool: stroke.tool,
+        penType: stroke.penType,
+        points: stroke.points
+            .map((point) => _translatedPoint(point, dx, dy))
+            .toList(),
+        color: stroke.color,
+        width: stroke.width,
+        opacity: stroke.opacity,
+        order: strokes.length,
+        createdAt: DateTime.now(),
+      ));
+    }
+    for (final shape in clipboard.shapes) {
+      final id = '${shape.id}_paste_$stamp';
+      copiedShapeIds.add(id);
+      shapes.add(DrawingShape(
+        id: id,
+        documentId: shape.documentId,
+        pageId: pageId,
+        type: shape.type,
+        startPoint: _translatedPoint(shape.startPoint, dx, dy),
+        endPoint: _translatedPoint(shape.endPoint, dx, dy),
+        color: shape.color,
+        strokeWidth: shape.strokeWidth,
+        fillColor: shape.fillColor,
+        isDashed: shape.isDashed,
+        rotationRadians: shape.rotationRadians,
+        order: shapes.length,
+        createdAt: DateTime.now(),
+      ));
+    }
+    for (final text in clipboard.texts) {
+      final id = '${text.id}_paste_$stamp';
+      copiedTextIds.add(id);
+      texts.add(DrawingText(
+        id: id,
+        documentId: text.documentId,
+        pageId: pageId,
+        text: text.text,
+        position: _translatedPoint(text.position, dx, dy),
+        fontSize: text.fontSize,
+        color: text.color,
+        maxWidth: text.maxWidth,
+        order: texts.length,
+        createdAt: DateTime.now(),
+        bold: text.bold,
+        italic: text.italic,
+        underline: text.underline,
+        alignment: text.alignment,
+      ));
+    }
+    for (final image in clipboard.images) {
+      final id = '${image.id}_paste_$stamp';
+      copiedImageIds.add(id);
+      images.add(DrawingImage(
+        id: id,
+        documentId: image.documentId,
+        pageId: pageId,
+        imagePath: image.imagePath,
+        position: _translatedPoint(image.position, dx, dy),
+        width: image.width,
+        height: image.height,
+        rotationRadians: image.rotationRadians,
+        cropLeft: image.cropLeft,
+        cropTop: image.cropTop,
+        cropRight: image.cropRight,
+        cropBottom: image.cropBottom,
+        order: images.length,
+        createdAt: DateTime.now(),
+      ));
+    }
+    selectedStrokeIds
+      ..clear()
+      ..addAll(copiedStrokeIds);
+    selectedShapeIds
+      ..clear()
+      ..addAll(copiedShapeIds);
+    selectedTextIds
+      ..clear()
+      ..addAll(copiedTextIds);
+    selectedImageIds
+      ..clear()
+      ..addAll(copiedImageIds);
+    _scheduleSave();
+    _bumpCanvas(staticLayer: true);
+    setState(() {});
+  }
+
+  Rect? _snapshotBounds(_PageSnapshot snapshot) {
+    final points = <StrokePoint>[];
+    for (final stroke in snapshot.strokes) {
+      points.addAll(stroke.points);
+    }
+    for (final shape in snapshot.shapes) {
+      points.addAll(_shapeSelectionPoints(shape));
+    }
+    for (final text in snapshot.texts) {
+      final rect = _textRectNormalized(text);
+      points.addAll([
+        StrokePoint(rect.left, rect.top, 1),
+        StrokePoint(rect.right, rect.bottom, 1),
+      ]);
+    }
+    for (final image in snapshot.images) {
+      final rect = _imageRectNormalized(image);
+      points.addAll([
+        StrokePoint(rect.left, rect.top, 1),
+        StrokePoint(rect.right, rect.bottom, 1),
+      ]);
+    }
+    if (points.isEmpty) return null;
+    return Rect.fromLTRB(
+      points.map((point) => point.x).reduce(math.min),
+      points.map((point) => point.y).reduce(math.min),
+      points.map((point) => point.x).reduce(math.max),
+      points.map((point) => point.y).reduce(math.max),
+    );
+  }
+
   void _duplicateSelection() {
     if (selectedStrokeIds.isEmpty &&
         selectedShapeIds.isEmpty &&
@@ -1946,6 +3035,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         endPoint: _translatedPoint(shape.endPoint, dx, dy),
         color: shape.color,
         strokeWidth: shape.strokeWidth,
+        fillColor: shape.fillColor,
+        isDashed: shape.isDashed,
         rotationRadians: shape.rotationRadians,
         order: shapes.length + copiedShapeIds.length - 1,
         createdAt: DateTime.now(),
@@ -1967,6 +3058,8 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         order: texts.length + copiedTextIds.length - 1,
         createdAt: DateTime.now(),
         bold: text.bold,
+        italic: text.italic,
+        underline: text.underline,
         alignment: text.alignment,
       );
     });
@@ -2013,12 +3106,119 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
     setState(() {});
   }
 
+  void _rotateSelection() {
+    if (selectedShapeIds.isEmpty && selectedImageIds.isEmpty) return;
+    _recordHistory();
+    const step = math.pi / 12;
+    for (var index = 0; index < shapes.length; index++) {
+      if (selectedShapeIds.contains(shapes[index].id)) {
+        shapes[index] = shapes[index].copyWith(
+          rotationRadians: shapes[index].rotationRadians + step,
+        );
+      }
+    }
+    for (var index = 0; index < images.length; index++) {
+      if (selectedImageIds.contains(images[index].id)) {
+        images[index] = images[index].copyWith(
+          rotationRadians: images[index].rotationRadians + step,
+        );
+      }
+    }
+    _scheduleSave();
+    _bumpCanvas(staticLayer: true);
+    setState(() {});
+  }
+
+  Future<void> _showSelectionAlignmentMenu() async {
+    if (_selectedBounds() == null) return;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.align_horizontal_center_rounded),
+            title: const Text('가로 중앙 정렬'),
+            onTap: () => Navigator.pop(sheetContext, 'horizontal'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.align_vertical_center_rounded),
+            title: const Text('세로 중앙 정렬'),
+            onTap: () => Navigator.pop(sheetContext, 'vertical'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.center_focus_strong_rounded),
+            title: const Text('가운데 정렬'),
+            onTap: () => Navigator.pop(sheetContext, 'both'),
+          ),
+        ]),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    _alignSelection(
+        horizontal: choice != 'vertical', vertical: choice != 'horizontal');
+  }
+
+  void _alignSelection({required bool horizontal, required bool vertical}) {
+    final bounds = _selectedBounds();
+    if (bounds == null) return;
+    var dx = horizontal ? .5 - bounds.center.dx : 0.0;
+    var dy = vertical ? .5 - bounds.center.dy : 0.0;
+    dx = dx.clamp(-bounds.left, 1 - bounds.right);
+    dy = dy.clamp(-bounds.top, 1 - bounds.bottom);
+    if (dx == 0 && dy == 0) return;
+    _recordHistory();
+    for (var index = 0; index < strokes.length; index++) {
+      if (selectedStrokeIds.contains(strokes[index].id)) {
+        strokes[index] = _strokeWithPoints(
+          strokes[index],
+          strokes[index]
+              .points
+              .map((point) =>
+                  StrokePoint(point.x + dx, point.y + dy, point.pressure))
+              .toList(),
+        );
+      }
+    }
+    for (var index = 0; index < shapes.length; index++) {
+      if (selectedShapeIds.contains(shapes[index].id)) {
+        shapes[index] = shapes[index].copyWith(
+          startPoint: _translatedPoint(shapes[index].startPoint, dx, dy),
+          endPoint: _translatedPoint(shapes[index].endPoint, dx, dy),
+        );
+      }
+    }
+    for (var index = 0; index < texts.length; index++) {
+      if (selectedTextIds.contains(texts[index].id)) {
+        texts[index] = texts[index].copyWith(
+          position: _translatedPoint(texts[index].position, dx, dy),
+        );
+      }
+    }
+    for (var index = 0; index < images.length; index++) {
+      if (selectedImageIds.contains(images[index].id)) {
+        images[index] = images[index].copyWith(
+          position: _translatedPoint(images[index].position, dx, dy),
+        );
+      }
+    }
+    _scheduleSave();
+    _bumpCanvas(staticLayer: true);
+    setState(() {});
+  }
+
   Future<void> _showSelectedShapeStyle() async {
     if (selectedShapeIds.isEmpty) return;
+    final selected =
+        shapes.firstWhere((shape) => selectedShapeIds.contains(shape.id));
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => _ShapeStyleSheet(
+        color: selected.color,
+        strokeWidth: selected.strokeWidth,
+        fillColor: selected.fillColor,
+        isDashed: selected.isDashed,
         onColorSelected: (color) {
           Navigator.of(sheetContext).pop();
           _applySelectedShapeColor(color);
@@ -2026,6 +3226,18 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         onWidthSelected: (width) {
           Navigator.of(sheetContext).pop();
           _applySelectedShapeWidth(width);
+        },
+        onFillColorSelected: (color) {
+          Navigator.of(sheetContext).pop();
+          _applySelectedShapeFill(color);
+        },
+        onClearFill: () {
+          Navigator.of(sheetContext).pop();
+          _applySelectedShapeFill(null);
+        },
+        onDashedChanged: (value) {
+          Navigator.of(sheetContext).pop();
+          _applySelectedShapeDashed(value);
         },
       ),
     );
@@ -2040,6 +3252,7 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       }
     }
     _scheduleSave();
+    _bumpCanvas(staticLayer: true);
     setState(() {});
   }
 
@@ -2052,6 +3265,35 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
       }
     }
     _scheduleSave();
+    _bumpCanvas(staticLayer: true);
+    setState(() {});
+  }
+
+  void _applySelectedShapeFill(Color? color) {
+    if (selectedShapeIds.isEmpty) return;
+    _recordHistory();
+    for (var index = 0; index < shapes.length; index++) {
+      if (selectedShapeIds.contains(shapes[index].id)) {
+        shapes[index] = color == null
+            ? shapes[index].copyWith(clearFill: true)
+            : shapes[index].copyWith(fillColor: color);
+      }
+    }
+    _scheduleSave();
+    _bumpCanvas(staticLayer: true);
+    setState(() {});
+  }
+
+  void _applySelectedShapeDashed(bool value) {
+    if (selectedShapeIds.isEmpty) return;
+    _recordHistory();
+    for (var index = 0; index < shapes.length; index++) {
+      if (selectedShapeIds.contains(shapes[index].id)) {
+        shapes[index] = shapes[index].copyWith(isDashed: value);
+      }
+    }
+    _scheduleSave();
+    _bumpCanvas(staticLayer: true);
     setState(() {});
   }
 
@@ -2110,41 +3352,80 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
   @override
   Widget build(BuildContext context) {
     if (_perfEnabled) _editorBuilds++;
+    final tabletLayout = MediaQuery.sizeOf(context).width >= 760;
+    final wideTabletLayout = MediaQuery.sizeOf(context).width >= 900;
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
+          automaticallyImplyLeading: !tabletLayout || widget.showDocumentTab,
           title: Row(mainAxisSize: MainAxisSize.min, children: [
-            Flexible(
-              child: InkWell(
-                onTap: _scheduleRenameTitle,
-                borderRadius: BorderRadius.circular(6),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Text(title.isEmpty ? '새 노트' : title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: -.25,
-                          )),
+            if (tabletLayout && widget.showDocumentTab) ...[
+              EditorDocumentTab(
+                title: title.isEmpty ? '새 노트' : title,
+                onTitleTap: _scheduleRenameTitle,
+                onClose: _closeDocumentTab,
+              ),
+              const SizedBox(width: 12),
+            ] else if (!tabletLayout || widget.showDocumentTab)
+              Flexible(
+                child: InkWell(
+                  onTap: _scheduleRenameTitle,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Text(title.isEmpty ? '새 노트' : title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: -.25,
+                                )),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 7),
+            if (!tabletLayout || widget.showDocumentTab)
+              const SizedBox(width: 7),
             Semantics(
               button: true,
               label: '페이지 탐색, $pageIndex / $pageCount',
               child: InkWell(
                 onTap: _showPageNavigator,
-                borderRadius: BorderRadius.circular(6),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                  child: Text('$pageIndex/$pageCount',
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontFeatures: const [ui.FontFeature.tabularFigures()],
-                      )),
+                borderRadius: BorderRadius.circular(7),
+                child: Tooltip(
+                  message: '페이지 미리보기와 이동',
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withValues(alpha: .58),
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 5),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.grid_view_rounded,
+                            size: 13,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant),
+                        const SizedBox(width: 4),
+                        Text('$pageIndex/$pageCount',
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                              fontFeatures: const [
+                                ui.FontFeature.tabularFigures()
+                              ],
+                            )),
+                      ]),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -2286,267 +3567,324 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
               clipBehavior: Clip.none,
               children: [
                 Positioned.fill(
-                    top: toolbarVisible ? 50 : 0,
+                    top: toolbarVisible
+                        ? (wideTabletLayout ? 64 : (tabletLayout ? 92 : 50))
+                        : 0,
                     child: _ZoomableNotebookViewport(
                         onViewportGestureStart:
                             _cancelCanvasInputForViewportGesture,
                         child: Align(
                             alignment: Alignment.topCenter,
-                            child: RotatedBox(
-                                quarterTurns: pageRotation,
-                                child: AspectRatio(
-                                    aspectRatio:
-                                        pageRotation.isEven ? .7 : 1 / .7,
-                                    child: DecoratedBox(
-                                      decoration: const BoxDecoration(
-                                          color: Colors.white,
-                                          boxShadow: [
-                                            BoxShadow(
-                                                blurRadius: 3,
-                                                color: Colors.black12)
-                                          ]),
-                                      child: LayoutBuilder(
-                                          builder: (context, constraints) =>
-                                              Stack(children: [
-                                                AnimatedSwitcher(
-                                                  duration: const Duration(
-                                                      milliseconds: 220),
-                                                  switchInCurve:
-                                                      Curves.easeOutCubic,
-                                                  switchOutCurve:
-                                                      Curves.easeInCubic,
-                                                  transitionBuilder:
-                                                      (child, animation) =>
-                                                          FadeTransition(
-                                                    opacity: animation,
-                                                    child: SlideTransition(
-                                                      position: Tween<Offset>(
-                                                        begin: const Offset(
-                                                            .018, 0),
-                                                        end: Offset.zero,
-                                                      ).animate(animation),
-                                                      child: child,
+                            child: Padding(
+                                padding: EdgeInsets.symmetric(
+                                    horizontal: tabletLayout ? 0 : 10,
+                                    vertical: tabletLayout ? 0 : 10),
+                                child: RotatedBox(
+                                    quarterTurns: pageRotation,
+                                    child: AspectRatio(
+                                        aspectRatio:
+                                            pageRotation.isEven ? .7 : 1 / .7,
+                                        child: DecoratedBox(
+                                          decoration: BoxDecoration(
+                                              color: Colors.white,
+                                              border: Border.all(
+                                                  color:
+                                                      const Color(0xffe5e9ee)),
+                                              boxShadow: const [
+                                                BoxShadow(
+                                                    blurRadius: 8,
+                                                    offset: Offset(0, 2),
+                                                    color: Color(0x14000000))
+                                              ]),
+                                          child: LayoutBuilder(
+                                              builder: (context, constraints) =>
+                                                  Stack(children: [
+                                                    AnimatedSwitcher(
+                                                      duration: const Duration(
+                                                          milliseconds: 220),
+                                                      switchInCurve:
+                                                          Curves.easeOutCubic,
+                                                      switchOutCurve:
+                                                          Curves.easeInCubic,
+                                                      transitionBuilder:
+                                                          (child, animation) =>
+                                                              FadeTransition(
+                                                        opacity: animation,
+                                                        child: SlideTransition(
+                                                          position:
+                                                              Tween<Offset>(
+                                                            begin: const Offset(
+                                                                .018, 0),
+                                                            end: Offset.zero,
+                                                          ).animate(animation),
+                                                          child: child,
+                                                        ),
+                                                      ),
+                                                      child: DrawingCanvas(
+                                                          key: ValueKey(
+                                                              pageIndex),
+                                                          strokes: strokes,
+                                                          texts: texts,
+                                                          images: images,
+                                                          imageCache:
+                                                              imageCache,
+                                                          hiddenTextId:
+                                                              editingText?.id,
+                                                          shapes: shapes,
+                                                          activePoints: active,
+                                                          activeShape:
+                                                              activeShape,
+                                                          tool: tool,
+                                                          penType: penType,
+                                                          color: activeColor,
+                                                          width: activeWidth,
+                                                          pageTemplateId: widget
+                                                              .pageTemplateId,
+                                                          onStart: _start,
+                                                          onMove: _move,
+                                                          onEnd: _end,
+                                                          lassoPath: lassoPath,
+                                                          selectedStrokeIds:
+                                                              selectedStrokeIds,
+                                                          selectedShapeIds:
+                                                              selectedShapeIds,
+                                                          selectedTextIds:
+                                                              selectedTextIds,
+                                                          selectedImageIds:
+                                                              selectedImageIds,
+                                                          onSelectionStart:
+                                                              _selectionStart,
+                                                          onSelectionMove:
+                                                              _selectionMove,
+                                                          onSelectionEnd:
+                                                              _selectionEnd,
+                                                          onTextTap: _textTap,
+                                                          onImageTap: _imageTap,
+                                                          repaint:
+                                                              canvasRevision,
+                                                          staticRepaint:
+                                                              staticRevisionNotifier,
+                                                          revision:
+                                                              canvasRevision
+                                                                  .value,
+                                                          staticRevision:
+                                                              staticRevision,
+                                                          useIncrementalActivePath:
+                                                              _useIncrementalActivePath,
+                                                          instrumentationEnabled:
+                                                              _instrumentationEnabled,
+                                                          onPaint: () {
+                                                            if (_perfEnabled) {
+                                                              _painterRepaints++;
+                                                              _activePainterRepaints++;
+                                                            }
+                                                          },
+                                                          onStaticPaint: () {
+                                                            if (_perfEnabled) {
+                                                              _staticPainterRepaints++;
+                                                            }
+                                                          },
+                                                          onStaticObjectPaint:
+                                                              () {
+                                                            if (_perfEnabled) {
+                                                              _staticObjectPaintCount++;
+                                                            }
+                                                          },
+                                                          onPathBuild:
+                                                              (elapsed) {
+                                                            if (_perfEnabled &&
+                                                                _instrumentationEnabled) {
+                                                              _pathBuildCount++;
+                                                              final us = elapsed
+                                                                  .inMicroseconds;
+                                                              _pathBuildTotalUs +=
+                                                                  us;
+                                                              _pathBuildMaxUs =
+                                                                  math.max(
+                                                                      _pathBuildMaxUs,
+                                                                      us);
+                                                            }
+                                                          },
+                                                          onIncrementalPathBuild:
+                                                              (elapsed) {
+                                                            if (_perfEnabled &&
+                                                                _instrumentationEnabled) {
+                                                              _incrementalSegmentBuildCount++;
+                                                              final us = elapsed
+                                                                  .inMicroseconds;
+                                                              _incrementalBuildTotalUs +=
+                                                                  us;
+                                                              _incrementalBuildMaxUs =
+                                                                  math.max(
+                                                                      _incrementalBuildMaxUs,
+                                                                      us);
+                                                            }
+                                                          },
+                                                          onFullPathRebuild:
+                                                              () {
+                                                            if (_perfEnabled &&
+                                                                _instrumentationEnabled) {
+                                                              _fullPathRebuildCount++;
+                                                            }
+                                                          },
+                                                          onActivePaint:
+                                                              (elapsed) {
+                                                            if (_perfEnabled) {
+                                                              final us = elapsed
+                                                                  .inMicroseconds;
+                                                              _activePaintTotalUs +=
+                                                                  us;
+                                                              _activePaintMaxUs =
+                                                                  math.max(
+                                                                      _activePaintMaxUs,
+                                                                      us);
+                                                              _activePaintSamples++;
+                                                            }
+                                                          },
+                                                          onPictureDraw:
+                                                              (elapsed) {
+                                                            if (_perfEnabled &&
+                                                                _instrumentationEnabled) {
+                                                              final us = elapsed
+                                                                  .inMicroseconds;
+                                                              _pictureDrawSamples++;
+                                                              _pictureDrawTotalUs +=
+                                                                  us;
+                                                              _pictureDrawMaxUs =
+                                                                  math.max(
+                                                                      _pictureDrawMaxUs,
+                                                                      us);
+                                                            }
+                                                          },
+                                                          onActivePathDraw:
+                                                              (elapsed) {
+                                                            if (_perfEnabled &&
+                                                                _instrumentationEnabled) {
+                                                              final us = elapsed
+                                                                  .inMicroseconds;
+                                                              _activePathDrawSamples++;
+                                                              _activePathDrawTotalUs +=
+                                                                  us;
+                                                              _activePathDrawMaxUs =
+                                                                  math.max(
+                                                                      _activePathDrawMaxUs,
+                                                                      us);
+                                                            }
+                                                          },
+                                                          onOverlayPaint:
+                                                              (elapsed) {
+                                                            if (_perfEnabled) {
+                                                              final us = elapsed
+                                                                  .inMicroseconds;
+                                                              _overlayPaintTotalUs +=
+                                                                  us;
+                                                              _overlayPaintMaxUs =
+                                                                  math.max(
+                                                                      _overlayPaintMaxUs,
+                                                                      us);
+                                                              _overlayPaintSamples++;
+                                                            }
+                                                          }),
                                                     ),
-                                                  ),
-                                                  child: DrawingCanvas(
-                                                      key: ValueKey(pageIndex),
-                                                      strokes: strokes,
-                                                      texts: texts,
-                                                      images: images,
-                                                      imageCache: imageCache,
-                                                      hiddenTextId:
-                                                          editingText?.id,
-                                                      shapes: shapes,
-                                                      activePoints: active,
-                                                      activeShape: activeShape,
-                                                      tool: tool,
-                                                      color: activeColor,
-                                                      width: activeWidth,
-                                                      pageTemplateId:
-                                                          widget.pageTemplateId,
-                                                      onStart: _start,
-                                                      onMove: _move,
-                                                      onEnd: _end,
-                                                      lassoPath: lassoPath,
-                                                      selectedStrokeIds:
-                                                          selectedStrokeIds,
-                                                      selectedShapeIds:
-                                                          selectedShapeIds,
-                                                      selectedTextIds:
-                                                          selectedTextIds,
-                                                      selectedImageIds:
-                                                          selectedImageIds,
-                                                      onSelectionStart:
-                                                          _selectionStart,
-                                                      onSelectionMove:
-                                                          _selectionMove,
-                                                      onSelectionEnd:
-                                                          _selectionEnd,
-                                                      onTextTap: _textTap,
-                                                      onImageTap: _imageTap,
-                                                      repaint: canvasRevision,
-                                                      staticRepaint:
-                                                          staticRevisionNotifier,
-                                                      revision:
-                                                          canvasRevision.value,
-                                                      staticRevision:
-                                                          staticRevision,
-                                                      useIncrementalActivePath:
-                                                          _useIncrementalActivePath,
-                                                      instrumentationEnabled:
-                                                          _instrumentationEnabled,
-                                                      onPaint: () {
-                                                        if (_perfEnabled) {
-                                                          _painterRepaints++;
-                                                          _activePainterRepaints++;
-                                                        }
-                                                      },
-                                                      onStaticPaint: () {
-                                                        if (_perfEnabled) {
-                                                          _staticPainterRepaints++;
-                                                        }
-                                                      },
-                                                      onStaticObjectPaint: () {
-                                                        if (_perfEnabled) {
-                                                          _staticObjectPaintCount++;
-                                                        }
-                                                      },
-                                                      onPathBuild: (elapsed) {
-                                                        if (_perfEnabled &&
-                                                            _instrumentationEnabled) {
-                                                          _pathBuildCount++;
-                                                          final us = elapsed
-                                                              .inMicroseconds;
-                                                          _pathBuildTotalUs +=
-                                                              us;
-                                                          _pathBuildMaxUs =
-                                                              math.max(
-                                                                  _pathBuildMaxUs,
-                                                                  us);
-                                                        }
-                                                      },
-                                                      onIncrementalPathBuild:
-                                                          (elapsed) {
-                                                        if (_perfEnabled &&
-                                                            _instrumentationEnabled) {
-                                                          _incrementalSegmentBuildCount++;
-                                                          final us = elapsed
-                                                              .inMicroseconds;
-                                                          _incrementalBuildTotalUs +=
-                                                              us;
-                                                          _incrementalBuildMaxUs =
-                                                              math.max(
-                                                                  _incrementalBuildMaxUs,
-                                                                  us);
-                                                        }
-                                                      },
-                                                      onFullPathRebuild: () {
-                                                        if (_perfEnabled &&
-                                                            _instrumentationEnabled) {
-                                                          _fullPathRebuildCount++;
-                                                        }
-                                                      },
-                                                      onActivePaint: (elapsed) {
-                                                        if (_perfEnabled) {
-                                                          final us = elapsed
-                                                              .inMicroseconds;
-                                                          _activePaintTotalUs +=
-                                                              us;
-                                                          _activePaintMaxUs =
-                                                              math.max(
-                                                                  _activePaintMaxUs,
-                                                                  us);
-                                                          _activePaintSamples++;
-                                                        }
-                                                      },
-                                                      onPictureDraw: (elapsed) {
-                                                        if (_perfEnabled &&
-                                                            _instrumentationEnabled) {
-                                                          final us = elapsed
-                                                              .inMicroseconds;
-                                                          _pictureDrawSamples++;
-                                                          _pictureDrawTotalUs +=
-                                                              us;
-                                                          _pictureDrawMaxUs =
-                                                              math.max(
-                                                                  _pictureDrawMaxUs,
-                                                                  us);
-                                                        }
-                                                      },
-                                                      onActivePathDraw:
-                                                          (elapsed) {
-                                                        if (_perfEnabled &&
-                                                            _instrumentationEnabled) {
-                                                          final us = elapsed
-                                                              .inMicroseconds;
-                                                          _activePathDrawSamples++;
-                                                          _activePathDrawTotalUs +=
-                                                              us;
-                                                          _activePathDrawMaxUs =
-                                                              math.max(
-                                                                  _activePathDrawMaxUs,
-                                                                  us);
-                                                        }
-                                                      },
-                                                      onOverlayPaint:
-                                                          (elapsed) {
-                                                        if (_perfEnabled) {
-                                                          final us = elapsed
-                                                              .inMicroseconds;
-                                                          _overlayPaintTotalUs +=
-                                                              us;
-                                                          _overlayPaintMaxUs =
-                                                              math.max(
-                                                                  _overlayPaintMaxUs,
-                                                                  us);
-                                                          _overlayPaintSamples++;
-                                                        }
-                                                      }),
-                                                ),
-                                                if (editingText
-                                                    case final text?)
-                                                  Positioned(
-                                                    left: text.position.x *
-                                                        constraints.maxWidth,
-                                                    top: text.position.y *
-                                                        constraints.maxHeight,
-                                                    width: text.maxWidth *
-                                                        constraints.maxWidth,
-                                                    child: TextField(
-                                                      controller:
-                                                          textController,
-                                                      focusNode: textFocus,
-                                                      minLines: 1,
-                                                      maxLines: null,
-                                                      style: TextStyle(
-                                                          color: text.color,
-                                                          fontSize:
-                                                              text.fontSize,
-                                                          fontWeight: text.bold
-                                                              ? FontWeight.w700
-                                                              : FontWeight.w400,
-                                                          height: 1.25),
-                                                      textAlign:
-                                                          _textAlignValue(
-                                                              text.alignment),
-                                                      decoration:
-                                                          const InputDecoration(
-                                                              isDense: true,
-                                                              border:
-                                                                  InputBorder
-                                                                      .none),
-                                                    ),
-                                                  ),
-                                                if (tool == StrokeTool.lasso &&
-                                                    editingText == null)
-                                                  if (_selectedBounds()
-                                                      case final bounds?)
-                                                    _SelectionContextMenuOverlay(
-                                                      bounds: bounds,
-                                                      canvasSize: constraints,
-                                                      hasShapeSelection:
-                                                          selectedShapeIds
-                                                              .isNotEmpty,
-                                                      hasTextSelection:
-                                                          selectedTextIds
-                                                              .isNotEmpty,
-                                                      hasSingleImageSelection:
-                                                          selectedImageIds
-                                                                  .length ==
-                                                              1,
-                                                      onDuplicate:
-                                                          _duplicateSelection,
-                                                      onShapeStyle:
-                                                          _showSelectedShapeStyle,
-                                                      onTextColor:
-                                                          _showSelectedTextColor,
-                                                      onCrop:
-                                                          _cropSelectedImage,
-                                                      onDelete:
-                                                          _deleteSelection,
-                                                    ),
-                                              ])),
-                                    )))))),
+                                                    if (editingText
+                                                        case final text?)
+                                                      Positioned(
+                                                        left: text.position.x *
+                                                            constraints
+                                                                .maxWidth,
+                                                        top: text.position.y *
+                                                            constraints
+                                                                .maxHeight,
+                                                        width: text.maxWidth *
+                                                            constraints
+                                                                .maxWidth,
+                                                        child: TextField(
+                                                          controller:
+                                                              textController,
+                                                          focusNode: textFocus,
+                                                          minLines: 1,
+                                                          maxLines: null,
+                                                          style: TextStyle(
+                                                              color: text.color,
+                                                              fontSize:
+                                                                  text.fontSize,
+                                                              fontWeight: text.bold
+                                                                  ? FontWeight
+                                                                      .w700
+                                                                  : FontWeight
+                                                                      .w400,
+                                                              fontStyle: text.italic
+                                                                  ? FontStyle
+                                                                      .italic
+                                                                  : FontStyle
+                                                                      .normal,
+                                                              decoration: text
+                                                                      .underline
+                                                                  ? TextDecoration
+                                                                      .underline
+                                                                  : TextDecoration
+                                                                      .none,
+                                                              height: 1.25),
+                                                          textAlign:
+                                                              _textAlignValue(
+                                                                  text.alignment),
+                                                          decoration:
+                                                              const InputDecoration(
+                                                                  isDense: true,
+                                                                  border:
+                                                                      InputBorder
+                                                                          .none),
+                                                        ),
+                                                      ),
+                                                    if (tool ==
+                                                            StrokeTool.lasso &&
+                                                        editingText == null)
+                                                      if (_selectedBounds()
+                                                          case final bounds?)
+                                                        _SelectionContextMenuOverlay(
+                                                          bounds: bounds,
+                                                          canvasSize:
+                                                              constraints,
+                                                          hasShapeSelection:
+                                                              selectedShapeIds
+                                                                  .isNotEmpty,
+                                                          hasTextSelection:
+                                                              selectedTextIds
+                                                                  .isNotEmpty,
+                                                          hasSingleImageSelection:
+                                                              selectedImageIds
+                                                                      .length ==
+                                                                  1,
+                                                          canRotateSelection:
+                                                              selectedShapeIds
+                                                                      .isNotEmpty ||
+                                                                  selectedImageIds
+                                                                      .isNotEmpty,
+                                                          hasClipboard:
+                                                              selectionClipboard !=
+                                                                  null,
+                                                          onCopy:
+                                                              _copySelectionToClipboard,
+                                                          onCut: _cutSelection,
+                                                          onPaste:
+                                                              _pasteSelection,
+                                                          onDuplicate:
+                                                              _duplicateSelection,
+                                                          onRotate:
+                                                              _rotateSelection,
+                                                          onAlign:
+                                                              _showSelectionAlignmentMenu,
+                                                          onShapeStyle:
+                                                              _showSelectedShapeStyle,
+                                                          onTextColor:
+                                                              _showSelectedTextColor,
+                                                          onCrop:
+                                                              _cropSelectedImage,
+                                                          onDelete:
+                                                              _deleteSelection,
+                                                        ),
+                                                  ])),
+                                        ))))))),
                 if (toolbarVisible)
                   Positioned(
                     top: 0,
@@ -2561,28 +3899,31 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
 
   Widget _toolbar(BuildContext context) => DrawingToolbar(
         selectedTool: tool,
+        penType: penType,
+        penStabilization: penStabilization,
         width: activeWidth,
         color: activeColor,
         highlighterOpacity: highlighterOpacity,
         eraserMode: eraserMode,
         onToolChanged: _setTool,
+        onPenTypeChanged: _setPenType,
+        onPenStabilizationChanged: _setPenStabilization,
         onWidthChanged: _setWidth,
         onColorChanged: (value) => _setColorForTool(tool, value),
-        onHighlighterOpacityChanged: (value) =>
-            setState(() => highlighterOpacity = value),
-        onEraserModeChanged: (value) => setState(() => eraserMode = value),
+        onHighlighterOpacityChanged: _setHighlighterOpacity,
+        onEraserModeChanged: _setEraserMode,
         lassoMode: lassoMode,
         lassoIncludeStrokes: lassoIncludeStrokes,
         lassoIncludeTexts: lassoIncludeTexts,
         lassoIncludeImages: lassoIncludeImages,
-        onLassoModeChanged: (value) => setState(() => lassoMode = value),
-        onLassoIncludeStrokesChanged: (value) =>
-            setState(() => lassoIncludeStrokes = value),
-        onLassoIncludeTextsChanged: (value) =>
-            setState(() => lassoIncludeTexts = value),
-        onLassoIncludeImagesChanged: (value) =>
-            setState(() => lassoIncludeImages = value),
+        onLassoModeChanged: _setLassoMode,
+        onLassoIncludeStrokesChanged: _setLassoIncludeStrokes,
+        onLassoIncludeTextsChanged: _setLassoIncludeTexts,
+        onLassoIncludeImagesChanged: _setLassoIncludeImages,
         onPaletteRequested: _showColorPalette,
+        colorPresets: tool == StrokeTool.highlighter
+            ? highlighterColorPresets
+            : penColorPresets,
         shapeType: shapeType,
         onShapeTypeChanged: _setShapeType,
         hasSelection: selectedStrokeIds.isNotEmpty ||
@@ -2596,10 +3937,13 @@ class _DrawingEditorPageState extends State<DrawingEditorPage>
         onShapeStyleRequested: _showSelectedShapeStyle,
         onCropRequested: _cropSelectedImage,
         textBold: textBold,
+        textItalic: textItalic,
+        textUnderline: textUnderline,
         textAlignment: textAlignment,
-        onTextBoldChanged: (value) => setState(() => textBold = value),
-        onTextAlignmentChanged: (value) =>
-            setState(() => textAlignment = value),
+        onTextBoldChanged: _setTextBold,
+        onTextItalicChanged: _setTextItalic,
+        onTextUnderlineChanged: _setTextUnderline,
+        onTextAlignmentChanged: _setTextAlignment,
       );
 }
 
@@ -2610,7 +3954,14 @@ class _SelectionContextMenuOverlay extends StatelessWidget {
     required this.hasShapeSelection,
     required this.hasTextSelection,
     required this.hasSingleImageSelection,
+    required this.canRotateSelection,
+    required this.hasClipboard,
+    required this.onCopy,
+    required this.onCut,
+    required this.onPaste,
     required this.onDuplicate,
+    required this.onRotate,
+    required this.onAlign,
     required this.onShapeStyle,
     required this.onTextColor,
     required this.onCrop,
@@ -2622,7 +3973,14 @@ class _SelectionContextMenuOverlay extends StatelessWidget {
   final bool hasShapeSelection;
   final bool hasTextSelection;
   final bool hasSingleImageSelection;
+  final bool canRotateSelection;
+  final bool hasClipboard;
+  final VoidCallback onCopy;
+  final VoidCallback onCut;
+  final VoidCallback onPaste;
   final VoidCallback onDuplicate;
+  final VoidCallback onRotate;
+  final VoidCallback onAlign;
   final VoidCallback onShapeStyle;
   final VoidCallback onTextColor;
   final VoidCallback onCrop;
@@ -2631,7 +3989,8 @@ class _SelectionContextMenuOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    const menuWidth = 208.0;
+    final menuWidth =
+        math.min(280.0, math.max(176.0, canvasSize.maxWidth - 16));
     final left = (bounds.center.dx * canvasSize.maxWidth - menuWidth / 2)
         .clamp(8.0, math.max(8.0, canvasSize.maxWidth - menuWidth))
         .toDouble();
@@ -2645,46 +4004,92 @@ class _SelectionContextMenuOverlay extends StatelessWidget {
       left: left,
       top: top,
       width: menuWidth,
-      height: 40,
-      child: Material(
-        color: scheme.surface,
-        elevation: 3,
-        shadowColor: Colors.black.withValues(alpha: .16),
-        borderRadius: BorderRadius.circular(10),
-        clipBehavior: Clip.antiAlias,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            _SelectionMenuButton(
-              icon: Icons.content_copy_outlined,
-              label: '복제',
-              onPressed: onDuplicate,
+      height: 42,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: .9, end: 1),
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOutCubic,
+        builder: (context, scale, child) => Opacity(
+          opacity: ((scale - .9) / .1).clamp(0.0, 1.0),
+          child: Transform.scale(scale: scale, child: child),
+        ),
+        child: Material(
+          color: scheme.surface,
+          elevation: 3,
+          shadowColor: Colors.black.withValues(alpha: .16),
+          borderRadius: BorderRadius.circular(10),
+          clipBehavior: Clip.antiAlias,
+          child: Row(children: [
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  _SelectionMenuButton(
+                    icon: Icons.content_copy_outlined,
+                    label: '복사',
+                    onPressed: onCopy,
+                  ),
+                  _SelectionMenuButton(
+                    icon: Icons.content_cut_outlined,
+                    label: '잘라내기',
+                    onPressed: onCut,
+                  ),
+                  if (hasClipboard)
+                    _SelectionMenuButton(
+                      icon: Icons.content_paste_outlined,
+                      label: '붙여넣기',
+                      onPressed: onPaste,
+                    ),
+                  _SelectionMenuButton(
+                    icon: Icons.copy_all_outlined,
+                    label: '복제',
+                    onPressed: onDuplicate,
+                  ),
+                  if (canRotateSelection)
+                    _SelectionMenuButton(
+                      icon: Icons.rotate_right_rounded,
+                      label: '회전',
+                      onPressed: onRotate,
+                    ),
+                  _SelectionMenuButton(
+                    icon: Icons.center_focus_strong_rounded,
+                    label: '정렬',
+                    onPressed: onAlign,
+                  ),
+                  if (hasShapeSelection)
+                    _SelectionMenuButton(
+                      icon: Icons.palette_outlined,
+                      label: '스타일',
+                      onPressed: onShapeStyle,
+                    ),
+                  if (hasTextSelection)
+                    _SelectionMenuButton(
+                      icon: Icons.palette_outlined,
+                      label: '색상',
+                      onPressed: onTextColor,
+                    ),
+                  if (hasSingleImageSelection)
+                    _SelectionMenuButton(
+                      icon: Icons.crop_outlined,
+                      label: '자르기',
+                      onPressed: onCrop,
+                    ),
+                ]),
+              ),
             ),
-            if (hasShapeSelection)
-              _SelectionMenuButton(
-                icon: Icons.palette_outlined,
-                label: '스타일',
-                onPressed: onShapeStyle,
-              ),
-            if (hasTextSelection)
-              _SelectionMenuButton(
-                icon: Icons.palette_outlined,
-                label: '색상',
-                onPressed: onTextColor,
-              ),
-            if (hasSingleImageSelection)
-              _SelectionMenuButton(
-                icon: Icons.crop_outlined,
-                label: '자르기',
-                onPressed: onCrop,
-              ),
+            Container(
+              width: 1,
+              height: 20,
+              color: scheme.outlineVariant.withValues(alpha: .55),
+            ),
             _SelectionMenuButton(
               icon: Icons.delete_outline_rounded,
               label: '삭제',
               color: scheme.error,
               onPressed: onDelete,
             ),
-          ],
+          ]),
         ),
       ),
     );
@@ -2840,41 +4245,68 @@ class _PageNavigatorSheet extends StatelessWidget {
     required this.documentId,
     required this.pageCount,
     required this.selectedPage,
+    required this.bookmarkedPages,
+    required this.pageSections,
     required this.templateId,
+    required this.sidebar,
+    required this.panelHeight,
+    required this.onClose,
+    required this.onJumpToPage,
     required this.onPageSelected,
     required this.onAddPage,
     required this.onDuplicatePage,
+    required this.onInsertBlankPage,
     required this.onDeletePage,
     required this.onDeletePages,
     required this.onMovePage,
     required this.onMovePageTo,
+    required this.onToggleBookmark,
+    required this.onAssignSection,
+    required this.onShowSections,
+    required this.onShowBookmarks,
   });
 
   final String documentId;
   final int pageCount;
   final int selectedPage;
+  final Set<int> bookmarkedPages;
+  final Map<int, String> pageSections;
   final String templateId;
+  final bool sidebar;
+  final double? panelHeight;
+  final VoidCallback onClose;
+  final ValueChanged<int> onJumpToPage;
   final ValueChanged<int> onPageSelected;
   final VoidCallback onAddPage;
   final ValueChanged<int> onDuplicatePage;
+  final ValueChanged<int> onInsertBlankPage;
   final ValueChanged<int> onDeletePage;
   final ValueChanged<Set<int>> onDeletePages;
   final void Function(int page, int direction) onMovePage;
   final void Function(int source, int target) onMovePageTo;
+  final ValueChanged<int> onToggleBookmark;
+  final ValueChanged<int> onAssignSection;
+  final VoidCallback? onShowSections;
+  final VoidCallback? onShowBookmarks;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final rows = (pageCount / 3).ceil();
-    final height = (142 + rows * 180)
-        .clamp(292.0, MediaQuery.sizeOf(context).height * .64)
-        .toDouble();
+    final height = sidebar
+        ? panelHeight ?? MediaQuery.sizeOf(context).height
+        : (80 + rows * 180)
+            .clamp(260.0, MediaQuery.sizeOf(context).height * .64)
+            .toDouble();
     return SafeArea(
       top: false,
+      bottom: !sidebar,
       child: SizedBox(
         height: height,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
+          padding: sidebar
+              ? const EdgeInsets.fromLTRB(14, 8, 12, 12)
+              : const EdgeInsets.fromLTRB(20, 0, 20, 18),
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
@@ -2888,136 +4320,308 @@ class _PageNavigatorSheet extends StatelessWidget {
                         color: scheme.onSurfaceVariant,
                       )),
               const Spacer(),
-              IconButton(
-                onPressed: onAddPage,
-                tooltip: '페이지 추가',
-                icon: const Icon(Icons.add),
-              ),
-              IconButton(
-                onPressed: () => _showMultiDelete(context),
-                tooltip: '여러 페이지 삭제',
-                icon: const Icon(Icons.checklist_outlined),
-              ),
+              if (sidebar)
+                IconButton(
+                  onPressed: onClose,
+                  tooltip: '페이지 탐색 닫기',
+                  icon: const Icon(Icons.close),
+                )
+              else ...[
+                IconButton(
+                  onPressed: () => _showJumpToPage(context),
+                  tooltip: '페이지 번호로 이동',
+                  icon: const Icon(Icons.find_in_page_outlined),
+                ),
+                IconButton(
+                  onPressed: onAddPage,
+                  tooltip: '페이지 추가',
+                  icon: const Icon(Icons.add),
+                ),
+                IconButton(
+                  onPressed: () => _showMultiDelete(context),
+                  tooltip: '여러 페이지 삭제',
+                  icon: const Icon(Icons.checklist_outlined),
+                ),
+                if (onShowBookmarks != null)
+                  IconButton(
+                    onPressed: onShowBookmarks,
+                    tooltip: '북마크한 페이지',
+                    icon: const Icon(Icons.bookmarks_outlined),
+                  ),
+                IconButton(
+                  onPressed: onShowSections,
+                  tooltip: '페이지 섹션',
+                  icon: const Icon(Icons.folder_outlined),
+                ),
+              ],
             ]),
+            if (sidebar) ...[
+              const SizedBox(height: 2),
+              Row(children: [
+                IconButton(
+                  onPressed: () => _showJumpToPage(context),
+                  tooltip: '페이지 번호로 이동',
+                  icon: const Icon(Icons.find_in_page_outlined),
+                ),
+                IconButton(
+                  onPressed: onAddPage,
+                  tooltip: '페이지 추가',
+                  icon: const Icon(Icons.add),
+                ),
+                IconButton(
+                  onPressed: () => _showMultiDelete(context),
+                  tooltip: '여러 페이지 삭제',
+                  icon: const Icon(Icons.checklist_outlined),
+                ),
+                if (onShowBookmarks != null)
+                  IconButton(
+                    onPressed: onShowBookmarks,
+                    tooltip: '북마크한 페이지',
+                    icon: const Icon(Icons.bookmarks_outlined),
+                  ),
+                IconButton(
+                  onPressed: onShowSections,
+                  tooltip: '페이지 섹션',
+                  icon: const Icon(Icons.folder_outlined),
+                ),
+              ]),
+            ],
             const SizedBox(height: 12),
             Expanded(
-              child: GridView.builder(
-                itemCount: pageCount,
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 112,
-                  mainAxisSpacing: 14,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: .68,
-                ),
-                itemBuilder: (context, index) {
-                  final page = index + 1;
-                  final selected = page == selectedPage;
-                  return DragTarget<int>(
-                    onWillAcceptWithDetails: (details) => details.data != page,
-                    onAcceptWithDetails: (details) =>
-                        onMovePageTo(details.data, page),
-                    builder: (context, candidates, rejected) {
-                      final hovering = candidates.isNotEmpty;
-                      return Semantics(
-                        button: true,
-                        selected: selected,
-                        label: '$page페이지',
-                        child: InkWell(
-                          onTap: () => onPageSelected(page),
-                          onLongPress: () => _showPageActions(context, page),
-                          borderRadius: BorderRadius.circular(6),
-                          child: Column(children: [
-                            Expanded(
-                              child: AnimatedScale(
-                                scale: hovering ? 1.035 : 1,
-                                duration: const Duration(milliseconds: 140),
-                                curve: Curves.easeOutCubic,
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 150),
-                                  decoration: BoxDecoration(
-                                    color: hovering
-                                        ? scheme.primaryContainer
-                                            .withValues(alpha: .35)
-                                        : Colors.white,
-                                    borderRadius: BorderRadius.circular(5),
-                                    border: Border.all(
-                                      color: hovering || selected
-                                          ? scheme.primary
-                                          : scheme.outlineVariant
-                                              .withValues(alpha: .65),
-                                      width: selected ? 1.4 : .7,
-                                    ),
-                                    boxShadow: const [
-                                      BoxShadow(
-                                        color: Color(0x12000000),
-                                        blurRadius: 3,
-                                        offset: Offset(0, 1),
-                                      ),
-                                    ],
-                                  ),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(4),
-                                    child: Stack(children: [
-                                      Positioned.fill(
-                                        child: _PageThumbnail(
-                                          documentId: documentId,
-                                          pageId: 'page_$page',
-                                          templateId: templateId,
-                                        ),
-                                      ),
-                                      Positioned(
-                                        right: 3,
-                                        top: 3,
-                                        child: LongPressDraggable<int>(
-                                          data: page,
-                                          feedback: Material(
-                                            color: scheme.surface,
-                                            elevation: 4,
-                                            borderRadius:
-                                                BorderRadius.circular(6),
-                                            child: SizedBox(
-                                              width: 72,
-                                              height: 96,
-                                              child: Center(
-                                                  child: Text('$page페이지')),
-                                            ),
+              child: LayoutBuilder(builder: (context, constraints) {
+                const tileWidth = 112.0;
+                const tileGap = 12.0;
+                final columns = math.max(
+                  1,
+                  math.min(
+                    pageCount,
+                    ((constraints.maxWidth + tileGap) / (tileWidth + tileGap))
+                        .floor(),
+                  ),
+                );
+                final gridWidth = math.min(
+                  constraints.maxWidth,
+                  columns * tileWidth + (columns - 1) * tileGap,
+                );
+                return Align(
+                  alignment: Alignment.topCenter,
+                  child: SizedBox(
+                    width: gridWidth,
+                    child: GridView.builder(
+                      itemCount: pageCount,
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: columns,
+                        mainAxisSpacing: 14,
+                        crossAxisSpacing: tileGap,
+                        childAspectRatio: .68,
+                      ),
+                      itemBuilder: (context, index) {
+                        final page = index + 1;
+                        final selected = page == selectedPage;
+                        final bookmarked = bookmarkedPages.contains(page);
+                        return DragTarget<int>(
+                          onWillAcceptWithDetails: (details) =>
+                              details.data != page,
+                          onAcceptWithDetails: (details) =>
+                              onMovePageTo(details.data, page),
+                          builder: (context, candidates, rejected) {
+                            final hovering = candidates.isNotEmpty;
+                            return Semantics(
+                              button: true,
+                              selected: selected,
+                              label: '$page페이지',
+                              child: InkWell(
+                                onTap: () => onPageSelected(page),
+                                onLongPress: () =>
+                                    _showPageActions(context, page),
+                                borderRadius: BorderRadius.circular(6),
+                                child: Column(children: [
+                                  Expanded(
+                                    child: AnimatedScale(
+                                      scale: hovering ? 1.035 : 1,
+                                      duration:
+                                          const Duration(milliseconds: 140),
+                                      curve: Curves.easeOutCubic,
+                                      child: AnimatedContainer(
+                                        duration:
+                                            const Duration(milliseconds: 150),
+                                        decoration: BoxDecoration(
+                                          color: hovering
+                                              ? scheme.primaryContainer
+                                                  .withValues(alpha: .35)
+                                              : Colors.white,
+                                          borderRadius:
+                                              BorderRadius.circular(5),
+                                          border: Border.all(
+                                            color: hovering || selected
+                                                ? scheme.primary
+                                                : scheme.outlineVariant
+                                                    .withValues(alpha: .65),
+                                            width: selected ? 1.4 : .7,
                                           ),
-                                          child: Icon(Icons.drag_indicator,
-                                              size: 14,
-                                              color: scheme.onSurfaceVariant
-                                                  .withValues(alpha: .5)),
+                                          boxShadow: const [
+                                            BoxShadow(
+                                              color: Color(0x12000000),
+                                              blurRadius: 3,
+                                              offset: Offset(0, 1),
+                                            ),
+                                          ],
+                                        ),
+                                        child: ClipRRect(
+                                          borderRadius:
+                                              BorderRadius.circular(4),
+                                          child: Stack(children: [
+                                            Positioned.fill(
+                                              child: _PageThumbnail(
+                                                documentId: documentId,
+                                                pageId: 'page_$page',
+                                                templateId: templateId,
+                                              ),
+                                            ),
+                                            Positioned(
+                                              right: 3,
+                                              top: 3,
+                                              child: LongPressDraggable<int>(
+                                                data: page,
+                                                feedback: Material(
+                                                  color: scheme.surface,
+                                                  elevation: 4,
+                                                  borderRadius:
+                                                      BorderRadius.circular(6),
+                                                  child: SizedBox(
+                                                    width: 72,
+                                                    height: 96,
+                                                    child: Center(
+                                                        child:
+                                                            Text('$page페이지')),
+                                                  ),
+                                                ),
+                                                child: Icon(
+                                                    Icons.drag_indicator,
+                                                    size: 14,
+                                                    color: scheme
+                                                        .onSurfaceVariant
+                                                        .withValues(alpha: .5)),
+                                              ),
+                                            ),
+                                            Positioned(
+                                              left: 3,
+                                              top: 3,
+                                              child: IconButton(
+                                                onPressed: () =>
+                                                    onToggleBookmark(page),
+                                                tooltip: bookmarked
+                                                    ? '북마크 해제'
+                                                    : '페이지 북마크',
+                                                padding: EdgeInsets.zero,
+                                                constraints:
+                                                    const BoxConstraints(
+                                                  minWidth: 28,
+                                                  minHeight: 28,
+                                                ),
+                                                icon: Icon(
+                                                  bookmarked
+                                                      ? Icons.bookmark_rounded
+                                                      : Icons
+                                                          .bookmark_border_rounded,
+                                                  size: 17,
+                                                  color: bookmarked
+                                                      ? scheme.primary
+                                                      : scheme.onSurfaceVariant
+                                                          .withValues(
+                                                              alpha: .62),
+                                                ),
+                                              ),
+                                            ),
+                                          ]),
                                         ),
                                       ),
-                                    ]),
+                                    ),
                                   ),
-                                ),
+                                  const SizedBox(height: 6),
+                                  Text('$page',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelMedium
+                                          ?.copyWith(
+                                            color: selected
+                                                ? scheme.primary
+                                                : scheme.onSurfaceVariant,
+                                            fontWeight: selected
+                                                ? FontWeight.w600
+                                                : FontWeight.w400,
+                                          )),
+                                  if (pageSections[page] case final section?)
+                                    Text(
+                                      section,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelSmall
+                                          ?.copyWith(
+                                            color: scheme.onSurfaceVariant,
+                                            fontSize: 9,
+                                          ),
+                                    ),
+                                ]),
                               ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text('$page',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelMedium
-                                    ?.copyWith(
-                                      color: selected
-                                          ? scheme.primary
-                                          : scheme.onSurfaceVariant,
-                                      fontWeight: selected
-                                          ? FontWeight.w600
-                                          : FontWeight.w400,
-                                    )),
-                          ]),
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                );
+              }),
             ),
           ]),
         ),
       ),
     );
+  }
+
+  Future<void> _showJumpToPage(BuildContext context) async {
+    final controller = TextEditingController(text: '$selectedPage');
+    final targetPage = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('페이지로 이동'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: InputDecoration(
+            labelText: '페이지 번호',
+            helperText: '1–$pageCount',
+          ),
+          onSubmitted: (value) {
+            final page = int.tryParse(value);
+            if (page != null && page >= 1 && page <= pageCount) {
+              Navigator.of(dialogContext).pop(page);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final page = int.tryParse(controller.text);
+              if (page != null && page >= 1 && page <= pageCount) {
+                Navigator.of(dialogContext).pop(page);
+              }
+            },
+            child: const Text('이동'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (targetPage != null) onJumpToPage(targetPage);
   }
 
   Future<void> _showPageActions(BuildContext context, int page) =>
@@ -3029,6 +4633,14 @@ class _PageNavigatorSheet extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
+              _PageActionButton(
+                icon: Icons.folder_outlined,
+                label: '섹션 지정',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  onAssignSection(page);
+                },
+              ),
               _PageActionButton(
                 enabled: page > 1,
                 icon: Icons.arrow_upward,
@@ -3057,6 +4669,14 @@ class _PageNavigatorSheet extends StatelessWidget {
                 onTap: () {
                   Navigator.of(sheetContext).pop();
                   onDuplicatePage(page);
+                },
+              ),
+              _PageActionButton(
+                icon: Icons.note_add_outlined,
+                label: '다음에 빈 페이지 삽입',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  onInsertBlankPage(page);
                 },
               ),
               _PageActionButton(
@@ -3276,6 +4896,8 @@ class _PageThumbnailState extends State<_PageThumbnail>
 class DrawingToolbar extends StatefulWidget {
   const DrawingToolbar({
     required this.selectedTool,
+    required this.penType,
+    this.penStabilization = 0,
     required this.width,
     required this.color,
     required this.highlighterOpacity,
@@ -3285,6 +4907,8 @@ class DrawingToolbar extends StatefulWidget {
     required this.lassoIncludeTexts,
     required this.lassoIncludeImages,
     required this.onToolChanged,
+    required this.onPenTypeChanged,
+    this.onPenStabilizationChanged = _ignoreStabilization,
     required this.onWidthChanged,
     required this.onColorChanged,
     required this.onHighlighterOpacityChanged,
@@ -3294,6 +4918,7 @@ class DrawingToolbar extends StatefulWidget {
     required this.onLassoIncludeTextsChanged,
     required this.onLassoIncludeImagesChanged,
     required this.onPaletteRequested,
+    this.colorPresets = const [],
     required this.shapeType,
     required this.onShapeTypeChanged,
     required this.hasSelection,
@@ -3304,12 +4929,18 @@ class DrawingToolbar extends StatefulWidget {
     required this.onShapeStyleRequested,
     required this.onCropRequested,
     required this.textBold,
+    required this.textItalic,
+    required this.textUnderline,
     required this.textAlignment,
     required this.onTextBoldChanged,
+    required this.onTextItalicChanged,
+    required this.onTextUnderlineChanged,
     required this.onTextAlignmentChanged,
     super.key,
   });
   final StrokeTool selectedTool;
+  final PenType penType;
+  final double penStabilization;
   final double width;
   final Color color;
   final double highlighterOpacity;
@@ -3319,6 +4950,8 @@ class DrawingToolbar extends StatefulWidget {
   final bool lassoIncludeTexts;
   final bool lassoIncludeImages;
   final ValueChanged<StrokeTool> onToolChanged;
+  final ValueChanged<PenType> onPenTypeChanged;
+  final ValueChanged<double> onPenStabilizationChanged;
   final ValueChanged<double> onWidthChanged;
   final ValueChanged<Color> onColorChanged;
   final ValueChanged<double> onHighlighterOpacityChanged;
@@ -3328,6 +4961,7 @@ class DrawingToolbar extends StatefulWidget {
   final ValueChanged<bool> onLassoIncludeTextsChanged;
   final ValueChanged<bool> onLassoIncludeImagesChanged;
   final VoidCallback onPaletteRequested;
+  final List<Color> colorPresets;
   final DrawingShapeType shapeType;
   final ValueChanged<DrawingShapeType> onShapeTypeChanged;
   final bool hasSelection;
@@ -3338,52 +4972,36 @@ class DrawingToolbar extends StatefulWidget {
   final VoidCallback onShapeStyleRequested;
   final VoidCallback onCropRequested;
   final bool textBold;
+  final bool textItalic;
+  final bool textUnderline;
   final String textAlignment;
   final ValueChanged<bool> onTextBoldChanged;
+  final ValueChanged<bool> onTextItalicChanged;
+  final ValueChanged<bool> onTextUnderlineChanged;
   final ValueChanged<String> onTextAlignmentChanged;
 
   @override
   State<DrawingToolbar> createState() => _DrawingToolbarState();
 }
 
-class _DrawingToolbarState extends State<DrawingToolbar> {
-  void _selectTool(StrokeTool tool) {
-    widget.onToolChanged(tool);
-  }
+void _ignoreStabilization(double _) {}
 
-  Future<void> _showInsertMenu(BuildContext context) async {
-    final choice = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(
-          MediaQuery.sizeOf(context).width - 150, 92, 12, 0),
-      color: Theme.of(context).colorScheme.surface,
-      elevation: 3,
-      popUpAnimationStyle: _toolbarPopupAnimation,
-      menuPadding: const EdgeInsets.symmetric(vertical: 4),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      items: const [
-        PopupMenuItem(
-          value: 'text',
-          height: 44,
-          child: Row(children: [
-            Icon(Icons.text_fields_rounded, size: 19),
-            SizedBox(width: 10),
-            Text('텍스트'),
-          ]),
-        ),
-        PopupMenuItem(
-          value: 'image',
-          height: 44,
-          child: Row(children: [
-            Icon(Icons.image_outlined, size: 19),
-            SizedBox(width: 10),
-            Text('이미지'),
-          ]),
-        ),
-      ],
-    );
-    if (!mounted || choice == null) return;
-    _selectTool(choice == 'text' ? StrokeTool.text : StrokeTool.image);
+class _DrawingToolbarState extends State<DrawingToolbar> {
+  // Keep the active tool's quick controls visible on entry, matching the
+  // canvas-first workflow where the selected tool is immediately adjustable.
+  bool _quickControlsVisible = true;
+
+  void _selectTool(StrokeTool tool) {
+    if (tool == widget.selectedTool) {
+      if (tool == StrokeTool.image) return;
+      setState(() => _quickControlsVisible = !_quickControlsVisible);
+      return;
+    }
+    // Writing tools need their quick controls on the first tap. A second tap
+    // remains an intentional, compact toggle once the user is already working
+    // with that tool. Image insertion has no persistent option row.
+    setState(() => _quickControlsVisible = tool != StrokeTool.image);
+    widget.onToolChanged(tool);
   }
 
   @override
@@ -3391,7 +5009,7 @@ class _DrawingToolbarState extends State<DrawingToolbar> {
     return _IntegratedEditorToolbar(
       toolbar: widget,
       onToolChanged: _selectTool,
-      onInsertTap: () => _showInsertMenu(context),
+      quickControlsVisible: _quickControlsVisible,
     ); /*
     final selectedTool = widget.selectedTool;
     final scheme = Theme.of(context).colorScheme;
@@ -3544,114 +5162,336 @@ class _IntegratedEditorToolbar extends StatelessWidget {
   const _IntegratedEditorToolbar({
     required this.toolbar,
     required this.onToolChanged,
-    required this.onInsertTap,
+    required this.quickControlsVisible,
   });
   final DrawingToolbar toolbar;
   final ValueChanged<StrokeTool> onToolChanged;
-  final VoidCallback onInsertTap;
+  final bool quickControlsVisible;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final selected = toolbar.selectedTool;
-    return Align(
-      alignment: Alignment.topCenter,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Material(
-            color: scheme.surface,
-            elevation: 2,
-            shadowColor: Colors.black.withValues(alpha: .10),
-            borderRadius: BorderRadius.circular(16),
-            clipBehavior: Clip.antiAlias,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              SizedBox(
-                height: 42,
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  physics: const BouncingScrollPhysics(),
-                  child: Row(children: [
-                    _EditorToolButton(Icons.select_all_rounded,
-                        StrokeTool.lasso, selected, onToolChanged, '올가미'),
-                    _EditorToolButton(Icons.draw_rounded, StrokeTool.pen,
-                        selected, onToolChanged, '펜'),
-                    _EditorToolButton(Icons.backspace_outlined,
-                        StrokeTool.eraser, selected, onToolChanged, '지우개'),
-                    _EditorToolButton(Icons.highlight_rounded,
-                        StrokeTool.highlighter, selected, onToolChanged, '형광펜'),
-                    _EditorToolButton(Icons.polyline_rounded,
-                        StrokeTool.shapeLine, selected, onToolChanged, '도형'),
-                    _EditorToolButton(Icons.text_fields_rounded,
-                        StrokeTool.text, selected, onToolChanged, '텍스트'),
-                    _EditorToolButton(Icons.image_rounded, StrokeTool.image,
-                        selected, onToolChanged, '이미지'),
-                    IconButton(
-                      tooltip: '삽입 도구',
-                      onPressed: onInsertTap,
-                      icon: const Icon(Icons.add_rounded),
+    return LayoutBuilder(builder: (context, constraints) {
+      if (constraints.maxWidth >= 760) {
+        return _buildTabletToolbar(context, constraints.maxWidth);
+      }
+      final availableWidth = math.max(0.0, constraints.maxWidth - 24);
+      final desiredWidth = math.max(304.0,
+          selected == StrokeTool.image ? 0.0 : _optionsWidthFor(selected) + 12);
+      final trayWidth = math.min(desiredWidth, availableWidth);
+      return Stack(clipBehavior: Clip.none, children: [
+        // Keep a stable overlay hit region so expanding quick options never
+        // moves the page or changes its drawing coordinate system.
+        SizedBox(
+          width: double.infinity,
+          height: 104,
+        ),
+        Align(
+          alignment: Alignment.topCenter,
+          child: SizedBox(
+            width: trayWidth,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Material(
+                key: const ValueKey('editor-toolbar-surface'),
+                color: scheme.brightness == Brightness.dark
+                    ? scheme.surfaceContainerHigh
+                    : scheme.surface,
+                elevation: 1.5,
+                shadowColor: Colors.black.withValues(alpha: .09),
+                borderRadius: BorderRadius.circular(15),
+                clipBehavior: Clip.antiAlias,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(15),
+                    border: Border.all(
+                      color: scheme.outlineVariant.withValues(alpha: .35),
                     ),
-                    const SizedBox(width: 12),
+                  ),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    SizedBox(
+                      height: 44,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          const SizedBox(width: 5),
+                          _EditorToolButton(
+                              StrokeTool.lasso, selected, onToolChanged, '올가미'),
+                          _EditorToolButton(
+                              StrokeTool.pen, selected, onToolChanged, '펜'),
+                          _EditorToolButton(StrokeTool.eraser, selected,
+                              onToolChanged, '지우개'),
+                          _EditorToolButton(StrokeTool.highlighter, selected,
+                              onToolChanged, '형광펜'),
+                          _EditorToolButton(StrokeTool.shapeLine, selected,
+                              onToolChanged, '도형'),
+                          _EditorToolButton(
+                              StrokeTool.text, selected, onToolChanged, '텍스트'),
+                          _EditorToolButton(
+                              StrokeTool.image, selected, onToolChanged, '이미지'),
+                          const SizedBox(width: 5),
+                        ]),
+                      ),
+                    ),
+                    if (selected != StrokeTool.image)
+                      AnimatedSize(
+                        key: ValueKey('active-options-${selected.name}'),
+                        duration: const Duration(milliseconds: 150),
+                        curve: Curves.easeOutCubic,
+                        alignment: Alignment.topCenter,
+                        child: quickControlsVisible
+                            ? Column(mainAxisSize: MainAxisSize.min, children: [
+                                Divider(
+                                  height: 1,
+                                  thickness: 1,
+                                  indent: 12,
+                                  endIndent: 12,
+                                  color: scheme.outlineVariant
+                                      .withValues(alpha: .34),
+                                ),
+                                SizedBox(
+                                  height: 44,
+                                  child: AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 140),
+                                    child: _buildOptions(selected),
+                                  ),
+                                ),
+                              ])
+                            : const SizedBox(width: 0, height: 0),
+                      ),
                   ]),
                 ),
               ),
-              Divider(
-                  height: 1,
-                  thickness: 1,
-                  color: scheme.outlineVariant.withValues(alpha: .35)),
-              ToolOptionsBar(
-                selectedTool: selected,
-                width: toolbar.width,
-                color: toolbar.color,
-                highlighterOpacity: toolbar.highlighterOpacity,
-                eraserMode: toolbar.eraserMode,
-                lassoMode: toolbar.lassoMode,
-                lassoIncludeStrokes: toolbar.lassoIncludeStrokes,
-                lassoIncludeTexts: toolbar.lassoIncludeTexts,
-                lassoIncludeImages: toolbar.lassoIncludeImages,
-                onWidthChanged: toolbar.onWidthChanged,
-                onColorChanged: toolbar.onColorChanged,
-                onHighlighterOpacityChanged:
-                    toolbar.onHighlighterOpacityChanged,
-                onEraserModeChanged: toolbar.onEraserModeChanged,
-                onLassoModeChanged: toolbar.onLassoModeChanged,
-                onLassoIncludeStrokesChanged:
-                    toolbar.onLassoIncludeStrokesChanged,
-                onLassoIncludeTextsChanged: toolbar.onLassoIncludeTextsChanged,
-                onLassoIncludeImagesChanged:
-                    toolbar.onLassoIncludeImagesChanged,
-                onPaletteRequested: toolbar.onPaletteRequested,
-                shapeType: toolbar.shapeType,
-                onShapeTypeChanged: toolbar.onShapeTypeChanged,
-                hasSelection: toolbar.hasSelection,
-                hasShapeSelection: toolbar.hasShapeSelection,
-                hasSingleImageSelection: toolbar.hasSingleImageSelection,
-                onDeleteSelection: toolbar.onDeleteSelection,
-                onDuplicateSelection: toolbar.onDuplicateSelection,
-                onShapeStyleRequested: toolbar.onShapeStyleRequested,
-                onCropRequested: toolbar.onCropRequested,
-                textBold: toolbar.textBold,
-                textAlignment: toolbar.textAlignment,
-                onTextBoldChanged: toolbar.onTextBoldChanged,
-                onTextAlignmentChanged: toolbar.onTextAlignmentChanged,
-              ),
-            ]),
+            ),
           ),
         ),
+      ]);
+    });
+  }
+
+  Widget _buildTabletToolbar(BuildContext context, double width) {
+    final scheme = Theme.of(context).colorScheme;
+    final selected = toolbar.selectedTool;
+    if (width >= 900) {
+      return SizedBox(
+        width: width,
+        height: 64,
+        child: ColoredBox(
+          color: scheme.surfaceContainerLowest,
+          child: Center(
+            child: Material(
+              key: const ValueKey('editor-toolbar-surface'),
+              color: scheme.surface,
+              elevation: 1,
+              shadowColor: Colors.black.withValues(alpha: .08),
+              borderRadius: BorderRadius.circular(14),
+              clipBehavior: Clip.antiAlias,
+              child: Container(
+                width: math.min(width - 48, 790),
+                height: 52,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: scheme.outlineVariant.withValues(alpha: .55),
+                  ),
+                ),
+                child: Row(children: [
+                  for (final entry in const [
+                    (StrokeTool.lasso, '올가미'),
+                    (StrokeTool.pen, '펜'),
+                    (StrokeTool.eraser, '지우개'),
+                    (StrokeTool.highlighter, '형광펜'),
+                    (StrokeTool.shapeLine, '도형'),
+                    (StrokeTool.text, '텍스트'),
+                    (StrokeTool.image, '이미지'),
+                  ]) ...[
+                    _EditorToolButton(
+                        entry.$1, selected, onToolChanged, entry.$2,
+                        compact: true),
+                    const SizedBox(width: 3),
+                  ],
+                  Container(
+                    width: 1,
+                    height: 24,
+                    margin: const EdgeInsets.symmetric(horizontal: 9),
+                    color: scheme.outlineVariant,
+                  ),
+                  Expanded(
+                    child: Center(
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 150),
+                        switchInCurve: Curves.easeOutCubic,
+                        switchOutCurve: Curves.easeInCubic,
+                        child: selected == StrokeTool.image ||
+                                !quickControlsVisible
+                            ? Text(
+                                selected == StrokeTool.image
+                                    ? '페이지를 탭해 이미지 배치'
+                                    : '도구를 다시 탭해 옵션 열기',
+                                key: const ValueKey('toolbar-hint'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelMedium
+                                    ?.copyWith(color: scheme.onSurfaceVariant),
+                              )
+                            : SizedBox(
+                                width: 390,
+                                child: _buildOptions(selected),
+                              ),
+                      ),
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return SizedBox(
+      width: width,
+      height: 92,
+      child: Material(
+        key: const ValueKey('editor-toolbar-surface'),
+        color: scheme.surface,
+        child: Column(children: [
+          SizedBox(
+            height: 48,
+            child: Center(
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                for (final entry in const [
+                  (StrokeTool.lasso, '올가미'),
+                  (StrokeTool.pen, '펜'),
+                  (StrokeTool.eraser, '지우개'),
+                  (StrokeTool.highlighter, '형광펜'),
+                  (StrokeTool.shapeLine, '도형'),
+                  (StrokeTool.text, '텍스트'),
+                  (StrokeTool.image, '이미지'),
+                ]) ...[
+                  _EditorToolButton(entry.$1, selected, onToolChanged, entry.$2,
+                      compact: true),
+                  const SizedBox(width: 8),
+                ],
+              ]),
+            ),
+          ),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: scheme.outlineVariant.withValues(alpha: .65),
+                ),
+              ),
+            ),
+            child: SizedBox(
+              height: 44,
+              child: Center(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (selected != StrokeTool.image)
+                    AnimatedSize(
+                      key: ValueKey('active-options-${selected.name}'),
+                      duration: const Duration(milliseconds: 150),
+                      child: quickControlsVisible
+                          ? SizedBox(
+                              width: math.min(
+                                  width - 38,
+                                  math.max(
+                                      390, _optionsWidthFor(selected) + 16)),
+                              child: _buildOptions(selected),
+                            )
+                          : const SizedBox(width: 0, height: 0),
+                    ),
+                  if (selected == StrokeTool.image || !quickControlsVisible)
+                    Text(
+                      selected == StrokeTool.image
+                          ? '이미지를 탭하여 페이지에 배치'
+                          : '도구를 다시 탭해 빠른 옵션 열기',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                    ),
+                ]),
+              ),
+            ),
+          ),
+        ]),
       ),
     );
   }
+
+  Widget _buildOptions(StrokeTool selected) => ToolOptionsBar(
+        key: ValueKey(selected),
+        selectedTool: selected,
+        penType: toolbar.penType,
+        penStabilization: toolbar.penStabilization,
+        width: toolbar.width,
+        color: toolbar.color,
+        highlighterOpacity: toolbar.highlighterOpacity,
+        eraserMode: toolbar.eraserMode,
+        lassoMode: toolbar.lassoMode,
+        lassoIncludeStrokes: toolbar.lassoIncludeStrokes,
+        lassoIncludeTexts: toolbar.lassoIncludeTexts,
+        lassoIncludeImages: toolbar.lassoIncludeImages,
+        onWidthChanged: toolbar.onWidthChanged,
+        onPenTypeChanged: toolbar.onPenTypeChanged,
+        onPenStabilizationChanged: toolbar.onPenStabilizationChanged,
+        onColorChanged: toolbar.onColorChanged,
+        onHighlighterOpacityChanged: toolbar.onHighlighterOpacityChanged,
+        onEraserModeChanged: toolbar.onEraserModeChanged,
+        onLassoModeChanged: toolbar.onLassoModeChanged,
+        onLassoIncludeStrokesChanged: toolbar.onLassoIncludeStrokesChanged,
+        onLassoIncludeTextsChanged: toolbar.onLassoIncludeTextsChanged,
+        onLassoIncludeImagesChanged: toolbar.onLassoIncludeImagesChanged,
+        onPaletteRequested: toolbar.onPaletteRequested,
+        colorPresets: toolbar.colorPresets,
+        shapeType: toolbar.shapeType,
+        onShapeTypeChanged: toolbar.onShapeTypeChanged,
+        hasSelection: toolbar.hasSelection,
+        hasShapeSelection: toolbar.hasShapeSelection,
+        hasSingleImageSelection: toolbar.hasSingleImageSelection,
+        onDeleteSelection: toolbar.onDeleteSelection,
+        onDuplicateSelection: toolbar.onDuplicateSelection,
+        onShapeStyleRequested: toolbar.onShapeStyleRequested,
+        onCropRequested: toolbar.onCropRequested,
+        textBold: toolbar.textBold,
+        textItalic: toolbar.textItalic,
+        textUnderline: toolbar.textUnderline,
+        textAlignment: toolbar.textAlignment,
+        onTextBoldChanged: toolbar.onTextBoldChanged,
+        onTextItalicChanged: toolbar.onTextItalicChanged,
+        onTextUnderlineChanged: toolbar.onTextUnderlineChanged,
+        onTextAlignmentChanged: toolbar.onTextAlignmentChanged,
+      );
+
+  double _optionsWidthFor(StrokeTool tool) => switch (tool) {
+        StrokeTool.pen => 376,
+        StrokeTool.highlighter => 320,
+        StrokeTool.eraser => 272,
+        StrokeTool.lasso => 220,
+        StrokeTool.shapeLine ||
+        StrokeTool.shapeArrow ||
+        StrokeTool.shapeRectangle ||
+        StrokeTool.shapeEllipse ||
+        StrokeTool.shapeTriangle =>
+          248,
+        StrokeTool.text => 256,
+        StrokeTool.image => 160,
+      };
 }
 
 class _EditorToolButton extends StatelessWidget {
-  const _EditorToolButton(
-      this.icon, this.tool, this.selectedTool, this.onTap, this.label);
-  final IconData icon;
+  const _EditorToolButton(this.tool, this.selectedTool, this.onTap, this.label,
+      {this.compact = false});
   final StrokeTool tool;
   final StrokeTool selectedTool;
   final ValueChanged<StrokeTool> onTap;
   final String label;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -3669,44 +5509,51 @@ class _EditorToolButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(10),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            width: 40,
-            height: 36,
+            width: compact ? 38 : 40,
+            height: compact ? 38 : 40,
             margin: const EdgeInsets.symmetric(horizontal: 1),
             decoration: BoxDecoration(
               color: isSelected
-                  ? scheme.primaryContainer.withValues(alpha: .82)
+                  ? scheme.primaryContainer.withValues(alpha: .68)
                   : null,
-              border: isSelected
-                  ? Border.all(
-                      color: scheme.primary.withValues(alpha: .12), width: 1)
-                  : null,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(9),
             ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Icon(icon,
-                    size: 21,
-                    color:
-                        isSelected ? scheme.primary : scheme.onSurfaceVariant),
-                if (isSelected)
-                  Positioned(
-                    bottom: 2,
-                    child: Container(
-                      width: 12,
-                      height: 2,
-                      decoration: BoxDecoration(
-                        color: scheme.primary,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-              ],
+            child: _EditorToolIcon(
+              tool: tool,
+              color: isSelected ? scheme.primary : scheme.onSurfaceVariant,
             ),
           ),
         ),
       ),
     );
+  }
+}
+
+class _EditorToolIcon extends StatelessWidget {
+  const _EditorToolIcon({required this.tool, required this.color});
+  final StrokeTool tool;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    // A single professional, light-weight icon family gives the tool deck a
+    // consistent optical size. These are original Phosphor icons, not copied
+    // product assets.
+    final icon = switch (tool) {
+      StrokeTool.pen => PhosphorIconsLight.penNib,
+      StrokeTool.highlighter => PhosphorIconsLight.highlighter,
+      StrokeTool.eraser => PhosphorIconsLight.eraser,
+      StrokeTool.lasso => PhosphorIconsLight.lasso,
+      StrokeTool.shapeLine ||
+      StrokeTool.shapeArrow ||
+      StrokeTool.shapeRectangle ||
+      StrokeTool.shapeEllipse ||
+      StrokeTool.shapeTriangle =>
+        PhosphorIconsLight.shapes,
+      StrokeTool.text => PhosphorIconsLight.textT,
+      StrokeTool.image => PhosphorIconsLight.image,
+    };
+    return Icon(icon, size: 19, color: color);
   }
 }
 
@@ -3818,6 +5665,8 @@ class _CategoryToolButton extends StatelessWidget {
 class ToolOptionsBar extends StatelessWidget {
   const ToolOptionsBar(
       {required this.selectedTool,
+      required this.penType,
+      required this.penStabilization,
       required this.width,
       required this.color,
       required this.highlighterOpacity,
@@ -3827,6 +5676,8 @@ class ToolOptionsBar extends StatelessWidget {
       required this.lassoIncludeTexts,
       required this.lassoIncludeImages,
       required this.onWidthChanged,
+      required this.onPenTypeChanged,
+      required this.onPenStabilizationChanged,
       required this.onColorChanged,
       required this.onHighlighterOpacityChanged,
       required this.onEraserModeChanged,
@@ -3835,6 +5686,7 @@ class ToolOptionsBar extends StatelessWidget {
       required this.onLassoIncludeTextsChanged,
       required this.onLassoIncludeImagesChanged,
       required this.onPaletteRequested,
+      this.colorPresets = const [],
       required this.shapeType,
       required this.onShapeTypeChanged,
       required this.hasSelection,
@@ -3845,11 +5697,17 @@ class ToolOptionsBar extends StatelessWidget {
       required this.onShapeStyleRequested,
       required this.onCropRequested,
       this.textBold = false,
+      this.textItalic = false,
+      this.textUnderline = false,
       this.textAlignment = 'left',
       this.onTextBoldChanged,
+      this.onTextItalicChanged,
+      this.onTextUnderlineChanged,
       this.onTextAlignmentChanged,
       super.key});
   final StrokeTool selectedTool;
+  final PenType penType;
+  final double penStabilization;
   final double width;
   final Color color;
   final double highlighterOpacity;
@@ -3859,6 +5717,8 @@ class ToolOptionsBar extends StatelessWidget {
   final bool lassoIncludeTexts;
   final bool lassoIncludeImages;
   final ValueChanged<double> onWidthChanged;
+  final ValueChanged<PenType> onPenTypeChanged;
+  final ValueChanged<double> onPenStabilizationChanged;
   final ValueChanged<Color> onColorChanged;
   final ValueChanged<double> onHighlighterOpacityChanged;
   final ValueChanged<EraserMode> onEraserModeChanged;
@@ -3867,6 +5727,7 @@ class ToolOptionsBar extends StatelessWidget {
   final ValueChanged<bool> onLassoIncludeTextsChanged;
   final ValueChanged<bool> onLassoIncludeImagesChanged;
   final VoidCallback onPaletteRequested;
+  final List<Color> colorPresets;
   final DrawingShapeType shapeType;
   final ValueChanged<DrawingShapeType> onShapeTypeChanged;
   final bool hasSelection;
@@ -3877,8 +5738,12 @@ class ToolOptionsBar extends StatelessWidget {
   final VoidCallback onShapeStyleRequested;
   final VoidCallback onCropRequested;
   final bool textBold;
+  final bool textItalic;
+  final bool textUnderline;
   final String textAlignment;
   final ValueChanged<bool>? onTextBoldChanged;
+  final ValueChanged<bool>? onTextItalicChanged;
+  final ValueChanged<bool>? onTextUnderlineChanged;
   final ValueChanged<String>? onTextAlignmentChanged;
   @override
   Widget build(BuildContext context) {
@@ -3886,9 +5751,14 @@ class ToolOptionsBar extends StatelessWidget {
       return PenOptionsBar(
           width: width,
           color: color,
+          penType: penType,
+          stabilization: penStabilization,
           onWidthChanged: onWidthChanged,
+          onPenTypeChanged: onPenTypeChanged,
+          onStabilizationChanged: onPenStabilizationChanged,
           onColorChanged: onColorChanged,
-          onPaletteRequested: onPaletteRequested);
+          onPaletteRequested: onPaletteRequested,
+          colorPresets: colorPresets);
     }
     if (selectedTool == StrokeTool.highlighter) {
       return HighlighterOptionsBar(
@@ -3898,7 +5768,8 @@ class ToolOptionsBar extends StatelessWidget {
           onWidthChanged: onWidthChanged,
           onColorChanged: onColorChanged,
           onOpacityChanged: onHighlighterOpacityChanged,
-          onPaletteRequested: onPaletteRequested);
+          onPaletteRequested: onPaletteRequested,
+          colorPresets: colorPresets);
     }
     if (selectedTool == StrokeTool.eraser) {
       return EraserOptionsBar(
@@ -3909,10 +5780,14 @@ class ToolOptionsBar extends StatelessWidget {
       );
     }
     if (selectedTool == StrokeTool.image) {
-      return _ContextActionRow(
-        icon: Icons.crop_outlined,
-        label: hasSingleImageSelection ? '이미지 자르기' : '이미지를 선택해 자르기',
-        onTap: hasSingleImageSelection ? onCropRequested : null,
+      return Center(
+        child: Tooltip(
+          message: hasSingleImageSelection ? '이미지 자르기' : '이미지를 선택한 뒤 자르기',
+          child: IconButton(
+            onPressed: hasSingleImageSelection ? onCropRequested : null,
+            icon: const Icon(Icons.crop_outlined, size: 19),
+          ),
+        ),
       );
     }
     if (_isShapeTool(selectedTool)) {
@@ -3950,8 +5825,12 @@ class ToolOptionsBar extends StatelessWidget {
         onColorChanged: onColorChanged,
         onPaletteRequested: onPaletteRequested,
         bold: textBold,
+        italic: textItalic,
+        underline: textUnderline,
         alignment: textAlignment,
         onBoldChanged: onTextBoldChanged,
+        onItalicChanged: onTextItalicChanged,
+        onUnderlineChanged: onTextUnderlineChanged,
         onAlignmentChanged: onTextAlignmentChanged);
   }
 
@@ -3969,16 +5848,26 @@ class PenOptionsBar extends StatelessWidget {
   const PenOptionsBar({
     required this.width,
     required this.color,
+    required this.penType,
+    required this.stabilization,
     required this.onWidthChanged,
+    required this.onPenTypeChanged,
+    required this.onStabilizationChanged,
     required this.onColorChanged,
     required this.onPaletteRequested,
+    this.colorPresets = const [],
     super.key,
   });
   final double width;
   final Color color;
+  final PenType penType;
+  final double stabilization;
   final ValueChanged<double> onWidthChanged;
+  final ValueChanged<PenType> onPenTypeChanged;
+  final ValueChanged<double> onStabilizationChanged;
   final ValueChanged<Color> onColorChanged;
   final VoidCallback onPaletteRequested;
+  final List<Color> colorPresets;
 
   @override
   Widget build(BuildContext context) => _InkOptionsLayout(
@@ -3991,7 +5880,126 @@ class PenOptionsBar extends StatelessWidget {
         onWidthChanged: onWidthChanged,
         onColorChanged: onColorChanged,
         onPaletteRequested: onPaletteRequested,
+        colorPresets: colorPresets,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _PenTypeButton(value: penType, onChanged: onPenTypeChanged),
+            _StabilizationButton(
+              value: stabilization,
+              onChanged: onStabilizationChanged,
+            ),
+          ],
+        ),
       );
+}
+
+class _StabilizationButton extends StatelessWidget {
+  const _StabilizationButton({required this.value, required this.onChanged});
+
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PopupMenuButton<double>(
+      tooltip: '필기 안정화',
+      padding: EdgeInsets.zero,
+      elevation: 3,
+      color: scheme.surface,
+      popUpAnimationStyle: _toolbarPopupAnimation,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      onSelected: onChanged,
+      itemBuilder: (_) => const [
+        PopupMenuItem(value: 0, height: 40, child: Text('안정화 끔')),
+        PopupMenuItem(value: .25, height: 40, child: Text('안정화 낮음')),
+        PopupMenuItem(value: .45, height: 40, child: Text('안정화 중간')),
+        PopupMenuItem(value: .6, height: 40, child: Text('안정화 높음')),
+      ],
+      child: Semantics(
+        button: true,
+        label: '필기 안정화 ${_label(value)}',
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(
+            Icons.auto_awesome_motion_outlined,
+            size: 18,
+            color: value > 0 ? scheme.primary : scheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _label(double value) => switch (value) {
+        0 => '끔',
+        .25 => '낮음',
+        .45 => '중간',
+        _ => '높음',
+      };
+}
+
+/// Compact type picker: it exposes only already-rendered pen behavior and
+/// keeps the quick deck focused on width and color.
+class _PenTypeButton extends StatelessWidget {
+  const _PenTypeButton({required this.value, required this.onChanged});
+
+  final PenType value;
+  final ValueChanged<PenType> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PopupMenuButton<PenType>(
+      tooltip: '펜 종류',
+      padding: EdgeInsets.zero,
+      elevation: 3,
+      color: scheme.surface,
+      popUpAnimationStyle: _toolbarPopupAnimation,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      onSelected: onChanged,
+      itemBuilder: (context) => PenType.values
+          .map(
+            (type) => PopupMenuItem<PenType>(
+              value: type,
+              height: 40,
+              child: Row(children: [
+                Icon(_iconFor(type), size: 18),
+                const SizedBox(width: 10),
+                Text(_labelFor(type)),
+                const Spacer(),
+                if (type == value)
+                  Icon(Icons.check_rounded, size: 18, color: scheme.primary),
+              ]),
+            ),
+          )
+          .toList(),
+      child: Semantics(
+        button: true,
+        label: '펜 종류: ${_labelFor(value)}',
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child:
+              Icon(_iconFor(value), size: 18, color: scheme.onSurfaceVariant),
+        ),
+      ),
+    );
+  }
+
+  IconData _iconFor(PenType type) => switch (type) {
+        PenType.ballpoint => PhosphorIconsLight.penNib,
+        PenType.fountain => PhosphorIconsLight.penNib,
+        PenType.pencil => PhosphorIconsLight.pencil,
+        PenType.marker => PhosphorIconsLight.markerCircle,
+      };
+
+  String _labelFor(PenType type) => switch (type) {
+        PenType.ballpoint => '볼펜',
+        PenType.fountain => '만년필',
+        PenType.pencil => '연필',
+        PenType.marker => '마커',
+      };
 }
 
 class HighlighterOptionsBar extends StatelessWidget {
@@ -4003,6 +6011,7 @@ class HighlighterOptionsBar extends StatelessWidget {
     required this.onColorChanged,
     required this.onOpacityChanged,
     required this.onPaletteRequested,
+    this.colorPresets = const [],
     super.key,
   });
   final double width;
@@ -4012,6 +6021,7 @@ class HighlighterOptionsBar extends StatelessWidget {
   final ValueChanged<Color> onColorChanged;
   final ValueChanged<double> onOpacityChanged;
   final VoidCallback onPaletteRequested;
+  final List<Color> colorPresets;
 
   @override
   Widget build(BuildContext context) => _InkOptionsLayout(
@@ -4024,6 +6034,7 @@ class HighlighterOptionsBar extends StatelessWidget {
         onWidthChanged: onWidthChanged,
         onColorChanged: onColorChanged,
         onPaletteRequested: onPaletteRequested,
+        colorPresets: colorPresets,
         trailing: _OpacityButton(value: opacity, onChanged: onOpacityChanged),
       );
 }
@@ -4416,22 +6427,8 @@ class LassoOptionsBar extends StatelessWidget {
               child: Icon(Icons.tune_outlined, size: 18),
             ),
           ),
-          if (hasSelection) ...[
-            IconButton(
-                onPressed: onDuplicateSelection,
-                tooltip: '선택 항목 복제',
-                icon: const Icon(Icons.content_copy_outlined, size: 20)),
-            if (hasShapeSelection)
-              IconButton(
-                  onPressed: onShapeStyleRequested,
-                  tooltip: '선택한 도형 스타일',
-                  icon: const Icon(Icons.tune_rounded, size: 20)),
-            IconButton(
-                onPressed: onDeleteSelection,
-                tooltip: '선택 항목 삭제',
-                color: Theme.of(context).colorScheme.error,
-                icon: const Icon(Icons.delete_outline, size: 20)),
-          ],
+          // Object actions live in the contextual menu anchored to the
+          // selection bounds, avoiding a duplicate action row in the toolbar.
         ]),
       );
 
@@ -4529,8 +6526,12 @@ class TextOptionsBar extends StatelessWidget {
     required this.onColorChanged,
     required this.onPaletteRequested,
     this.bold = false,
+    this.italic = false,
+    this.underline = false,
     this.alignment = 'left',
     this.onBoldChanged,
+    this.onItalicChanged,
+    this.onUnderlineChanged,
     this.onAlignmentChanged,
     super.key,
   });
@@ -4540,8 +6541,12 @@ class TextOptionsBar extends StatelessWidget {
   final ValueChanged<Color> onColorChanged;
   final VoidCallback onPaletteRequested;
   final bool bold;
+  final bool italic;
+  final bool underline;
   final String alignment;
   final ValueChanged<bool>? onBoldChanged;
+  final ValueChanged<bool>? onItalicChanged;
+  final ValueChanged<bool>? onUnderlineChanged;
   final ValueChanged<String>? onAlignmentChanged;
 
   @override
@@ -4557,8 +6562,12 @@ class TextOptionsBar extends StatelessWidget {
         onPaletteRequested: onPaletteRequested,
         trailing: _TextFormattingButton(
           bold: bold,
+          italic: italic,
+          underline: underline,
           alignment: alignment,
           onBoldChanged: onBoldChanged,
+          onItalicChanged: onItalicChanged,
+          onUnderlineChanged: onUnderlineChanged,
           onAlignmentChanged: onAlignmentChanged,
         ),
         widthSuffix: 'pt',
@@ -4568,13 +6577,21 @@ class TextOptionsBar extends StatelessWidget {
 class _TextFormattingButton extends StatelessWidget {
   const _TextFormattingButton({
     required this.bold,
+    required this.italic,
+    required this.underline,
     required this.alignment,
     required this.onBoldChanged,
+    required this.onItalicChanged,
+    required this.onUnderlineChanged,
     required this.onAlignmentChanged,
   });
   final bool bold;
+  final bool italic;
+  final bool underline;
   final String alignment;
   final ValueChanged<bool>? onBoldChanged;
+  final ValueChanged<bool>? onItalicChanged;
+  final ValueChanged<bool>? onUnderlineChanged;
   final ValueChanged<String>? onAlignmentChanged;
 
   @override
@@ -4587,10 +6604,15 @@ class _TextFormattingButton extends StatelessWidget {
         menuPadding: const EdgeInsets.symmetric(vertical: 4),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         onSelected: (value) {
-          if (value == 'bold') {
-            onBoldChanged?.call(!bold);
-          } else {
-            onAlignmentChanged?.call(value);
+          switch (value) {
+            case 'bold':
+              onBoldChanged?.call(!bold);
+            case 'italic':
+              onItalicChanged?.call(!italic);
+            case 'underline':
+              onUnderlineChanged?.call(!underline);
+            default:
+              onAlignmentChanged?.call(value);
           }
         },
         itemBuilder: (_) => [
@@ -4607,6 +6629,40 @@ class _TextFormattingButton extends StatelessWidget {
               const Text('굵게'),
               const Spacer(),
               if (bold)
+                Icon(Icons.check_rounded,
+                    size: 18, color: Theme.of(context).colorScheme.primary),
+            ]),
+          ),
+          PopupMenuItem(
+            value: 'italic',
+            height: 40,
+            child: Row(children: [
+              Icon(Icons.format_italic_rounded,
+                  size: 18,
+                  color: italic
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.onSurfaceVariant),
+              const SizedBox(width: 10),
+              const Text('기울임'),
+              const Spacer(),
+              if (italic)
+                Icon(Icons.check_rounded,
+                    size: 18, color: Theme.of(context).colorScheme.primary),
+            ]),
+          ),
+          PopupMenuItem(
+            value: 'underline',
+            height: 40,
+            child: Row(children: [
+              Icon(Icons.format_underline_rounded,
+                  size: 18,
+                  color: underline
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.onSurfaceVariant),
+              const SizedBox(width: 10),
+              const Text('밑줄'),
+              const Spacer(),
+              if (underline)
                 Icon(Icons.check_rounded,
                     size: 18, color: Theme.of(context).colorScheme.primary),
             ]),
@@ -4655,6 +6711,7 @@ class _InkOptionsLayout extends StatelessWidget {
     required this.onWidthChanged,
     required this.onColorChanged,
     required this.onPaletteRequested,
+    this.colorPresets = const [],
     this.trailing,
     this.widthSuffix = 'mm',
   });
@@ -4667,108 +6724,102 @@ class _InkOptionsLayout extends StatelessWidget {
   final ValueChanged<double> onWidthChanged;
   final ValueChanged<Color> onColorChanged;
   final VoidCallback onPaletteRequested;
+  final List<Color> colorPresets;
   final Widget? trailing;
   final String widthSuffix;
 
-  static const recentColors = [
-    Colors.black,
-    Color(0xff3f6f9f),
-    Color(0xffc95656),
-    Color(0xff4e8b68),
-  ];
-
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: Row(children: [
-          _WidthPresetGroup(
-            value: width,
-            values: [min, min + (max - min) * .45, max],
-            color: color,
-            semanticLabel: '$label 굵기 프리셋',
-            onChanged: onWidthChanged,
-            onDetailsRequested: () => _showWidthPopover(context),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: SizedBox(
-              width: 42,
-              child: InkWell(
-                onTap: () => _showWidthPopover(context),
-                borderRadius: BorderRadius.circular(6),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 3, vertical: 5),
-                  child: Text(
-                      widthSuffix == 'mm'
-                          ? '${(width / 4).toStringAsFixed(1)} mm'
-                          : '${width.round()} pt',
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.clip,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w500,
-                          )),
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, constraints) {
+          // Keep the complete quick-control hierarchy on normal phones, while
+          // allowing compact phones to retain all functions through the
+          // palette/popover instead of overflowing the editor toolbar.
+          final compact = constraints.maxWidth < 360;
+          final colorCount = compact ? 1 : 3;
+          final visibleColors = colorPresets.isEmpty
+              ? <Color>[color]
+              : colorPresets.take(colorCount);
+          return Padding(
+            padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12),
+            child: Row(children: [
+              _WidthPresetGroup(
+                value: width,
+                values: [min, min + (max - min) * .45, max],
+                color: color,
+                semanticLabel: '$label 굵기 프리셋',
+                onChanged: onWidthChanged,
+                onDetailsRequested: () => _showWidthPopover(context),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 3),
+                child: SizedBox(
+                  width: compact ? 36 : 42,
+                  child: InkWell(
+                    onTap: () => _showWidthPopover(context),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 2, vertical: 5),
+                      child: Text(
+                          widthSuffix == 'mm'
+                              ? '${(width / 4).toStringAsFixed(1)} mm'
+                              : '${width.round()} pt',
+                          maxLines: 1,
+                          softWrap: false,
+                          overflow: TextOverflow.clip,
+                          textAlign: TextAlign.center,
+                          style:
+                              Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                    fontWeight: FontWeight.w500,
+                                  )),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-          if (trailing != null) ...[const SizedBox(width: 4), trailing!],
-          const SizedBox(width: 6),
-          for (final swatch in recentColors.take(3))
-            Padding(
-              padding: const EdgeInsets.only(left: 6),
-              child: ColorChip(
-                color: swatch,
-                selected: swatch == color,
-                onTap: () => onColorChanged(swatch),
-              ),
-            ),
-          const SizedBox(width: 4),
-          _PaletteButton(color: color, onTap: onPaletteRequested),
-        ]),
+              if (trailing != null) ...[
+                const SizedBox(width: 3),
+                if (trailing is _OpacityButton)
+                  _OpacityButton(
+                    value: (trailing as _OpacityButton).value,
+                    onChanged: (trailing as _OpacityButton).onChanged,
+                    compact: compact,
+                  )
+                else
+                  trailing!,
+              ],
+              SizedBox(width: compact ? 3 : 6),
+              for (final swatch in visibleColors)
+                Padding(
+                  padding: EdgeInsets.only(left: compact ? 4 : 6),
+                  child: ColorChip(
+                    color: swatch,
+                    selected: swatch == color,
+                    onTap: () => swatch == color
+                        ? onPaletteRequested()
+                        : onColorChanged(swatch),
+                    onLongPress: onPaletteRequested,
+                  ),
+                ),
+              const SizedBox(width: 3),
+              _PaletteButton(color: color, onTap: onPaletteRequested),
+            ]),
+          );
+        },
       );
 
   Future<void> _showWidthPopover(BuildContext context) async {
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('$label 굵기'),
-        content: StatefulBuilder(
-          builder: (context, setDialogState) => SizedBox(
-            width: 270,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Container(
-                height: 28,
-                alignment: Alignment.center,
-                child: Container(
-                  width: 120,
-                  height: width.clamp(1, 12) / 12 * 8 + 1,
-                  decoration: BoxDecoration(
-                      color: color, borderRadius: BorderRadius.circular(8)),
-                ),
-              ),
-              Slider(
-                value: width.clamp(min, max),
-                min: min,
-                max: max,
-                onChanged: (value) {
-                  setDialogState(() {});
-                  onWidthChanged(value);
-                },
-              ),
-            ]),
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('닫기'))
-        ],
-      ),
+    await _showWidthValuePopover(
+      context,
+      title: '$label 굵기',
+      value: width,
+      min: min,
+      max: max,
+      color: color,
+      unit: widthSuffix,
+      onChanged: onWidthChanged,
     );
   }
 }
@@ -4818,11 +6869,13 @@ class ColorChip extends StatelessWidget {
     required this.color,
     required this.selected,
     required this.onTap,
+    this.onLongPress,
     super.key,
   });
   final Color color;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -4830,6 +6883,7 @@ class ColorChip extends StatelessWidget {
         selected: selected,
         label: '색상 선택',
         child: InkWell(
+          onLongPress: onLongPress,
           onTap: onTap,
           borderRadius: BorderRadius.circular(16),
           child: Container(
@@ -4859,10 +6913,305 @@ class ColorChip extends StatelessWidget {
       );
 }
 
+class _ColorPresetSelection {
+  const _ColorPresetSelection(this.presets, this.selectedColor);
+  final List<Color> presets;
+  final Color selectedColor;
+}
+
+class _ColorPresetEditorDialog extends StatefulWidget {
+  const _ColorPresetEditorDialog({
+    required this.initialPresets,
+    required this.currentColor,
+  });
+
+  final List<Color> initialPresets;
+  final Color currentColor;
+
+  @override
+  State<_ColorPresetEditorDialog> createState() =>
+      _ColorPresetEditorDialogState();
+}
+
+class _ColorPresetEditorDialogState extends State<_ColorPresetEditorDialog> {
+  static const _choices = <Color>[
+    Colors.black,
+    Color(0xff3f6f9f),
+    Color(0xffc95656),
+    Color(0xff4e8b68),
+    Color(0xffd58b3a),
+    Color(0xff8066a8),
+    Color(0xff34495e),
+    Color(0xff7b858e),
+  ];
+
+  late final List<Color> _presets = List.of(widget.initialPresets.take(8));
+  late int _selectedIndex =
+      math.max(0, _presets.indexOf(widget.currentColor)).toInt();
+
+  Future<void> _editCustomColor() async {
+    final selected = await showDialog<Color>(
+      context: context,
+      builder: (_) => _RgbColorDialog(color: _presets[_selectedIndex]),
+    );
+    if (selected != null && mounted) {
+      setState(() => _presets[_selectedIndex] = selected);
+    }
+  }
+
+  void _finish() => Navigator.pop(
+        context,
+        _ColorPresetSelection(
+          List.unmodifiable(_presets),
+          _presets[_selectedIndex.clamp(0, _presets.length - 1).toInt()],
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 340),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Expanded(
+                  child: Text('색상',
+                      style: Theme.of(context).textTheme.titleMedium),
+                ),
+                IconButton(
+                  tooltip: '닫기',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close, size: 18),
+                ),
+              ]),
+              Text('자주 쓰는 색상 · 길게 눌러 순서 변경',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      )),
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 40,
+                child: ReorderableListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  buildDefaultDragHandles: false,
+                  itemCount: _presets.length,
+                  onReorderItem: (oldIndex, newIndex) {
+                    setState(() {
+                      final moved = _presets.removeAt(oldIndex);
+                      _presets.insert(newIndex, moved);
+                      if (_selectedIndex == oldIndex) {
+                        _selectedIndex = newIndex;
+                      } else if (oldIndex < _selectedIndex &&
+                          newIndex >= _selectedIndex) {
+                        _selectedIndex--;
+                      } else if (oldIndex > _selectedIndex &&
+                          newIndex <= _selectedIndex) {
+                        _selectedIndex++;
+                      }
+                    });
+                  },
+                  itemBuilder: (context, index) {
+                    final isSelected = index == _selectedIndex;
+                    return Padding(
+                      key: ValueKey(
+                          'color-slot-$index-${_presets[index].toARGB32()}'),
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ReorderableDelayedDragStartListener(
+                        index: index,
+                        child: Semantics(
+                          button: true,
+                          selected: isSelected,
+                          label: '프리셋 색상 ${index + 1}',
+                          child: InkWell(
+                            onTap: () => setState(() => _selectedIndex = index),
+                            borderRadius: BorderRadius.circular(20),
+                            child: Container(
+                              width: 38,
+                              height: 38,
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: isSelected
+                                      ? scheme.primary
+                                      : scheme.outlineVariant
+                                          .withValues(alpha: .6),
+                                  width: isSelected ? 1.5 : 1,
+                                ),
+                              ),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: _presets[index],
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text('기본 색상', style: Theme.of(context).textTheme.labelMedium),
+              const SizedBox(height: 10),
+              Wrap(spacing: 10, runSpacing: 10, children: [
+                for (final choice in _choices)
+                  ColorChip(
+                    color: choice,
+                    selected: _presets[_selectedIndex] == choice,
+                    onTap: () => setState(() {
+                      _presets[_selectedIndex] = choice;
+                    }),
+                  ),
+              ]),
+              const SizedBox(height: 16),
+              Row(children: [
+                TextButton.icon(
+                  onPressed: _editCustomColor,
+                  icon: const Icon(Icons.colorize_rounded, size: 16),
+                  label: const Text('직접 색상'),
+                ),
+                if (_presets.length < 8)
+                  IconButton(
+                    tooltip: '프리셋 추가',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () {
+                      final next = _choices.firstWhere(
+                        (candidate) => !_presets.contains(candidate),
+                        orElse: () => _choices.first,
+                      );
+                      setState(() {
+                        _presets.add(next);
+                        _selectedIndex = _presets.length - 1;
+                      });
+                    },
+                    icon:
+                        const Icon(Icons.add_circle_outline_rounded, size: 20),
+                  ),
+                const Spacer(),
+                FilledButton(onPressed: _finish, child: const Text('적용')),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RgbColorDialog extends StatefulWidget {
+  const _RgbColorDialog({required this.color});
+  final Color color;
+
+  @override
+  State<_RgbColorDialog> createState() => _RgbColorDialogState();
+}
+
+class _RgbColorDialogState extends State<_RgbColorDialog> {
+  late double _red = widget.color.r * 255;
+  late double _green = widget.color.g * 255;
+  late double _blue = widget.color.b * 255;
+
+  Color get _color => Color.fromARGB(
+        255,
+        _red.round(),
+        _green.round(),
+        _blue.round(),
+      );
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text('사용자 색상'),
+        content: SizedBox(
+          width: 280,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: _color,
+                shape: BoxShape.circle,
+                border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant),
+              ),
+            ),
+            const SizedBox(height: 8),
+            _RgbSlider(
+              label: 'R',
+              value: _red,
+              color: Colors.red,
+              onChanged: (value) => setState(() => _red = value),
+            ),
+            _RgbSlider(
+              label: 'G',
+              value: _green,
+              color: Colors.green,
+              onChanged: (value) => setState(() => _green = value),
+            ),
+            _RgbSlider(
+              label: 'B',
+              value: _blue,
+              color: Colors.blue,
+              onChanged: (value) => setState(() => _blue = value),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context), child: const Text('취소')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, _color),
+              child: const Text('적용')),
+        ],
+      );
+}
+
+class _RgbSlider extends StatelessWidget {
+  const _RgbSlider({
+    required this.label,
+    required this.value,
+    required this.color,
+    required this.onChanged,
+  });
+  final String label;
+  final double value;
+  final Color color;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        SizedBox(width: 16, child: Text(label)),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(activeTrackColor: color),
+            child: Slider(value: value, min: 0, max: 255, onChanged: onChanged),
+          ),
+        ),
+        SizedBox(width: 28, child: Text(value.round().toString())),
+      ]);
+}
+
 class _OpacityButton extends StatelessWidget {
-  const _OpacityButton({required this.value, required this.onChanged});
+  const _OpacityButton({
+    required this.value,
+    required this.onChanged,
+    this.compact = false,
+  });
   final double value;
   final ValueChanged<double> onChanged;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) => PopupMenuButton<double>(
@@ -4880,7 +7229,8 @@ class _OpacityButton extends StatelessWidget {
           _opacityItem(context, '진하게', .5),
         ],
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          padding:
+              EdgeInsets.symmetric(horizontal: compact ? 5 : 6, vertical: 4),
           decoration: BoxDecoration(
             color: Theme.of(context)
                 .colorScheme
@@ -4892,11 +7242,13 @@ class _OpacityButton extends StatelessWidget {
             Icon(Icons.opacity_outlined,
                 size: 15,
                 color: Theme.of(context).colorScheme.onSurfaceVariant),
-            const SizedBox(width: 3),
-            Text('${(value * 100).round()}%',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    )),
+            if (!compact) ...[
+              const SizedBox(width: 3),
+              Text('${(value * 100).round()}%',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      )),
+            ],
           ]),
         ),
       );
@@ -4916,23 +7268,6 @@ class _OpacityButton extends StatelessWidget {
             Icon(Icons.check_rounded,
                 size: 18, color: Theme.of(context).colorScheme.primary),
         ]),
-      );
-}
-
-class _ContextActionRow extends StatelessWidget {
-  const _ContextActionRow(
-      {required this.icon, required this.label, this.onTap});
-  final IconData icon;
-  final String label;
-  final VoidCallback? onTap;
-  @override
-  Widget build(BuildContext context) => Align(
-        alignment: Alignment.centerLeft,
-        child: TextButton.icon(
-          onPressed: onTap,
-          icon: Icon(icon, size: 19),
-          label: Text(label),
-        ),
       );
 }
 
@@ -5196,10 +7531,27 @@ class _PaletteColorButton extends StatelessWidget {
 }
 
 class _ShapeStyleSheet extends StatelessWidget {
-  const _ShapeStyleSheet(
-      {required this.onColorSelected, required this.onWidthSelected});
+  const _ShapeStyleSheet({
+    required this.color,
+    required this.strokeWidth,
+    required this.fillColor,
+    required this.isDashed,
+    required this.onColorSelected,
+    required this.onWidthSelected,
+    required this.onFillColorSelected,
+    required this.onClearFill,
+    required this.onDashedChanged,
+  });
+
+  final Color color;
+  final double strokeWidth;
+  final Color? fillColor;
+  final bool isDashed;
   final ValueChanged<Color> onColorSelected;
   final ValueChanged<double> onWidthSelected;
+  final ValueChanged<Color> onFillColorSelected;
+  final VoidCallback onClearFill;
+  final ValueChanged<bool> onDashedChanged;
 
   @override
   Widget build(BuildContext context) => SafeArea(
@@ -5233,7 +7585,7 @@ class _ShapeStyleSheet extends StatelessWidget {
                 ])
                   _PaletteColorButton(
                       color: color,
-                      selected: false,
+                      selected: color == this.color,
                       onTap: () => onColorSelected(color)),
               ]),
             ),
@@ -5250,9 +7602,56 @@ class _ShapeStyleSheet extends StatelessWidget {
                 for (final width in const [2.0, 5.0, 9.0])
                   _ShapeWidthButton(
                     width: width,
+                    selected: (width - strokeWidth).abs() < .1,
                     onTap: () => onWidthSelected(width),
                   ),
               ]),
+            ),
+            const SizedBox(height: 18),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('채우기', style: Theme.of(context).textTheme.labelLarge),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(spacing: 10, runSpacing: 8, children: [
+                _ShapeFillButton(
+                  label: '없음',
+                  selected: fillColor == null,
+                  onTap: onClearFill,
+                ),
+                for (final fill in const [
+                  Color(0xff3f6f9f),
+                  Color(0xffc95656),
+                  Color(0xff4e8b68),
+                  Color(0xffd58b3a),
+                ])
+                  _ShapeFillButton(
+                    color: fill,
+                    selected: fillColor == fill,
+                    onTap: () => onFillColorSelected(fill),
+                  ),
+              ]),
+            ),
+            const SizedBox(height: 18),
+            Align(
+              alignment: Alignment.centerLeft,
+              child:
+                  Text('선 스타일', style: Theme.of(context).textTheme.labelLarge),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: false, label: Text('실선')),
+                  ButtonSegment(value: true, label: Text('점선')),
+                ],
+                selected: {isDashed},
+                showSelectedIcon: false,
+                onSelectionChanged: (value) => onDashedChanged(value.first),
+              ),
             ),
           ]),
         ),
@@ -5260,8 +7659,13 @@ class _ShapeStyleSheet extends StatelessWidget {
 }
 
 class _ShapeWidthButton extends StatelessWidget {
-  const _ShapeWidthButton({required this.width, required this.onTap});
+  const _ShapeWidthButton({
+    required this.width,
+    required this.selected,
+    required this.onTap,
+  });
   final double width;
+  final bool selected;
   final VoidCallback onTap;
 
   @override
@@ -5270,6 +7674,12 @@ class _ShapeWidthButton extends StatelessWidget {
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(54, 42),
           padding: const EdgeInsets.symmetric(horizontal: 12),
+          backgroundColor:
+              selected ? Theme.of(context).colorScheme.primaryContainer : null,
+          side: BorderSide(
+              color: selected
+                  ? Theme.of(context).colorScheme.primary
+                  : Theme.of(context).colorScheme.outlineVariant),
         ),
         child: Container(
           width: 24,
@@ -5280,6 +7690,57 @@ class _ShapeWidthButton extends StatelessWidget {
           ),
         ),
       );
+}
+
+class _ShapeFillButton extends StatelessWidget {
+  const _ShapeFillButton({
+    this.label,
+    this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String? label;
+  final Color? color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label == null ? '채우기 색상' : '채우기 없음',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: label == null ? 38 : 54,
+          height: 38,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: color?.withValues(alpha: .22) ?? scheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selected ? scheme.primary : scheme.outlineVariant,
+              width: selected ? 1.5 : 1,
+            ),
+          ),
+          child: label == null
+              ? Container(
+                  width: 18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                )
+              : Text(label!, style: Theme.of(context).textTheme.labelSmall),
+        ),
+      ),
+    );
+  }
 }
 
 Stroke _strokeWithPoints(Stroke stroke, List<StrokePoint> points) => Stroke(
@@ -5645,49 +8106,96 @@ Future<void> _showWidthValuePopover(
   required double min,
   required double max,
   required Color color,
+  String unit = 'px',
   required ValueChanged<double> onChanged,
 }) async {
+  final anchor = context.findRenderObject();
+  final anchorBottom = anchor is RenderBox
+      ? anchor.localToGlobal(Offset(0, anchor.size.height)).dy
+      : 160.0;
+  var editedValue = value;
   await showDialog<void>(
     context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: Text(title),
-      content: SizedBox(
-        width: 270,
-        child: StatefulBuilder(
-          builder: (context, setDialogState) => Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                height: 28,
-                alignment: Alignment.center,
-                child: Container(
-                  width: 120,
-                  height: 2 + 7 * ((value - min) / (max - min)),
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+    barrierColor: Colors.black.withValues(alpha: .12),
+    builder: (dialogContext) => SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          12,
+          math.max(8, anchorBottom - MediaQuery.paddingOf(context).top + 8),
+          12,
+          0,
+        ),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: Material(
+            color: Theme.of(context).colorScheme.surface,
+            elevation: 3,
+            shadowColor: Colors.black.withValues(alpha: .12),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              width: 252,
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .outlineVariant
+                      .withValues(alpha: .4),
                 ),
               ),
-              Slider(
-                value: value.clamp(min, max),
-                min: min,
-                max: max,
-                onChanged: (next) {
-                  setDialogState(() {});
-                  onChanged(next);
-                },
+              child: StatefulBuilder(
+                builder: (context, setDialogState) => Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(children: [
+                      Expanded(
+                        child: Text(title,
+                            style: Theme.of(context).textTheme.titleSmall),
+                      ),
+                      Text(
+                          unit == 'mm'
+                              ? '${(editedValue / 4).toStringAsFixed(1)} mm'
+                              : unit == 'pt'
+                                  ? '${editedValue.round()} pt'
+                                  : '${editedValue.round()} px',
+                          style:
+                              Theme.of(context).textTheme.labelMedium?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  )),
+                    ]),
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      height: 20,
+                      child: Center(
+                        child: Container(
+                          width: 118,
+                          height: 2 + 7 * ((editedValue - min) / (max - min)),
+                          decoration: BoxDecoration(
+                            color: color,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Slider(
+                      value: editedValue.clamp(min, max),
+                      min: min,
+                      max: max,
+                      onChanged: (next) {
+                        setDialogState(() => editedValue = next);
+                        onChanged(next);
+                      },
+                    ),
+                  ],
+                ),
               ),
-            ],
+            ),
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(dialogContext),
-          child: const Text('닫기'),
-        ),
-      ],
     ),
   );
 }
@@ -5820,6 +8328,17 @@ bool _segmentsIntersect(
 
 double _orientation(StrokePoint a, StrokePoint b, StrokePoint c) =>
     (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+
+double _distanceToSegment(Offset point, Offset start, Offset end) {
+  final segment = end - start;
+  final lengthSquared = segment.distanceSquared;
+  if (lengthSquared == 0) return (point - start).distance;
+  final projection =
+      (((point - start).dx * segment.dx + (point - start).dy * segment.dy) /
+              lengthSquared)
+          .clamp(0.0, 1.0);
+  return (point - (start + segment * projection)).distance;
+}
 
 bool _pointOnSegment(StrokePoint a, StrokePoint b, StrokePoint point) =>
     point.x >= math.min(a.x, b.x) - 1e-9 &&
@@ -6284,6 +8803,10 @@ class StrokePainter extends CustomPainter {
     onOverlayPaint?.call(overlayClock?.elapsed ?? Duration.zero);
   }
 
+  /// Paint committed content without interaction overlays or runtime caches.
+  /// Export callers scale the canvas, preserving logical pen geometry.
+  void paintCommitted(Canvas canvas) => _paintStatic(canvas);
+
   void _paintStatic(Canvas canvas) {
     for (final image in images) {
       onStaticObjectPaint?.call();
@@ -6303,7 +8826,8 @@ class StrokePainter extends CustomPainter {
     }
   }
 
-  void _paintStroke(Canvas canvas, Stroke stroke) {
+  void _paintStroke(Canvas canvas, Stroke stroke,
+      {bool includeTexture = true}) {
     if (stroke.points.isEmpty) return;
     final paint = Paint()
       ..color = stroke.color.withValues(alpha: _opacityFor(stroke))
@@ -6312,6 +8836,12 @@ class StrokePainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
     if (stroke.tool == StrokeTool.eraser) {
       paint.blendMode = ui.BlendMode.clear;
+    }
+    if (includeTexture &&
+        stroke.tool == StrokeTool.pen &&
+        stroke.penType == PenType.pencil) {
+      _paintPencilStroke(canvas, stroke, paint);
+      return;
     }
     if (stroke.tool == StrokeTool.shapeLine ||
         stroke.tool == StrokeTool.shapeRectangle ||
@@ -6369,6 +8899,56 @@ class StrokePainter extends CustomPainter {
     }
   }
 
+  void _paintPencilStroke(Canvas canvas, Stroke stroke, Paint paint) {
+    final points = stroke.points;
+    final positions = points.map((point) => restorePoint(point, size)).toList();
+    var bounds = Rect.fromPoints(positions.first, positions.last);
+    for (final position in positions.skip(1)) {
+      bounds =
+          bounds.expandToInclude(Rect.fromCircle(center: position, radius: 0));
+    }
+    bounds = bounds.inflate(math.max(2, stroke.width * 1.7));
+
+    canvas.saveLayer(bounds, Paint());
+    _paintSmoothStroke(canvas, stroke, paint);
+    if (points.length == 1) {
+      canvas.drawCircle(
+        positions.first,
+        _widthFor(stroke, points.first) / 2,
+        paint,
+      );
+    }
+
+    // Stable sparse grain: one batched draw call removes tiny flecks from the
+    // pencil mark, revealing the actual paper/PDF underneath it.
+    final grain = <Offset>[];
+    for (var index = 1; index < positions.length; index += 3) {
+      final point = positions[index];
+      final seed = index * 1103515245 + points.length * 12345;
+      final angle = ((seed & 0xffff) / 0xffff) * math.pi * 2;
+      final radius = stroke.width * (.12 + ((seed >> 8) & 0xff) / 255 * .28);
+      grain.add(
+          point + Offset(math.cos(angle) * radius, math.sin(angle) * radius));
+      if (index.isOdd) {
+        grain.add(point +
+            Offset(
+                -math.sin(angle) * radius * .7, math.cos(angle) * radius * .7));
+      }
+    }
+    if (grain.isNotEmpty) {
+      canvas.drawPoints(
+        ui.PointMode.points,
+        grain,
+        Paint()
+          ..blendMode = ui.BlendMode.dstOut
+          ..color = Colors.white
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = math.max(.35, stroke.width * .11),
+      );
+    }
+    canvas.restore();
+  }
+
   void _paintActiveStroke(Canvas canvas) {
     final stroke = Stroke(
         id: 'active',
@@ -6386,17 +8966,17 @@ class StrokePainter extends CustomPainter {
       _activePath = null;
       _activeProcessedPointCount = 0;
       _activeFirstPoint = null;
-      _paintStroke(canvas, stroke);
+      _paintStroke(canvas, stroke, includeTexture: false);
       return;
     }
     if (_hasPressureVariation(stroke)) {
       // Variable-width pressure strokes need per-segment paints; retain the
       // incremental path for the common constant-pressure case.
-      _paintStroke(canvas, stroke);
+      _paintStroke(canvas, stroke, includeTexture: false);
       return;
     }
     if (!useIncrementalActivePath) {
-      _paintStroke(canvas, stroke);
+      _paintStroke(canvas, stroke, includeTexture: false);
       return;
     }
     final paint = _activePaint
@@ -6570,7 +9150,11 @@ class StrokePainter extends CustomPainter {
           style: TextStyle(
               color: text.color,
               fontSize: text.fontSize,
-              fontWeight: text.bold ? FontWeight.w700 : FontWeight.w400)),
+              fontWeight: text.bold ? FontWeight.w700 : FontWeight.w400,
+              fontStyle: text.italic ? FontStyle.italic : FontStyle.normal,
+              decoration: text.underline
+                  ? TextDecoration.underline
+                  : TextDecoration.none)),
       textDirection: TextDirection.ltr,
       maxLines: null,
       textAlign: _textAlignValue(text.alignment),
@@ -6630,15 +9214,48 @@ class StrokePainter extends CustomPainter {
     canvas.translate(center.dx, center.dy);
     canvas.rotate(shape.rotationRadians);
     canvas.translate(-center.dx, -center.dy);
+    final rect = Rect.fromPoints(start, end);
+    Path? closedPath;
+    if (shape.type == DrawingShapeType.rectangle) {
+      closedPath = Path()..addRect(rect);
+    } else if (shape.type == DrawingShapeType.ellipse) {
+      closedPath = Path()..addOval(rect);
+    } else if (shape.type == DrawingShapeType.triangle) {
+      closedPath = Path()
+        ..moveTo(rect.center.dx, rect.top)
+        ..lineTo(rect.right, rect.bottom)
+        ..lineTo(rect.left, rect.bottom)
+        ..close();
+    }
+    if (closedPath != null && shape.fillColor != null) {
+      canvas.drawPath(
+        closedPath,
+        Paint()
+          ..color = shape.fillColor!.withValues(alpha: .18)
+          ..style = PaintingStyle.fill,
+      );
+    }
     switch (shape.type) {
       case DrawingShapeType.line:
-        canvas.drawLine(start, end, paint);
+        _drawShapePath(
+            canvas,
+            Path()
+              ..moveTo(start.dx, start.dy)
+              ..lineTo(end.dx, end.dy),
+            paint,
+            dashed: shape.isDashed);
       case DrawingShapeType.rectangle:
-        canvas.drawRect(Rect.fromPoints(start, end), paint);
+        _drawShapePath(canvas, closedPath!, paint, dashed: shape.isDashed);
       case DrawingShapeType.ellipse:
-        canvas.drawOval(Rect.fromPoints(start, end), paint);
+        _drawShapePath(canvas, closedPath!, paint, dashed: shape.isDashed);
       case DrawingShapeType.arrow:
-        canvas.drawLine(start, end, paint);
+        _drawShapePath(
+            canvas,
+            Path()
+              ..moveTo(start.dx, start.dy)
+              ..lineTo(end.dx, end.dy),
+            paint,
+            dashed: shape.isDashed);
         final direction = end - start;
         if (direction.distance < .5) return;
         final angle = math.atan2(direction.dy, direction.dx);
@@ -6650,18 +9267,34 @@ class StrokePainter extends CustomPainter {
         final right = end -
             Offset(math.cos(angle + wing) * length,
                 math.sin(angle + wing) * length);
+        // Keep the arrow head solid so a dashed shaft remains recognizable.
         canvas.drawLine(end, left, paint);
         canvas.drawLine(end, right, paint);
       case DrawingShapeType.triangle:
-        final rect = Rect.fromPoints(start, end);
-        final path = Path()
-          ..moveTo(rect.center.dx, rect.top)
-          ..lineTo(rect.right, rect.bottom)
-          ..lineTo(rect.left, rect.bottom)
-          ..close();
-        canvas.drawPath(path, paint);
+        _drawShapePath(canvas, closedPath!, paint, dashed: shape.isDashed);
     }
     canvas.restore();
+  }
+
+  void _drawShapePath(Canvas canvas, Path path, Paint paint,
+      {required bool dashed}) {
+    if (!dashed) {
+      canvas.drawPath(path, paint);
+      return;
+    }
+    const dash = 8.0;
+    const gap = 5.0;
+    for (final metric in path.computeMetrics()) {
+      for (var distance = 0.0;
+          distance < metric.length;
+          distance += dash + gap) {
+        canvas.drawPath(
+          metric.extractPath(
+              distance, math.min(distance + dash, metric.length)),
+          paint,
+        );
+      }
+    }
   }
 
   void _paintLasso(Canvas canvas) {
@@ -6792,12 +9425,24 @@ class StrokePainter extends CustomPainter {
     }
   }
 
-  double _widthFor(Stroke stroke, StrokePoint point) =>
-      stroke.tool == StrokeTool.pen
-          ? stroke.width *
-              _penWidthFactor(stroke.penType) *
-              (.65 + point.pressure * .7)
-          : stroke.width;
+  double _widthFor(Stroke stroke, StrokePoint point) {
+    if (stroke.tool != StrokeTool.pen) return stroke.width;
+    // Keep ballpoint geometry byte-for-byte compatible with existing notes.
+    // The other already-persisted pen types use the same raw pressure sample,
+    // but translate it into a distinct, restrained writing character.
+    final pressureResponse = switch (stroke.penType) {
+      PenType.ballpoint => .65 + point.pressure * .7,
+      // A fountain nib has a noticeably broader pressure range without
+      // needing a new pressure curve or different stored point model.
+      PenType.fountain => .45 + point.pressure * 1.05,
+      // Pencil stays comparatively narrow and stable; texture is deliberately
+      // not faked with random pixels so replay and export remain deterministic.
+      PenType.pencil => .78 + point.pressure * .38,
+      // Marker favors a broad, even line instead of ballpoint-like tapering.
+      PenType.marker => .84 + point.pressure * .32,
+    };
+    return stroke.width * _penWidthFactor(stroke.penType) * pressureResponse;
+  }
 
   double _penWidthFactor(PenType type) => switch (type) {
         PenType.ballpoint => 1,
@@ -6809,8 +9454,10 @@ class StrokePainter extends CustomPainter {
   double _opacityFor(Stroke stroke) => stroke.tool == StrokeTool.pen
       ? stroke.opacity *
           switch (stroke.penType) {
-            PenType.pencil => .78,
-            _ => 1,
+            PenType.ballpoint => 1,
+            PenType.fountain => .98,
+            PenType.pencil => .70,
+            PenType.marker => .92,
           }
       : stroke.opacity;
   @override

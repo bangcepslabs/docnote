@@ -1348,7 +1348,7 @@ impl LayoutEngine {
 
         // 다단 레이아웃: body_area 전체에 걸치는 TopAndBottom 개체의 예약 높이
         // (한 단에만 할당되더라도 모든 단에 적용)
-        let body_wide_reserved: Vec<(usize, f64)> = if page_content.column_contents.len() > 1 {
+        let mut body_wide_reserved: Vec<(usize, f64)> = if page_content.column_contents.len() > 1 {
             self.calculate_body_wide_shape_reserved(
                 paragraphs, &page_content.column_contents, &layout.body_area,
             )
@@ -1548,6 +1548,35 @@ impl LayoutEngine {
                                 prev_zone_y_end += band / 2.0;
                             }
                             prev_zone_was_header_band = true;
+                        }
+                    }
+                }
+            }
+            // Inline tables are positioned by text flow, not absolute offsets.
+            // Capture their actual rendered bottom only after their own column
+            // has been laid out; applying it beforehand would shift the table
+            // itself. Subsequent columns reuse the existing exclusion path.
+            if col_content.column_index == 0 && zone_layout.column_areas.len() > 1 {
+                for item in &col_content.items {
+                    if let PageItem::Table { para_index, control_index } = item {
+                        if let Some(Control::Table(t)) = paragraphs.get(*para_index)
+                            .and_then(|p| p.controls.get(*control_index)) {
+                            if t.common.treat_as_char
+                                && matches!(t.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom)
+                                && hwpunit_to_px(t.common.width as i32, self.dpi) >= layout.body_area.width * 0.8 {
+                                fn table_bottom(node: &RenderNode, pi: usize, ci: usize) -> Option<f64> {
+                                    if let RenderNodeType::Table(tn) = &node.node_type {
+                                        if tn.para_index == Some(pi) && tn.control_index == Some(ci) {
+                                            return Some(node.bbox.y + node.bbox.height);
+                                        }
+                                    }
+                                    node.children.iter().find_map(|child| table_bottom(child, pi, ci))
+                                }
+                                if let Some(bottom) = table_bottom(&col_node, *para_index, *control_index) {
+                                    let bottom = bottom + hwpunit_to_px(t.outer_margin_bottom as i32, self.dpi);
+                                    body_wide_reserved.push((*para_index, bottom));
+                                }
+                            }
                         }
                     }
                 }

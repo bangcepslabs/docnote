@@ -123,6 +123,7 @@ struct TypesetState {
     /// Task #321: col 0 상단의 body-wide TopAndBottom 표/도형이 차지하는 높이 (px).
     /// col 1 이상으로 advance 시 zone_y_offset에 반영.
     pending_body_wide_top_reserve: f64,
+    inline_body_wide_reserve_active: bool,
     /// [Task #359] 다음 pi 가 vpos-reset 가드를 발동할 예정 → 현재 pi 의 fit 안전마진 비활성화.
     /// 단독 항목 페이지 발생 차단용.
     skip_safety_margin_once: bool,
@@ -199,6 +200,7 @@ impl TypesetState {
             current_zone_layout: None,
             on_first_multicolumn_page: false,
             pending_body_wide_top_reserve: 0.0,
+            inline_body_wide_reserve_active: false,
             skip_safety_margin_once: false,
             hide_empty_line: false,
             hidden_empty_lines: 0,
@@ -315,6 +317,7 @@ impl TypesetState {
         self.reset_for_new_page();
         // Task #321: 새 페이지에서는 body-wide top reserve 초기화
         self.pending_body_wide_top_reserve = 0.0;
+        self.inline_body_wide_reserve_active = false;
     }
 
     fn reset_for_new_page(&mut self) {
@@ -852,6 +855,32 @@ impl TypesetEngine {
                 }
             }
 
+            // Match layout's paragraph-position correction on pages containing
+            // a spanning inline table. Otherwise omitted trailing line spacing
+            // accumulates and fit decisions put text past the paper bottom.
+            let incoming_wide_inline = st.col_count > 1 && para.controls.iter().any(|c|
+                matches!(c, Control::Table(t) if t.common.treat_as_char
+                    && matches!(t.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom)
+                    && hwpunit_to_px(t.common.width as i32, self.dpi) >= st.layout.body_area.width * 0.8));
+            if (incoming_wide_inline || st.inline_body_wide_reserve_active) && !st.current_items.is_empty() {
+                let first_seg = st.current_items.first().and_then(|item| match item {
+                    PageItem::FullParagraph { para_index } | PageItem::Table { para_index, .. } =>
+                        paragraphs.get(*para_index).and_then(|p| p.line_segs.first()),
+                    PageItem::PartialParagraph { para_index, start_line, .. } =>
+                        paragraphs.get(*para_index).and_then(|p| p.line_segs.get(*start_line)),
+                    _ => None,
+                });
+                if let (Some(first), Some(current)) = (first_seg, para.line_segs.first()) {
+                    if current.vertical_pos >= first.vertical_pos {
+                        let top = if st.current_column > 0 { st.pending_body_wide_top_reserve } else { 0.0 };
+                        let before = styles.para_styles.get(para.para_shape_id as usize)
+                            .map(|s| s.spacing_before).unwrap_or(0.0);
+                        st.current_height = st.current_height.max(top
+                            + hwpunit_to_px(current.vertical_pos - first.vertical_pos, self.dpi) - before);
+                    }
+                }
+            }
+
             if !has_table {
                 // --- 핵심: format → fits → place/split ---
                 let formatted = self.format_paragraph(para, composed.get(para_idx), styles);
@@ -966,12 +995,29 @@ impl TypesetEngine {
             // Task #321: col 0 처리 중 body-wide TopAndBottom 표/도형이 발견되면
             // col 1+ advance 시 적용할 current_height 시작값을 미리 등록.
             // layout의 body_wide_reserved와 동일 조건으로 detect.
-            if st.col_count > 1 && st.current_column == 0 && st.pending_body_wide_top_reserve == 0.0 {
+            if st.col_count > 1 && st.current_column == 0 {
                 let reserve = compute_body_wide_top_reserve_for_para(
                     para, &st.layout, self.dpi,
                 );
-                if reserve > 0.0 {
-                    st.pending_body_wide_top_reserve = reserve;
+                st.pending_body_wide_top_reserve = st.pending_body_wide_top_reserve.max(reserve);
+                // A full-width inline table retains its absolute width when
+                // columns change. Reserve its occupied flow height in later
+                // columns too, rather than drawing their text through the table.
+                // Only whole tables placed on this page qualify (not fragments).
+                let has_wide_inline_table = st.current_items.iter().any(|item| {
+                    if let PageItem::Table { para_index, control_index } = item {
+                        if *para_index == para_idx {
+                            return matches!(para.controls.get(*control_index), Some(Control::Table(t))
+                                if t.common.treat_as_char
+                                    && matches!(t.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom)
+                                    && hwpunit_to_px(t.common.width as i32, self.dpi) >= st.layout.body_area.width * 0.8);
+                        }
+                    }
+                    false
+                });
+                if has_wide_inline_table {
+                    st.pending_body_wide_top_reserve = st.pending_body_wide_top_reserve.max(st.current_height);
+                    st.inline_body_wide_reserve_active = true;
                 }
             }
 
@@ -1487,7 +1533,7 @@ impl TypesetEngine {
             } else {
                 0.0
             };
-            let page_avail = if cursor_line == 0 {
+            let page_avail = if cursor_line == 0 || st.inline_body_wide_reserve_active {
                 (base_available - st.current_footnote_height - fn_margin
                     - st.current_height - st.current_zone_y_offset).max(0.0)
             } else {

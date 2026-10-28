@@ -656,7 +656,30 @@ pub(crate) fn reflow_line_segs(
     };
 
     if para.text.is_empty() {
-        para.line_segs = vec![make_line_seg(0, 0.0)];
+        // Empty paragraphs still carry deliberate vertical spacing and inline
+        // object height. Replacing these with a default 12px line collapses
+        // cover layouts and makes pagination underestimate inline tables.
+        let mut seg = if has_valid_orig {
+            orig.clone().unwrap()
+        } else {
+            make_line_seg(0, 0.0)
+        };
+        seg.segment_width = seg_width_hwp;
+        for ctrl in &para.controls {
+            if let crate::model::control::Control::Table(t) = ctrl {
+                if t.common.treat_as_char {
+                    let height = t.common.height as i32
+                        + i32::from(t.outer_margin_top).max(0)
+                        + i32::from(t.outer_margin_bottom).max(0);
+                    if height > seg.line_height {
+                        seg.line_height = height;
+                        seg.text_height = height;
+                        seg.baseline_distance = (height as f64 * 0.85) as i32;
+                    }
+                }
+            }
+        }
+        para.line_segs = vec![seg];
         return;
     }
 

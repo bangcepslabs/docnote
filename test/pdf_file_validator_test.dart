@@ -12,10 +12,12 @@ void main() {
   });
 
   test('0바이트 PDF를 거부한다', () async {
-    final directory = await Directory.systemTemp.createTemp('docnote_pdf_empty');
+    final directory =
+        await Directory.systemTemp.createTemp('docnote_pdf_empty');
     final file = File('${directory.path}/empty.pdf');
     await file.writeAsBytes([]);
-    expect(() => PdfFileValidator.validate(file), throwsA(isA<FormatException>()));
+    await expectLater(
+        PdfFileValidator.validate(file), throwsA(isA<FormatException>()));
     await directory.delete(recursive: true);
   });
 }

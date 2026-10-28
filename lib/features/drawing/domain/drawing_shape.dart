@@ -18,6 +18,8 @@ class DrawingShape {
     required this.endPoint,
     required this.color,
     required this.strokeWidth,
+    this.fillColor,
+    this.isDashed = false,
     this.rotationRadians = 0,
     required this.order,
     required this.createdAt,
@@ -31,6 +33,11 @@ class DrawingShape {
   final StrokePoint endPoint;
   final Color color;
   final double strokeWidth;
+
+  /// Optional interior color. Existing outline-only shapes intentionally keep
+  /// this null when restored from older documents.
+  final Color? fillColor;
+  final bool isDashed;
   final double rotationRadians;
   final int order;
   final DateTime createdAt;
@@ -40,6 +47,9 @@ class DrawingShape {
     StrokePoint? endPoint,
     Color? color,
     double? strokeWidth,
+    Color? fillColor,
+    bool clearFill = false,
+    bool? isDashed,
     double? rotationRadians,
   }) =>
       DrawingShape(
@@ -51,6 +61,8 @@ class DrawingShape {
         endPoint: endPoint ?? this.endPoint,
         color: color ?? this.color,
         strokeWidth: strokeWidth ?? this.strokeWidth,
+        fillColor: clearFill ? null : (fillColor ?? this.fillColor),
+        isDashed: isDashed ?? this.isDashed,
         rotationRadians: rotationRadians ?? this.rotationRadians,
         order: order,
         createdAt: createdAt,
@@ -65,6 +77,8 @@ class DrawingShape {
         'endPoint': endPoint.toJson(),
         'color': color.toARGB32(),
         'strokeWidth': strokeWidth,
+        if (fillColor != null) 'fillColor': fillColor!.toARGB32(),
+        'isDashed': isDashed,
         'rotationRadians': rotationRadians,
         'order': order,
         'createdAt': createdAt.toIso8601String(),
@@ -81,6 +95,10 @@ class DrawingShape {
             StrokePoint.fromJson(json['endPoint'] as Map<String, dynamic>),
         color: Color((json['color'] as num).toInt()),
         strokeWidth: (json['strokeWidth'] as num).toDouble(),
+        fillColor: json['fillColor'] == null
+            ? null
+            : Color((json['fillColor'] as num).toInt()),
+        isDashed: json['isDashed'] as bool? ?? false,
         rotationRadians: (json['rotationRadians'] as num?)?.toDouble() ?? 0,
         order: (json['order'] as num).toInt(),
         createdAt: DateTime.parse(json['createdAt'] as String),
