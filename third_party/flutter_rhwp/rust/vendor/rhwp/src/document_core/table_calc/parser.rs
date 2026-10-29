@@ -1,24 +1,34 @@
 //! 계산식 파서: 토큰 스트림 → AST
 
-use super::tokenizer::{Token, DirectionKind, tokenize};
+use super::tokenizer::{tokenize, DirectionKind, Token};
 
 /// 수식 AST 노드
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormulaNode {
     /// 숫자 리터럴
     Number(f64),
-    /// 셀 참조 (col: 'A'-'Z' 또는 '?', row: 1~ 또는 0=와일드카드)
-    CellRef { col: char, row: u32 },
+    /// 셀 참조 (col: "A"-"Z", "AA"... 또는 "?", row: 1~ 또는 와일드카드)
+    CellRef { col: String, row: u32 },
     /// 범위 참조 (시작 셀 : 끝 셀)
-    Range { start: Box<FormulaNode>, end: Box<FormulaNode> },
+    Range {
+        start: Box<FormulaNode>,
+        end: Box<FormulaNode>,
+    },
     /// 방향 지정자 (left, right, above, below)
     Direction(DirectionKind),
     /// 이항 연산 (+, -, *, /)
-    BinOp { op: BinOpKind, left: Box<FormulaNode>, right: Box<FormulaNode> },
+    BinOp {
+        op: BinOpKind,
+        left: Box<FormulaNode>,
+        right: Box<FormulaNode>,
+    },
     /// 단항 음수 (-x)
     Negate(Box<FormulaNode>),
     /// 함수 호출
-    FuncCall { name: String, args: Vec<FormulaNode> },
+    FuncCall {
+        name: String,
+        args: Vec<FormulaNode>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -144,7 +154,10 @@ impl Parser {
                         self.advance();
                         FormulaNode::Range {
                             start: Box::new(cell),
-                            end: Box::new(FormulaNode::CellRef { col: col2, row: row2 }),
+                            end: Box::new(FormulaNode::CellRef {
+                                col: col2,
+                                row: row2,
+                            }),
                         }
                     } else {
                         cell // ':' 뒤에 셀 참조가 없으면 단일 셀
@@ -205,20 +218,39 @@ mod tests {
     #[test]
     fn test_simple_add() {
         let ast = parse_formula("=1+2").unwrap();
-        assert_eq!(ast, FormulaNode::BinOp {
-            op: BinOpKind::Add,
-            left: Box::new(FormulaNode::Number(1.0)),
-            right: Box::new(FormulaNode::Number(2.0)),
-        });
+        assert_eq!(
+            ast,
+            FormulaNode::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(FormulaNode::Number(1.0)),
+                right: Box::new(FormulaNode::Number(2.0)),
+            }
+        );
     }
 
     #[test]
     fn test_cell_add() {
         let ast = parse_formula("=A1+B3").unwrap();
         match ast {
-            FormulaNode::BinOp { op: BinOpKind::Add, left, right } => {
-                assert_eq!(*left, FormulaNode::CellRef { col: 'A', row: 1 });
-                assert_eq!(*right, FormulaNode::CellRef { col: 'B', row: 3 });
+            FormulaNode::BinOp {
+                op: BinOpKind::Add,
+                left,
+                right,
+            } => {
+                assert_eq!(
+                    *left,
+                    FormulaNode::CellRef {
+                        col: "A".into(),
+                        row: 1
+                    }
+                );
+                assert_eq!(
+                    *right,
+                    FormulaNode::CellRef {
+                        col: "B".into(),
+                        row: 3
+                    }
+                );
             }
             _ => panic!("expected BinOp"),
         }
@@ -233,8 +265,20 @@ mod tests {
                 assert_eq!(args.len(), 1);
                 match &args[0] {
                     FormulaNode::Range { start, end } => {
-                        assert_eq!(**start, FormulaNode::CellRef { col: 'A', row: 1 });
-                        assert_eq!(**end, FormulaNode::CellRef { col: 'B', row: 5 });
+                        assert_eq!(
+                            **start,
+                            FormulaNode::CellRef {
+                                col: "A".into(),
+                                row: 1
+                            }
+                        );
+                        assert_eq!(
+                            **end,
+                            FormulaNode::CellRef {
+                                col: "B".into(),
+                                row: 5
+                            }
+                        );
                     }
                     _ => panic!("expected Range"),
                 }
@@ -260,10 +304,16 @@ mod tests {
         // 1+2*3 = 1+(2*3)
         let ast = parse_formula("=1+2*3").unwrap();
         match ast {
-            FormulaNode::BinOp { op: BinOpKind::Add, left, right } => {
+            FormulaNode::BinOp {
+                op: BinOpKind::Add,
+                left,
+                right,
+            } => {
                 assert_eq!(*left, FormulaNode::Number(1.0));
                 match *right {
-                    FormulaNode::BinOp { op: BinOpKind::Mul, .. } => {}
+                    FormulaNode::BinOp {
+                        op: BinOpKind::Mul, ..
+                    } => {}
                     _ => panic!("expected Mul"),
                 }
             }
@@ -276,7 +326,13 @@ mod tests {
         let ast = parse_formula("=-A1").unwrap();
         match ast {
             FormulaNode::Negate(inner) => {
-                assert_eq!(*inner, FormulaNode::CellRef { col: 'A', row: 1 });
+                assert_eq!(
+                    *inner,
+                    FormulaNode::CellRef {
+                        col: "A".into(),
+                        row: 1
+                    }
+                );
             }
             _ => panic!("expected Negate"),
         }

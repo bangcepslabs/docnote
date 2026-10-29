@@ -106,8 +106,7 @@ impl META_EXTTEXTOUT {
             fw_opts
         };
 
-        let rectangle = if fw_opts
-            .contains(&crate::wmf::parser::ExtTextOutOptions::ETO_OPAQUE)
+        let rectangle = if fw_opts.contains(&crate::wmf::parser::ExtTextOutOptions::ETO_OPAQUE)
             || fw_opts.contains(&crate::wmf::parser::ExtTextOutOptions::ETO_CLIPPED)
         {
             let (v, c) = crate::wmf::parser::Rect::parse(buf)?;
@@ -118,6 +117,16 @@ impl META_EXTTEXTOUT {
             None
         };
 
+        // `string_length` 는 i16 라 손상된 WMF 가 음수를 담을 수 있다. 음수를
+        // `as usize` 로 넓혀 `read_variable`(내부 `vec![0u8; len]`)에 넘기면
+        // capacity overflow 로 패닉한다 — #3875(POLYLINE/POLYGON)와 같은 클래스다.
+        // 아래 `dx.reserve_exact(string_length as usize)`·`0..string_length` 도
+        // 이 가드 뒤에서는 음수가 아니므로 함께 안전해진다.
+        if string_length < 0 {
+            return Err(crate::wmf::parser::ParseError::UnexpectedPattern {
+                cause: format!("The string_length field `{string_length}` must not be negative"),
+            });
+        }
         let (string, string_bytes) =
             crate::wmf::parser::read_variable(buf, string_length as usize)?;
         record_size.consume(string_bytes);
@@ -141,8 +150,7 @@ impl META_EXTTEXTOUT {
             }
         }
 
-        let (_, c) =
-            crate::wmf::parser::records::consume_remaining_bytes(buf, record_size)?;
+        let (_, c) = crate::wmf::parser::records::consume_remaining_bytes(buf, record_size)?;
         record_size.consume(c);
 
         Ok(Self {

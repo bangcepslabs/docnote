@@ -27,6 +27,16 @@ pub struct PackageItem {
 pub struct PackageInfo {
     /// 섹션 XML 파일 경로 목록 (순서 보존)
     pub section_files: Vec<String>,
+    /// 섹션별 바탕쪽 XML 파일 경로 목록.
+    ///
+    /// HWPX manifest는 masterpage 항목을 section 항목 앞에 배치하는 형태가 관찰된다.
+    /// 예: masterpage0..2, section0, masterpage3..5, section1 ...
+    pub section_master_page_files: Vec<Vec<String>>,
+    /// 바탕쪽 XML manifest 항목 목록 (id/href 보존).
+    ///
+    /// section XML의 `<hp:masterPage idRef="...">`와 manifest item id를 매칭해
+    /// 명시적으로 연결하기 위한 원본 정보다.
+    pub master_page_items: Vec<PackageItem>,
     /// BinData 항목 목록
     pub bin_data_items: Vec<PackageItem>,
 }
@@ -56,7 +66,7 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
                         // isEmbeded="0" 인 경우만 false 로 설정.
                         let mut is_embedded = true;
                         for attr in e.attributes().flatten() {
-                            match attr.key.as_ref() {
+                            match attr.key.as_ref().as_bytes() {
                                 b"id" => id = attr_value(&attr),
                                 b"href" => href = attr_value(&attr),
                                 b"media-type" => media_type = attr_value(&attr),
@@ -72,7 +82,7 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
                     }
                     b"itemref" => {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"idref" {
+                            if attr.key.as_ref().as_bytes() == b"idref" {
                                 spine_order.push(attr_value(&attr));
                             }
                         }
@@ -98,12 +108,19 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
 
     // spine에 없는 섹션도 manifest에서 추출 (fallback)
     if info.section_files.is_empty() {
-        let mut section_items: Vec<_> = all_items.iter()
+        let mut section_items: Vec<_> = all_items
+            .iter()
             .filter(|(_, href, mt, _)| mt == "application/xml" && href.contains("section"))
             .collect();
         section_items.sort_by(|a, b| a.1.cmp(&b.1));
-        info.section_files = section_items.into_iter().map(|(_, href, _, _)| href.clone()).collect();
+        info.section_files = section_items
+            .into_iter()
+            .map(|(_, href, _, _)| href.clone())
+            .collect();
     }
+
+    info.section_master_page_files = collect_section_master_pages(&all_items, &info.section_files);
+    info.master_page_items = collect_master_page_items(&all_items);
 
     // BinData 항목 추출
     // [Task #873] 기존: BinData/ 폴더 내 항목만 수집 → isEmbeded="0" (외부 file 참조)
@@ -112,7 +129,12 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
     for (id, href, media_type, is_embedded) in &all_items {
         let is_image = media_type.starts_with("image/");
         let is_bin_data_path = href.starts_with("BinData/") || href.contains("/BinData/");
-        if is_image || is_bin_data_path {
+        // [#1891] 외부 참조(isEmbeded="0")는 media-type 과 무관하게 BinData 항목이다.
+        // 원본이 "image/" 같은 퇴화 값을 갖거나 직렬화기가 octet-stream 으로 쓰는 등
+        // media-type 만으로는 판별할 수 없고, 누락 시 이후 항목의 인덱스(=bin_data_id)
+        // 가 밀려 그림 참조 전체가 어긋난다.
+        let is_external_link = !*is_embedded && media_type != "application/xml";
+        if is_image || is_bin_data_path || is_external_link {
             info.bin_data_items.push(PackageItem {
                 href: href.clone(),
                 media_type: media_type.clone(),
@@ -125,18 +147,80 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
     Ok(info)
 }
 
+fn collect_master_page_items(all_items: &[(String, String, String, bool)]) -> Vec<PackageItem> {
+    all_items
+        .iter()
+        .filter(|(_, href, media_type, _)| {
+            media_type == "application/xml" && href.to_ascii_lowercase().contains("masterpage")
+        })
+        .map(|(id, href, media_type, is_embedded)| PackageItem {
+            href: href.clone(),
+            media_type: media_type.clone(),
+            id: id.clone(),
+            is_embedded: *is_embedded,
+        })
+        .collect()
+}
+
+fn collect_section_master_pages(
+    all_items: &[(String, String, String, bool)],
+    section_files: &[String],
+) -> Vec<Vec<String>> {
+    let mut groups = vec![Vec::new(); section_files.len()];
+    if section_files.is_empty() {
+        return groups;
+    }
+
+    let mut pending: Vec<String> = Vec::new();
+    for (_, href, media_type, _) in all_items {
+        if media_type != "application/xml" {
+            continue;
+        }
+        let lower_href = href.to_ascii_lowercase();
+        if lower_href.contains("masterpage") {
+            pending.push(href.clone());
+            continue;
+        }
+        if let Some(section_idx) = section_files.iter().position(|section| section == href) {
+            if !pending.is_empty() {
+                groups[section_idx].append(&mut pending);
+            }
+        }
+    }
+
+    if groups.iter().all(|group| group.is_empty()) {
+        let mut master_pages: Vec<String> = all_items
+            .iter()
+            .filter(|(_, href, media_type, _)| {
+                media_type == "application/xml" && href.to_ascii_lowercase().contains("masterpage")
+            })
+            .map(|(_, href, _, _)| href.clone())
+            .collect();
+        master_pages.sort();
+
+        if !master_pages.is_empty() {
+            let chunk = master_pages.len().div_ceil(section_files.len());
+            for (section_idx, group) in groups.iter_mut().enumerate() {
+                let start = section_idx * chunk;
+                let end = ((section_idx + 1) * chunk).min(master_pages.len());
+                if start < end {
+                    group.extend_from_slice(&master_pages[start..end]);
+                }
+            }
+        }
+    }
+
+    groups
+}
+
 /// XML 어트리뷰트 값을 String으로 변환
 fn attr_value(attr: &quick_xml::events::attributes::Attribute) -> String {
-    String::from_utf8_lossy(&attr.value).to_string()
+    attr.value.as_ref().to_owned()
 }
 
 /// 네임스페이스 접두사를 제거하고 로컬 태그 이름을 반환
-fn local_tag_name(name: &[u8]) -> &[u8] {
-    if let Some(pos) = name.iter().position(|&b| b == b':') {
-        &name[pos + 1..]
-    } else {
-        name
-    }
+fn local_tag_name(name: &str) -> &[u8] {
+    name.rsplit(':').next().unwrap_or(name).as_bytes()
 }
 
 #[cfg(test)]
@@ -165,6 +249,7 @@ mod tests {
         assert_eq!(info.section_files.len(), 2);
         assert_eq!(info.section_files[0], "Contents/section0.xml");
         assert_eq!(info.section_files[1], "Contents/section1.xml");
+        assert_eq!(info.section_master_page_files.len(), 2);
         assert_eq!(info.bin_data_items.len(), 2);
         assert_eq!(info.bin_data_items[0].href, "BinData/image1.png");
         assert_eq!(info.bin_data_items[1].id, "image2");
@@ -200,5 +285,42 @@ mod tests {
         let info = parse_content_hpf(xml).unwrap();
         assert!(info.section_files.is_empty());
         assert!(info.bin_data_items.is_empty());
+    }
+
+    #[test]
+    fn test_parse_content_hpf_master_pages_by_manifest_order() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+  <opf:manifest>
+    <opf:item id="masterpage0" href="Contents/masterpage0.xml" media-type="application/xml"/>
+    <opf:item id="masterpage1" href="Contents/masterpage1.xml" media-type="application/xml"/>
+    <opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>
+    <opf:item id="masterpage2" href="Contents/masterpage2.xml" media-type="application/xml"/>
+    <opf:item id="section1" href="Contents/section1.xml" media-type="application/xml"/>
+  </opf:manifest>
+  <opf:spine>
+    <opf:itemref idref="section0"/>
+    <opf:itemref idref="section1"/>
+  </opf:spine>
+</opf:package>"#;
+
+        let info = parse_content_hpf(xml).unwrap();
+        assert_eq!(info.master_page_items.len(), 3);
+        assert_eq!(info.master_page_items[0].id, "masterpage0");
+        assert_eq!(info.master_page_items[0].href, "Contents/masterpage0.xml");
+        assert_eq!(info.master_page_items[1].id, "masterpage1");
+        assert_eq!(info.master_page_items[1].href, "Contents/masterpage1.xml");
+        assert_eq!(info.master_page_items[2].id, "masterpage2");
+        assert_eq!(info.master_page_items[2].href, "Contents/masterpage2.xml");
+        assert_eq!(
+            info.section_master_page_files,
+            vec![
+                vec![
+                    "Contents/masterpage0.xml".to_string(),
+                    "Contents/masterpage1.xml".to_string()
+                ],
+                vec!["Contents/masterpage2.xml".to_string()]
+            ]
+        );
     }
 }

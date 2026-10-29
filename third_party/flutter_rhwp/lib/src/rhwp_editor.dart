@@ -5091,7 +5091,8 @@ class _RhwpEditorState extends State<RhwpEditor> with TextInputClient {
       final tableParagraph =
           _readIntResult(result, 'paraIdx') ?? cursor.paragraph;
       _setTextIfChanged(_tableParagraphController, tableParagraph.toString());
-      _setTextIfChanged(_tableControlController, '0');
+      final tableControl = _readIntResult(result, 'controlIdx') ?? 0;
+      _setTextIfChanged(_tableControlController, tableControl.toString());
       _setTextIfChanged(_tableRowController, '0');
       _setTextIfChanged(_tableColumnController, '0');
       _setTextIfChanged(_tableEndRowController, '1');
@@ -6179,7 +6180,8 @@ class _RhwpEditorState extends State<RhwpEditor> with TextInputClient {
           _readIntResult(result, 'paraIdx') ?? cursor.paragraph;
       _controller.cursor = RhwpCursorPosition(
         section: cursor.section,
-        paragraph: pictureParagraph + 1,
+        paragraph: pictureParagraph,
+        offset: _readIntResult(result, 'logicalOffset') ?? cursor.offset,
       );
     });
   }

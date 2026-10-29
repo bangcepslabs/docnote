@@ -15,3 +15,6 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+[patch.crates-io]
+svg2pdf = { path = "vendor/rhwp/vendor/svg2pdf" }

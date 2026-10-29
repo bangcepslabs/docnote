@@ -2,10 +2,11 @@
 //!
 //! 렌더 트리에서 양식 개체를 좌표로 찾거나, 문서 트리에서 직접 값을 조회/설정한다.
 
+use crate::document_core::helpers::json_escape as escape_json;
 use crate::document_core::DocumentCore;
 use crate::model::control::{Control, FormType};
 use crate::model::table::Table;
-use crate::renderer::render_tree::{RenderNode, RenderNodeType, FormObjectNode};
+use crate::renderer::render_tree::{FormObjectNode, RenderNode, RenderNodeType};
 
 impl DocumentCore {
     /// 페이지 좌표에서 양식 개체를 찾는다.
@@ -24,14 +25,17 @@ impl DocumentCore {
             let form_type_str = form_type_to_str(form.form_type);
             // 셀 내부 위치 정보 직렬화
             let cell_loc_json = if let Some((tpi, tci, ci_idx, cp_idx)) = form.cell_location {
-                format!(r#","inCell":true,"tablePara":{},"tableCi":{},"cellIdx":{},"cellPara":{}"#,
-                    tpi, tci, ci_idx, cp_idx)
+                format!(
+                    r#","inCell":true,"tablePara":{},"tableCi":{},"cellIdx":{},"cellPara":{}"#,
+                    tpi, tci, ci_idx, cp_idx
+                )
             } else {
                 String::new()
             };
             // sec/para는 최상위 문단 인덱스로 반환
             // cell_location이 있으면 table_para_index를 para로 사용
-            let (ret_para, ret_ci) = if let Some((tpi, _tci, _ci_idx, _cp_idx)) = form.cell_location {
+            let (ret_para, ret_ci) = if let Some((tpi, _tci, _ci_idx, _cp_idx)) = form.cell_location
+            {
                 (tpi, form.control_index)
             } else {
                 (form.para_index, form.control_index)
@@ -46,7 +50,10 @@ impl DocumentCore {
                 form.value,
                 escape_json(&form.caption),
                 escape_json(&form.text),
-                bbox.0, bbox.1, bbox.2, bbox.3,
+                bbox.0,
+                bbox.1,
+                bbox.2,
+                bbox.3,
                 cell_loc_json,
             ))
         } else {
@@ -61,7 +68,10 @@ impl DocumentCore {
         para: usize,
         ci: usize,
     ) -> Result<String, crate::error::HwpError> {
-        let control = self.document.sections.get(sec)
+        let control = self
+            .document
+            .sections
+            .get(sec)
             .and_then(|s| s.paragraphs.get(para))
             .and_then(|p| p.controls.get(ci));
 
@@ -92,13 +102,24 @@ impl DocumentCore {
         ci: usize,
         value_json: &str,
     ) -> Result<String, crate::error::HwpError> {
-        let control = self.document.sections.get_mut(sec)
+        let control = self
+            .document
+            .sections
+            .get_mut(sec)
             .and_then(|s| s.paragraphs.get_mut(para))
             .and_then(|p| p.controls.get_mut(ci));
 
         match control {
             Some(Control::Form(f)) => {
-                apply_form_value(f, value_json);
+                apply_form_value(f, value_json)?;
+                // 원본 스트림 무효화 — serialize_section 은 raw_stream 이 있으면 원본
+                // 바이트를 그대로 반환하므로(serializer/body_text.rs), 비우지 않으면
+                // 방금 넣은 양식 값이 저장 시 통째로 사라진다. 화면은 recompose 로
+                // 갱신되니 사용자는 저장이 됐다고 믿게 된다. 누름틀 쪽
+                // set_field_value_*(field_query.rs)와 동일한 불변식이다.
+                if let Some(s) = self.document.sections.get_mut(sec) {
+                    s.raw_stream = None;
+                }
                 self.recompose_section(sec);
                 Ok(r#"{"ok":true}"#.to_string())
             }
@@ -123,18 +144,38 @@ impl DocumentCore {
         form_ci: usize,
         value_json: &str,
     ) -> Result<String, crate::error::HwpError> {
-        let form = self.document.sections.get_mut(sec)
+        let form = self
+            .document
+            .sections
+            .get_mut(sec)
             .and_then(|s| s.paragraphs.get_mut(table_para))
             .and_then(|p| p.controls.get_mut(table_ci))
-            .and_then(|c| if let Control::Table(ref mut t) = c { Some(t.as_mut()) } else { None })
+            .and_then(|c| {
+                if let Control::Table(ref mut t) = c {
+                    Some(t.as_mut())
+                } else {
+                    None
+                }
+            })
             .and_then(|t: &mut Table| t.cells.get_mut(cell_idx))
             .and_then(|cell| cell.paragraphs.get_mut(cell_para))
             .and_then(|p| p.controls.get_mut(form_ci))
-            .and_then(|c| if let Control::Form(ref mut f) = c { Some(f) } else { None });
+            .and_then(|c| {
+                if let Control::Form(ref mut f) = c {
+                    Some(f)
+                } else {
+                    None
+                }
+            });
 
         match form {
             Some(f) => {
-                apply_form_value(f, value_json);
+                apply_form_value(f, value_json)?;
+                // set_form_value_native 와 동일 — 셀 안 양식 값도 섹션 raw_stream 을
+                // 비워야 저장 시 반영된다.
+                if let Some(s) = self.document.sections.get_mut(sec) {
+                    s.raw_stream = None;
+                }
                 self.recompose_section(sec);
                 Ok(r#"{"ok":true}"#.to_string())
             }
@@ -150,7 +191,10 @@ impl DocumentCore {
         para: usize,
         ci: usize,
     ) -> Result<String, crate::error::HwpError> {
-        let control = self.document.sections.get(sec)
+        let control = self
+            .document
+            .sections
+            .get(sec)
             .and_then(|s| s.paragraphs.get(para))
             .and_then(|p| p.controls.get(ci));
 
@@ -158,20 +202,22 @@ impl DocumentCore {
             Some(Control::Form(f)) => {
                 let form_type_str = form_type_to_str(f.form_type);
                 // properties를 JSON 객체로 직렬화
-                let props: Vec<String> = f.properties.iter()
+                let props: Vec<String> = f
+                    .properties
+                    .iter()
                     .map(|(k, v)| format!(r#""{}":"{}""#, escape_json(k), escape_json(v)))
                     .collect();
                 let props_json = format!("{{{}}}", props.join(","));
 
                 // ComboBox: 스크립트에서 InsertString 항목 추출
                 let items_json = if f.form_type == FormType::ComboBox {
-                    let items = extract_combobox_items_from_script(
-                        &self.document.extra_streams, &f.name,
-                    );
+                    let items =
+                        extract_combobox_items_from_script(&self.document.extra_streams, &f.name);
                     if items.is_empty() {
                         "[]".to_string()
                     } else {
-                        let arr: Vec<String> = items.iter()
+                        let arr: Vec<String> = items
+                            .iter()
                             .map(|s| format!(r#""{}""#, escape_json(s)))
                             .collect();
                         format!("[{}]", arr.join(","))
@@ -202,20 +248,38 @@ impl DocumentCore {
 }
 
 /// form value/text/caption 적용 헬퍼
-fn apply_form_value(f: &mut crate::model::control::FormObject, value_json: &str) {
-    if let Some(v) = extract_json_int(value_json, "value") {
+fn apply_form_value(
+    f: &mut crate::model::control::FormObject,
+    value_json: &str,
+) -> Result<(), crate::error::HwpError> {
+    // 전체 JSON을 먼저 읽어 잘못된 입력의 일부만 문서에 반영하지 않는다.
+    let value: serde_json::Value = serde_json::from_str(value_json)
+        .map_err(|error| crate::error::HwpError::InvalidField(format!("양식 값 JSON: {error}")))?;
+    let fields = value.as_object().ok_or_else(|| {
+        crate::error::HwpError::InvalidField("양식 값은 JSON 객체여야 합니다".to_string())
+    })?;
+    if let Some(v) = fields
+        .get("value")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|v| i32::try_from(v).ok())
+    {
         f.value = v;
     }
-    if let Some(t) = extract_json_string(value_json, "text") {
-        f.text = t;
+    if let Some(t) = fields.get("text").and_then(serde_json::Value::as_str) {
+        f.text = t.to_string();
     }
-    if let Some(c) = extract_json_string(value_json, "caption") {
-        f.caption = c;
+    if let Some(c) = fields.get("caption").and_then(serde_json::Value::as_str) {
+        f.caption = c.to_string();
     }
+    Ok(())
 }
 
 /// 렌더 트리를 재귀 순회하여 좌표에 해당하는 FormObject 노드를 찾는다.
-fn find_form_node_at(node: &RenderNode, x: f64, y: f64) -> Option<(&FormObjectNode, (f64, f64, f64, f64))> {
+fn find_form_node_at(
+    node: &RenderNode,
+    x: f64,
+    y: f64,
+) -> Option<(&FormObjectNode, (f64, f64, f64, f64))> {
     // 자식 먼저 (더 구체적인 노드 우선)
     for child in &node.children {
         if let Some(result) = find_form_node_at(child, x, y) {
@@ -242,56 +306,17 @@ fn form_type_to_str(ft: FormType) -> &'static str {
     }
 }
 
-fn escape_json(s: &str) -> String {
-    s.replace('\\', "\\\\")
-     .replace('"', "\\\"")
-     .replace('\n', "\\n")
-     .replace('\r', "\\r")
-     .replace('\t', "\\t")
-}
-
-/// 간단한 JSON에서 정수값 추출: `"key":123`
-fn extract_json_int(json: &str, key: &str) -> Option<i32> {
-    let pattern = format!(r#""{}":"#, key);
-    if let Some(pos) = json.find(&pattern) {
-        let start = pos + pattern.len();
-        let rest = &json[start..];
-        let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
-        rest[..end].parse().ok()
-    } else {
-        None
-    }
-}
-
-/// 간단한 JSON에서 문자열값 추출: `"key":"value"`
-fn extract_json_string(json: &str, key: &str) -> Option<String> {
-    let pattern = format!(r#""{}":""#, key);
-    if let Some(pos) = json.find(&pattern) {
-        let start = pos + pattern.len();
-        let rest = &json[start..];
-        // 이스케이프되지 않은 닫는 따옴표 찾기
-        let mut end = 0;
-        let chars: Vec<char> = rest.chars().collect();
-        while end < chars.len() {
-            if chars[end] == '"' && (end == 0 || chars[end - 1] != '\\') {
-                break;
-            }
-            end += 1;
-        }
-        Some(chars[..end].iter().collect())
-    } else {
-        None
-    }
-}
-
 /// extra_streams에서 Scripts/DefaultJScript 스트림을 찾아 디코딩한다.
 /// HWP 스크립트는 zlib 압축 + UTF-16LE로 저장됨.
 fn decode_hwp_script(extra_streams: &[(String, Vec<u8>)]) -> Option<String> {
-    let data = extra_streams.iter()
+    let data = extra_streams
+        .iter()
         .find(|(path, _)| path == "/Scripts/DefaultJScript" || path == "Scripts/DefaultJScript")
         .map(|(_, data)| data)?;
 
-    if data.is_empty() { return None; }
+    if data.is_empty() {
+        return None;
+    }
 
     // zlib 해제 (raw deflate, no header)
     use std::io::Read;
@@ -302,8 +327,11 @@ fn decode_hwp_script(extra_streams: &[(String, Vec<u8>)]) -> Option<String> {
     }
 
     // UTF-16LE 디코딩
-    if decompressed.len() < 2 { return None; }
-    let u16s: Vec<u16> = decompressed.chunks_exact(2)
+    if decompressed.len() < 2 {
+        return None;
+    }
+    let u16s: Vec<u16> = decompressed
+        .chunks_exact(2)
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
     Some(String::from_utf16_lossy(&u16s))
@@ -351,10 +379,127 @@ fn parse_insert_string_args(args: &str) -> Option<(String, usize)> {
 
     // , 인덱스 추출
     let after_comma = after_quote.trim_start().strip_prefix(',')?;
-    let idx_str: String = after_comma.trim().chars()
+    let idx_str: String = after_comma
+        .trim()
+        .chars()
         .take_while(|c| c.is_ascii_digit())
         .collect();
     let idx = idx_str.parse().unwrap_or(0);
 
     Some((text, idx))
+}
+
+#[cfg(test)]
+mod tests {
+    //! 양식 값 설정의 raw_stream 무효화 회귀 테스트.
+    //!
+    //! serialize_section(serializer/body_text.rs)은 raw_stream 이 Some 이면 IR 을 무시하고
+    //! 원본 바이트를 그대로 반환한다. HWP5 파서는 모든 섹션에 raw_stream 을 채우므로
+    //! (parser/mod.rs), 양식 값 설정이 raw_stream 을 비우지 않으면 — 양식 채우기만 하고
+    //! 저장하는 표준 워크플로에서 — 입력한 값 전부가 저장 시 조용히 사라진다.
+    //! 누름틀 쪽 set_field_value_*(field_query.rs)는 같은 불변식을 이미 지킨다.
+
+    use crate::document_core::DocumentCore;
+    use crate::model::control::{Control, FormObject};
+    use crate::model::document::{Document, Section};
+    use crate::model::paragraph::Paragraph;
+    use crate::model::table::{Cell, Table};
+    use crate::serializer::body_text::serialize_section;
+
+    const SENTINEL: u8 = 0xAB;
+
+    fn core_from(doc: Document) -> DocumentCore {
+        let mut core = DocumentCore::new_empty();
+        core.document = doc;
+        core.composed = vec![Vec::new()];
+        core.dirty_sections = vec![true];
+        core.dirty_paragraphs = vec![None];
+        core
+    }
+
+    /// 파싱된 문서를 흉내낸다 — 섹션이 원본 스트림 바이트를 물고 있는 상태.
+    fn section_with_raw_stream(paragraphs: Vec<Paragraph>) -> Section {
+        Section {
+            paragraphs,
+            raw_stream: Some(vec![SENTINEL; 64]),
+            ..Default::default()
+        }
+    }
+
+    fn body_form_doc() -> Document {
+        let mut para = Paragraph::default();
+        para.controls.push(Control::Form(Box::default()));
+        let mut doc = Document::default();
+        doc.sections.push(section_with_raw_stream(vec![para]));
+        doc
+    }
+
+    fn cell_form_doc() -> Document {
+        let mut cell_para = Paragraph::default();
+        cell_para.controls.push(Control::Form(Box::default()));
+        let mut table = Table::default();
+        table.row_count = 1;
+        table.col_count = 1;
+        table.cells = vec![Cell {
+            row: 0,
+            col: 0,
+            col_span: 1,
+            row_span: 1,
+            paragraphs: vec![cell_para],
+            ..Default::default()
+        }];
+        let mut para = Paragraph::default();
+        para.controls.push(Control::Table(Box::new(table)));
+        let mut doc = Document::default();
+        doc.sections.push(section_with_raw_stream(vec![para]));
+        doc
+    }
+
+    #[test]
+    fn set_form_value_invalidates_section_raw_stream() {
+        let mut core = core_from(body_form_doc());
+        let r = core
+            .set_form_value_native(0, 0, 0, r#"{"value":1,"text":"동의함"}"#)
+            .expect("호출이 성공해야 함");
+        assert!(r.contains(r#""ok":true"#), "전제: 양식 값 설정 성공 ({r})");
+
+        // 값은 IR 에 반영됐고,
+        match &core.document.sections[0].paragraphs[0].controls[0] {
+            Control::Form(f) => {
+                assert_eq!(f.value, 1);
+                assert_eq!(f.text, "동의함");
+            }
+            _ => panic!("양식 컨트롤이어야 함"),
+        }
+        // 원본 스트림은 무효화돼야 한다 — 남아 있으면 저장이 원본 바이트를 그대로 써서
+        // 방금 넣은 값이 파일에서 사라진다.
+        assert!(
+            core.document.sections[0].raw_stream.is_none(),
+            "raw_stream 이 남으면 양식 값이 저장 시 통째로 사라진다"
+        );
+        // 저장 경로 결과로도 확인: 원본 sentinel 바이트가 더 이상 그대로 나가지 않는다.
+        let out = serialize_section(&core.document.sections[0]);
+        assert_ne!(
+            out,
+            vec![SENTINEL; 64],
+            "serialize_section 이 여전히 원본 바이트를 반환하면 값 유실"
+        );
+    }
+
+    #[test]
+    fn set_form_value_in_cell_invalidates_section_raw_stream() {
+        let mut core = core_from(cell_form_doc());
+        let r = core
+            .set_form_value_in_cell_native(0, 0, 0, 0, 0, 0, r#"{"value":1}"#)
+            .expect("호출이 성공해야 함");
+        assert!(
+            r.contains(r#""ok":true"#),
+            "전제: 셀 양식 값 설정 성공 ({r})"
+        );
+
+        assert!(
+            core.document.sections[0].raw_stream.is_none(),
+            "셀 안 양식 값도 섹션 raw_stream 을 비워야 저장에 반영된다"
+        );
+    }
 }

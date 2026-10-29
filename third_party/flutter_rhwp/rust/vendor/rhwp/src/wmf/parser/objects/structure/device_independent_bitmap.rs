@@ -42,15 +42,17 @@ impl DeviceIndependentBitmap {
 
         //  TODO: Not written in [MS-WMF] how to parse this field.
         let undefined_space = vec![];
-        let (a_data, c) =
-            crate::wmf::parser::read_variable(buf, dib_header_info.size())?;
+        let (a_data, c) = crate::wmf::parser::read_variable(buf, dib_header_info.size())?;
         consumed_bytes += c;
 
         Ok((
             Self {
                 dib_header_info,
                 colors,
-                bitmap_buffer: BitmapBuffer { undefined_space, a_data },
+                bitmap_buffer: BitmapBuffer {
+                    undefined_space,
+                    a_data,
+                },
             },
             consumed_bytes,
         ))
@@ -84,11 +86,7 @@ impl Colors {
             dib_header_info,
             crate::wmf::parser::BitmapInfoHeader::Core { .. }
         ) {
-            return Self::parse_with_core_header(
-                buf,
-                color_usage,
-                dib_header_info,
-            );
+            return Self::parse_with_core_header(buf, color_usage, dib_header_info);
         }
 
         Self::parse_with_info_header(buf, color_usage, dib_header_info)
@@ -136,14 +134,12 @@ impl Colors {
             crate::wmf::parser::BitCount::BI_BITCOUNT_0 => unreachable!(),
             crate::wmf::parser::BitCount::BI_BITCOUNT_1
             | crate::wmf::parser::BitCount::BI_BITCOUNT_2
-            | crate::wmf::parser::BitCount::BI_BITCOUNT_3 => {
-                Self::parse_from_color_usage(
-                    buf,
-                    color_usage,
-                    dib_header_info.color_used() as usize,
-                    false,
-                )
-            }
+            | crate::wmf::parser::BitCount::BI_BITCOUNT_3 => Self::parse_from_color_usage(
+                buf,
+                color_usage,
+                dib_header_info.color_used() as usize,
+                false,
+            ),
             crate::wmf::parser::BitCount::BI_BITCOUNT_5 => {
                 // ignore result
                 let (_, bytes) = Self::parse_from_color_usage(
@@ -161,19 +157,13 @@ impl Colors {
                 match &dib_header_info {
                     crate::wmf::parser::BitmapInfoHeader::Core(_) => unreachable!(),
                     crate::wmf::parser::BitmapInfoHeader::Info(
-                        crate::wmf::parser::BitmapInfoHeaderInfo {
-                            compression, ..
-                        },
+                        crate::wmf::parser::BitmapInfoHeaderInfo { compression, .. },
                     )
                     | crate::wmf::parser::BitmapInfoHeader::V4(
-                        crate::wmf::parser::BitmapInfoHeaderV4 {
-                            compression, ..
-                        },
+                        crate::wmf::parser::BitmapInfoHeaderV4 { compression, .. },
                     )
                     | crate::wmf::parser::BitmapInfoHeader::V5(
-                        crate::wmf::parser::BitmapInfoHeaderV5 {
-                            compression, ..
-                        },
+                        crate::wmf::parser::BitmapInfoHeaderV5 { compression, .. },
                     ) => match compression {
                         crate::wmf::parser::Compression::BI_RGB => {
                             // ignore result
@@ -207,6 +197,12 @@ impl Colors {
         colors_length: usize,
         core: bool,
     ) -> Result<(Self, usize), crate::wmf::parser::ParseError> {
+        // colors_length는 BITMAPINFOHEADER의 colors_used(검증되지 않은 u32)에서
+        // 온다. 색상표가 존재하는 비트 심도(<=8bpp)에서 사양상 최대 항목 수는
+        // 2^8=256이므로 이를 상한으로 둔다. 상한이 없으면 Vec::with_capacity가
+        // 거대한 값을 그대로 예약해 OOM abort로 이어진다 (doc_info.rs tab_count,
+        // emf parse_points16 #2992와 동일한 클래스).
+        let colors_length = colors_length.min(256);
         let mut consumed_bytes: usize = 0;
 
         match color_usage {
@@ -285,5 +281,27 @@ impl core::fmt::Debug for BitmapBuffer {
             )
             .field("a_data", &format!("[u8; {}]", self.a_data.len()))
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// colors_length가 BITMAPINFOHEADER의 검증되지 않은 colors_used(u32)에서
+    /// 그대로 오는 경우, 거대한 값(u32::MAX)을 넘겨도 Vec::with_capacity가
+    /// 그 값을 그대로 예약하지 않고(256 상한) 데이터 부족으로 정상적으로
+    /// 에러를 반환해야 한다 (OOM abort 없이 graceful degradation).
+    #[test]
+    fn parse_from_color_usage_bounds_huge_colors_length() {
+        let mut data: &[u8] = &[0u8; 4]; // RGBQuad 1개 분량도 안 되는 소량 데이터
+        let result = Colors::parse_from_color_usage(
+            &mut data,
+            crate::wmf::parser::ColorUsage::DIB_RGB_COLORS,
+            u32::MAX as usize,
+            false,
+        );
+
+        assert!(result.is_err());
     }
 }

@@ -2,6 +2,833 @@
 
 이 프로젝트의 주요 변경 사항을 기록합니다.
 
+## [Unreleased]
+
+## [0.8.7] — 2026-10-06
+
+> v0.8.6 이후 기능 기준선 `17a69fa4e`까지 2,395커밋과 230개 PR provenance를 확인한 누적 PATCH
+> 릴리스입니다. 이후 main 이력 동기화·버전·배포 검증 commit은 이 계측 범위와 구분합니다.
+
+### 조판·렌더링·폰트
+
+- 문단 안 연속 TAC 표의 저장 줄 소속과 가용 폭, 표 바깥여백을 함께 반영합니다. 저장 LineSeg가 없는
+  문서의 줄 구성도 보정해 같은 줄의 표와 너비 부족에 따른 줄바꿈을 구분합니다 (#7482, #7585).
+- rowspan·중첩 표의 페이지 분할에서 빈 물리 밴드, 셀 패딩과 이어받은 내용의 소유권을 보존합니다.
+  앞 조각의 외곽선과 다음 쪽 그림·뒤 문단이 함께 이어지도록 보정했습니다 (#7368, #7567, #7570).
+- 편집 문단의 들여쓰기와 TAC 표 앞줄 배치를 보정했습니다 (#7599).
+- 호스트 글꼴 공급자와 명시적 폰트 환경을 측정·CanvasKit·Canvas2D 출력에 연결하고,
+  native exact glyph replay의 원자적 fallback을 보강했습니다 (#6881, #7179, #7405).
+
+### 열기·저장·편집
+
+- 빈 머리말·꼬리말이 있는 HWP5 저장본의 한컴 열기 실패와 표 제목 줄 반복·쪽 경계 설정 저장을
+  보정하고, HWPX layoutCompatibility fallback을 정상 생성 형태로 정리했습니다 (#7338, #7460, #7478).
+- Studio 영어 UI, 웹 하이퍼링크 편집과 HWP/HWPX·PDF 링크 보존, 수정 모드 덮어쓰기 및 찾기 결과
+  개수 표시를 추가했습니다 (#6984, #7318, #7485, #7493).
+- 표 뒤 Enter의 새 쪽·빈 문단·캐럿·스크롤 처리와 중첩 표 칸 선택·삭제·붙여넣기 경계를 보정했습니다
+  (#7487, #7539, #7601).
+- CLI 표 생성에 열 너비·정렬·필드 위치 옵션을 추가하고, 안전한 블록 복사·채우기·문서 간 가져오기와
+  캡션·머리말·꼬리말 주소 메타데이터를 보강했습니다 (#7038, #7068, #7101).
+
+### 입력 안전성·브라우저 확장
+
+- SVG 글꼴 정보의 CSS/XML 직렬화 경계, IPv4-mapped IPv6 주소 판정, HWP3 문단 깊이,
+  연결 그림의 파일 형식과 XML 누적 읽기 예산을 보강했습니다. 정상 썸네일의 raw DEFLATE 처리를
+  브라우저 표준 형식에 맞게 복구했습니다 (#7602).
+- WMF 정수 끝값의 산술·비트맵 경계를 보강했습니다. 기존 main 정기 fuzz가 찾은 텍스트 간격
+  뺄셈 패닉의 방어도 이번 배포 코드에 포함됩니다 (#7263).
+- Chrome 다운로드의 최초 상태 저장 중 완료 이벤트, Firefox 중복 탭·저장본 재열기와 자동 열기
+  문서의 파일명 경로 노출을 보정했습니다 (#6965, #6966, #7279).
+
+### macOS·패키지·배포
+
+- macOS CLI runner를 `macos-15`로 전환했습니다. Apple Silicon에서 ARM64를 native 빌드하고
+  Intel target을 교차 빌드하며, target·runner가 포함된 cache key로 이전 SDK 산출물 재사용을 막습니다 (#7556).
+- stable 태그의 Release Binary가 같은 커밋에서 npm·VS Code Marketplace·Open VSX 배포를 직접
+  호출합니다. 채널별 exact version 조회와 aggregate evidence로 배포 결과를 확인합니다 (#6799).
+- Rust, npm core/editor, Studio, VS Code 및 Chrome/Edge/Firefox/Safari 버전을 0.8.7로 통일합니다.
+  Chrome·Edge·Firefox는 별도 스토어 제출 대상입니다.
+
+### 호환성과 남은 범위
+
+- 기존 JSON 봉투 major와 명시적 글꼴/호환성 opt-in을 유지합니다.
+- 문서 입력 경계의 방어를 보강하며 HWP/HWPX 형식 자체의 모든 취약점을 해결했다고 주장하지 않습니다.
+  별도 조사 중인 범위와 비공개 advisory/CVE 절차는 해당 트랙에서 계속 처리합니다.
+- Safari 버전은 맞추지만 이번 브라우저 스토어 배포 대상은 Chrome·Edge·Firefox입니다.
+
+### 기여자
+
+이번 기능 기준선의 사람 기여자 29명(대소문자 보존·알파벳순)입니다. bot과 AI co-author는 별도 집계합니다.
+
+<!-- release-contributors:0.8.7:start -->
+- @aodtjddms
+- @baba9811
+- @davindev
+- @edwardkim
+- @emptinessform
+- @humdrum00001010
+- @jangster77
+- @jeong-sik
+- @kyunghwan-AITeam
+- @lidge-jun
+- @LJYeon12
+- @lpaiu-cs
+- @moongioh
+- @nishantpurohit04
+- @planet6897
+- @postmelee
+- @rubidus-api
+- @salgum1114
+- @semanticist21
+- @semo-git
+- @seo-rii
+- @seongeun82
+- @spamcam1207-stack
+- @winchoose
+- @yoonkhsc
+- @z0rimo
+- @zer0bi9
+- @zlzlzlmo
+- @zunstudio
+<!-- release-contributors:0.8.7:end -->
+
+## [0.8.6] — 2026-09-02
+
+> v0.8.4 이후 기능 기준선의 2,214커밋에서 확인한 262개 PR provenance를 바탕으로 준비한 누적 PATCH
+> 릴리즈다. 이후 버전·검증·릴리스 기록 commit은 이 계측 범위와 분리한다. 문서 조판·저장 충실도,
+> Studio 편집, CLI·agent, 입력 안전성과 릴리스 신뢰성을 함께 보강하며 기존 JSON 봉투 major는 유지한다.
+
+### 조판·렌더링·폰트
+
+- `HwpDocument.setExactFontInstance(optionsJson)`와 `clearExactFontInstance(optionsJson)`를 추가했다. host가
+  `registerExactFontSource`로 등록한 exact slot에만 `boundedHorizontalLtrV1` variable-font 요청을 설정·해제하며,
+  strict JSON 검증과 per-slot 멱등 clear를 제공한다. parser나 font 이름에서 axis를 자동 추론하지 않는다 (#4969).
+- exact font 커닝, bounded common shaping replay와 vertical layout을 조판·CanvasKit 경로에 단계적으로
+  연결했다. 지원하지 않거나 손상된 입력은 기존 안전 경로로 되돌아간다 (#4968, #4969).
+- 저장 RowBreak 표·물리 frame·LineSeg와 자리차지 개체의 페이지 소유권, 표 폭, 글상자 vpos, 위첨자 advance,
+  빈 줄 TAC 그림과 Square 겹침 그림 배치를 실제 한글 오라클에 맞게 보정했다.
+- `--compat 2024`를 opt-in으로 추가해 한글 2024의 자리차지 표 앵커 줄 계상을 선택할 수 있게 했다. 기본
+  조판 정책을 버전 번호만으로 자동 변경하지 않는다 (#5525).
+
+### 개방·저장·왕복 보존
+
+- `hp:ole` 의 shape-component 자식(`offset`·`orgSz`·`curSz`·`flip`·
+  `rotationInfo`·`renderingInfo`·`lineShape`)과 `id`/`instid` 를 원문
+  보존한다. `curSz=0` 은 was_zero 센티널로 되돌리고, 음수 offset 은
+  u32 wraparound 로 방출한다 (#4669, #5450).
+- HWPX curve를 `hp:seg` 체인으로 저장해 한글 개방 크래시를 막고, BinData storage id에 구멍이 있는
+  문서의 그림을 순번 축으로 복구한다 (#4676, #3893, #4049).
+- HWP3 구역 정의 제어문자 위치와 문자 보존을 고치고, OWPML 열거·숨은 설명·누름틀 범위 때문에 저장 후
+  본문이 사라지는 경로를 보정했다 (#4680, #4776).
+- DOCTYPE이 붙은 HWPML과 Version 2.1 입력을 열 수 있다 (#5848).
+- 중첩 표 검색·치환은 깊이 2 이상에서 `cellPath`를 제공한다. 깊이 1의 기존 `cellContext` 봉투는 유지한다
+  (#2792).
+
+### 편집·Studio·브라우저 확장
+
+- 문서 전체 HTML·Word `.doc` 내보내기와 차트 숫자 데이터 편집 UI를 추가했다.
+- 한글 IME `Ctrl+A`, 다른 이름 저장 뒤 문서명·최근 문서, 머리말·꼬리말 선택·편집 API, 사용자 배율과
+  표준 인쇄 판형을 보정했다.
+- 병합 셀과 일반 표 경계의 마우스 리사이즈, 쪽 나누기 뒤 캐럿 표시, 눈금자 갱신을 개선했다.
+- Chrome 다운로드 판정에서 `.xlsx` 파일이 HWP viewer로 잘못 열리는 경로를 차단했다 (#6547).
+
+### CLI·agent·MCP
+
+- 편집 명령군과 조회 CLI를 확장하고 `rhwp-q-pack`에 Control·문서 조회 명령을 모았다.
+- 문서 에이전트 공개 명령 bridge와 HWP 2024 원격 MCP client를 추가했다.
+- CLI 도움말 index와 명령별 안내를 정비하고, 검증 없이 성공하던 `test-caption` 경로를 실패로 처리한다.
+
+### 보안·성능·운영
+
+- HWPX container와 parser 재귀 깊이에 상한을 두고 입력 경계·WMF 초기화를 보강했다.
+- Oracle PDF 자동 선택은 형식·생성 엔진·저장 제품이 불명확할 때 fail-closed한다.
+- exact font source와 variable shaping cache를 bounded reuse하고, nextest archive 분할·CodeQL 경로 분리·
+  문서/review-only 증적 재사용으로 반복 CI 비용을 줄였다.
+- trusted controller가 동일 merge tree의 검증을 재사용하도록 보정했다. 실제 post-release Render Diff
+  canary는 #6243에서 계속 추적한다.
+
+### 패키지·배포
+
+- GitHub Release CLI matrix에 native `aarch64-unknown-linux-gnu` target을 추가했다 (#5949, #6573).
+- Docker build가 이미 사용 중인 GID를 받아도 실패하지 않도록 보정했다 (#5758).
+- Rust, `@rhwp/core`, `@rhwp/editor`, Studio, VS Code와 Chrome/Edge/Firefox/Safari 버전을 0.8.6으로
+  맞춘다.
+
+### 호환성과 알려진 문제
+
+- exact font instance와 `--compat 2024`는 명시적 opt-in이다. 기존 기본 경로와 JSON 봉투 major는 유지한다.
+- 저장 충실도 복구로 재저장 bytes는 달라질 수 있지만 의미 보존을 위한 의도된 변화다.
+- Linux AArch64 이슈 #5949는 실제 v0.8.6 asset의 ELF·실행권한·버전을 확인한 뒤 닫는다.
+- #6243은 `main` trusted controller의 실제 post-release canary가 성공할 때까지 열린 상태로 유지한다.
+
+### 기여자
+
+이번 사이클에 참여한 사람 20명(credit key, 대소문자 보존·알파벳순):
+
+<!-- release-contributors:start -->
+- @chrisryugj
+- @coolwithyou
+- @davindev
+- dkh0324 — Git author credit, 공개 GitHub 계정 미확인
+- @edwardkim
+- @humdrum00001010
+- @JamesPsh
+- @jangster77
+- @jeong-sik
+- @johndoekim
+- @keepYaoung
+- @kevin9327
+- @kjh0523
+- @lpaiu-cs
+- @planet6897
+- @postmelee
+- @RaghavShubham
+- @Shadungi
+- @t2c-lab
+- @thhan74
+<!-- release-contributors:end -->
+
+## [0.8.4] — 2026-08-12
+
+### 배포 채널 복원
+
+- 공식 배포 범위를 v0.8.2와 동일하게 복원했다. GitHub Pages, GitHub Release
+  네이티브 CLI, npm `@rhwp/core`·`@rhwp/editor`, VS Code Marketplace/Open VSX와
+  Chrome·Edge·Firefox 확장 배포는 유지한다 (#4655).
+- 명시적인 메인테이너 채택과 안전 검증 없이 추가됐던 PyPI, `@rhwp/node`, GHCR
+  CLI 이미지, deb/rpm/MSI, 설치 스크립트·패키지 관리자 매니페스트·설치용 GitHub
+  Action의 코드와 게시 workflow를 제거했다 (#4655).
+- 공식 배포에서 철회한 Python·Node 바인딩의 전용 개발 코드, 테스트와 현재형 안내도
+  함께 제거했다. 신규 배포 채널은 빌드·설치·업데이트·롤백 검증과 유지 책임을 합의한
+  뒤 별도로 채택한다.
+
+## [0.8.3] — 2026-08-11
+
+> 누적 PATCH 릴리즈 — v0.8.2 이후 190개 PR을 통합했다. 암호 문서 열기·저장,
+> 중첩 표 조판과 편집, MCP/에이전트 실행 계약, 공식 Node·Python 바인딩과 다중 플랫폼
+> 배포 경로를 함께 확장한다. 기존 JSON 봉투 major는 1.0을 유지한다.
+
+### 암호 문서와 저장 호환성
+
+- HWP5 EncryptVersion 4 암호 문서를 열고, Studio에서 비밀번호를 입력할 수 있다
+  (#3405, #3477).
+- HWP3 암호 해제와 암호화 HWPX 열기를 지원하고, HWP3의 옛한글 문자열 보존을 보강했다
+  (#3483, #3516).
+- HWP3/HWP5/HWPX 암호화 저장·재열기 계약을 추가했다 (#3690).
+- HWP5 손상 저장 경로와 HWPX namespace·OLE·탭·차트 등 저장 왕복 보존 범위를 넓혔다.
+
+### 조판·렌더링 정합
+
+- 중첩 표의 페이지 분할, RowBreak, 셀 내부 빈 문단, 자식 표 흐름과 마지막 하단 테두리를
+  연속 보정했다 (#4094, #4122, #4174, #4517, #4525, #4567).
+- PUA 글자 겹침으로 기록된 사각 번호와 작은 오른쪽 삼각형을 실제 글리프로 복원했다
+  (#4139, #4227, #4228).
+- CanvasKit이 정확한 glyph run을 재생하도록 하고 페이지 번호 metric과 렌더 replay
+  결정성을 개선했다 (#3741).
+
+### 편집·Studio·VS Code
+
+- 중첩 표 안의 텍스트·표 선택과 복사 경로를 보정하고, 다중 셀 서식 적용을 확장했다
+  (#4119, #4267, #4276).
+- F5 표 셀 크기 조절 3모드, 표 분할·결합, 폰트 스타일 no-op 보정이 추가됐다
+  (#3771, #3831, #4271).
+- VS Code 문서 outline 탐색을 추가했다 (#4093).
+- HwpCtrl 호환 표면과 호환성 ledger를 단계적으로 확장했다 (#4187, #4274, #4486).
+
+### CLI·MCP·에이전트 계약
+
+- `mcp-serve`가 stdio JSON-RPC 서버와 문서 세션 핸들을 제공한다 (#3571).
+- IR·capabilities·plan schema, ontology, provenance, replay/lineage/audit, 서명·anchor·gate,
+  보안 진단과 검증 사다리를 추가했다. `capabilities`의 schema registry가 봉투 1.0,
+  IR 1.0, capabilities 1.3, plan 1.1을 자기서술한다 (#4574).
+- `run` 계획과 capsule은 입력·계획·산출 해시를 고정하며, CAS 전제조건으로 실행 전 입력
+  변경을 거부할 수 있다.
+- 공식 Node·Python 바인딩과 생성 타입 드리프트 검사를 추가했다.
+
+### 보안·성능
+
+- 압축 해제 크기에 상한을 둬 deflate bomb 입력의 메모리 고갈을 차단했다 (#4263).
+- 대형 표의 커서 이동·선택·국소 repaint, 중복 렌더와 편집 후 재렌더 비용을 줄였다
+  (#3672, #3745, #4156, #4265).
+- Subsecond 핫패치의 무효화·진단·수명주기·repaint 경계를 통합했다 (#4602).
+
+### 패키지·배포
+
+- Linux x86_64, macOS x86_64/arm64, Windows x86_64 CLI archive와
+  `SHA256SUMS.txt`를 GitHub Release에 첨부하는 경로를 추가했다.
+- Python wheel/sdist, `@rhwp/node`, Debian/RPM/MSI 설치 프로그램, GHCR container
+  배포 workflow를 추가했다. 게시 시크릿이나 패키징 선행조건이 없는 채널은 검증 후
+  명시적으로 건너뛴다.
+- cargo-binstall 자산 매핑과 install.sh/install.ps1, Scoop·Homebrew·Winget·AUR
+  채널 초안을 추가했다. 해시 기반 채널 매니페스트는 릴리즈 자산 생성 후 갱신한다.
+- CI workflow action SHA 고정, stale run 취소, cache generation 청소와 경로별
+  선택 실행을 보강했다.
+
+### 기여자
+
+이번 사이클에 참여한 16명(GitHub 핸들, 알파벳순):
+
+- @edwardkim, @enigma-jerry72, @humdrum00001010, @JamesPsh, @jangster77, @jeong-sik,
+  @johndoekim, @kevin9327, @lpaiu-cs, @NacreousCloud, @planet6897, @postmelee,
+  @scari, @seo-rii, @walnutkim, @yuyu04
+
+## [0.8.2] — 2026-07-27
+
+> 핫픽스 — 브라우저 확장의 인쇄 기능이 동작하지 않던 문제를 복구한다. v0.8.0 부터
+> 영향받았다.
+
+### 확장 인쇄 복구
+- **브라우저 확장(Chrome·Edge·Firefox)에서 인쇄가 "파일을 찾을 수 없음" 으로 실패하던
+  문제 정정.** 인쇄 미리보기 문서(`print.html`)가 확장 빌드 산출물에 포함되지 않았다.
+  v0.8.0 에서 인쇄 경로가 도입될 때 빌드 복사 목록에 빠진 것이 원인이다 (#3433).
+- 빌드에 필수 산출물 게이트를 추가했다. 종전에는 자산 복사가 실패해도 경고만 남기고
+  빌드가 성공해 누락이 드러나지 않았다. 이제 런타임 필수 파일이 없으면 빌드가 실패한다.
+
+### 렌더 정정
+- TAC 인라인 표의 x-원점에 좌/우 바깥 여백(outMargin)을 배선해 한글 문자 규칙과 맞췄다
+  (#3396).
+
+### 알려진 문제
+- studio E2E `print-pdf-issue3126` 의 PDF 안내 모달 관련 항목이 실패한다. 인쇄 surface
+  자체는 정상이며, 이번 릴리즈 범위 밖 변경에서 비롯한 것으로 확인됐다. 근인은 미진단
+  상태다 (#3450).
+- studio E2E `issue-2214` 의 페이지 로컬 리페인트 계약 실패가 v0.8.1 에 이어 유지된다.
+  회귀 여부는 여전히 미확정이다 (#3412).
+
+## [0.8.1] — 2026-07-26
+
+> PATCH 릴리즈 — v0.8.0 이후 렌더 정정과 CLI 계약 정합. 신규 기능이 포함되나 전부
+> CLI 도구 계층이며 라이브러리 공개 API 변경은 없다.
+
+### 렌더 정정
+- 바탕쪽에 놓인 머리말 개체(쪽번호 상자, 라벨 등)가 좌우 여백을 넘어 용지 가장자리로
+  튀어나가던 문제 정정 — 문단·단 기준 개체의 가로 기준 영역을 본문 텍스트 영역으로
+  교정해 한컴 출력과 맞췄다 (#3402).
+- HWP3 1쪽 글맵시가 사이드카 파일 없이 렌더된다 — 외부 연결 그림으로 오인하던 내장 OLE
+  payload(pic_type=1, 추가 정보 블록 id=2)를 추출·재포장하고 OlePres000 WMF preview로
+  그린다. WMF POLYPOLYGON 구멍 소실도 함께 정정(단일 path 병합) (#3363).
+- HWP3 문단 테두리 '선 없음'이 실선으로 그려지던 오렌더 정정 — 한컴 실측 매핑대로 배선.
+  음영 좌우 세로선도 같은 뿌리로 함께 정정 (#3303).
+
+### CLI — 계약 정합
+- `export` 계열 위치 인자 파싱 통일 — svg/png/pdf/markdown/render-tree/doclang (#3359),
+  `export-text` 옵션 선행 호출 수용 (#3349).
+- `search --limit` 절단 가시화 — `totalMatchCount`·`truncated` 추가 (#3353).
+- `thumbnail` 종료 코드 정합 — 미지 옵션을 무시하고 exit 0 을 반환하던 동작 제거 (#3366).
+- `capabilities` 에 `export-png` feature 가용성 자기서술 추가 — `requiresFeature`·
+  `available` (#3357), `edit` 명령을 capabilities·MCP 자기서술에 등재 (#3329).
+- ingest 미지 필드 거부 — 침묵 유실 대신 위치·힌트가 있는 즉시 실패 (#3358).
+- `build-from-ingest` 기본 borderFill 을 무테두리로 명시 — 전 텍스트 런에 상자가 그려지던
+  문제 제거 (#3355).
+
+### CLI — 신규 기능
+- `edit fill-fields` 서식 값 채우기 (#3329), `edit replace-text` 문서 전체 일괄 치환
+  (#3373), `edit set-cell` 표 격자 좌표로 셀 기록 (#3381).
+- `batch` 에 search·export-tables·fields 축 추가 (#3346).
+- 일반기안문(별지 제1호서식)·간이기안문(별지 제2호서식) 표준 서식 자산 — 누름틀 23곳과
+  계약 테스트 (#3372).
+- 정답지(한컴 공식 PDF) 페이지별 대규모 비교 하네스 (#3389).
+
+### studio
+- 스타일 생성·수정·삭제가 편집 히스토리에 기록된다 — 종전에는 편집 라우터를 우회해
+  `Ctrl+Z` 로 되돌릴 수 없었다. 삭제는 전문서 style_id 재배정을 수반하므로 snapshot 으로
+  기록한다 (#3387).
+- 외부 연결 그림의 dev 전용 fetch 를 프로덕션·확장에서 가드 — 확장 Errors 소음 제거
+  (#3348).
+
+### 의존성
+- base64 0.22.1 → 0.23.0, snafu 0.9.1 → 0.9.2.
+- GitHub Actions 7종 major 갱신 — checkout v7, setup-node v7, cache v6,
+  upload-pages-artifact v5, deploy-pages v5, github-script v9, action-gh-release v3.
+
+### 알려진 문제
+- studio E2E `issue-2214` 의 페이지 로컬 리페인트 계약이 `after-56-sync` 체크포인트에서
+  실패한다(누적 wasmFlush 2, 기대 0). v0.8.0 대조를 수행하지 않아 회귀 여부는 미확정이며
+  별도 이슈로 추적한다 (#3412).
+
+## [0.8.0] — 2026-07-26
+
+> MINOR 릴리즈 — v0.7.19 이후 265개 PR 통합. 저장 왕복 보존 대공사(무효화 계약 확립 +
+> HWPX/HWP5 속성 왕복 수십 건), 에이전트용 CLI 조회·검증 도구군 신설, 파서 퍼징 인프라
+> 도입, 편집 undo 충실도 연작, 렌더·폰트 정합 개선. 이번 릴리즈부터 **브라우저 확장
+> (Chrome/Edge/Firefox/Safari) 버전을 라이브러리와 동일하게 통일**한다 (0.2.8 → 0.8.0).
+
+### 저장 신뢰성 — 왕복 보존 대공사
+- 편집 후 저장이 옛 바이트로 되돌아가던 무효화 누락 일괄 정정 — 양식 값·책갈피·누름틀·
+  스타일 편집·이웃 셀 테두리·수식 속성·HTML 붙여넣기 서식 등 (raw_stream/raw_data
+  무효화 계약을 canonical 문서로 확립).
+- HWPX 저장 왕복 속성 보존 수십 건 — secPr grid/startNum/tabStop, 표 allowOverlap,
+  세로쓰기, borderFill threeD/shadow, imgBrush 7종, lineShape 화살표, 체크박스 3상태,
+  메모 테두리 lineType, 문단 번호 형식(numFormat 6종), fieldBegin/fieldEnd fieldid,
+  bullet paraHead, 캡션 vertAlign, refList memoProperties, 개체 lock 등
+  (kevin9327 축배치 A~M·G3·G5·G6~G12 연작).
+- HWP5 저장 유실 정정 — 문단 번호 형식, 자동 탭 비트, 도형 캡션, 각주·미주 장식 속성,
+  hwpx→hwp 변환 BinData 재정렬 시 캡션 그림 remap.
+
+### CLI — 에이전트 도구군 신설
+- JSON 조회·검증 도구 8종 통합(kevin9327): `info`·`export-text --json`·batch 병렬
+  스트리밍, `export-structure`, `capabilities`(도구 자기서술), `ir-diff --json` 판정
+  봉투, `export-tables`(격자 JSON), `fields`(누름틀 조사), `search`(주소 기반 검색),
+  `export-svg --json`(렌더 매니페스트).
+- `export-doclang` — HWP/HWPX를 DocLang v0.6 XML로 내보내기.
+- 실패 시 종료 코드 계약 정립, `export-png`/`export-pdf`의 외부 연결 그림 적재 누락
+  정정(#3302 — SVG와 동일 규칙).
+
+### 파서 견고성 — 퍼징 인프라와 방어
+- cargo-fuzz 파서 퍼징 인프라 도입(1단계) + WMF·ooxml_chart 하네스 확장(2단계).
+- 악성/손상 입력 방어: WMF Region 음수 부호확장 패닉, EMF POINTS16 무검증 할당,
+  표 그리드 68GB 할당, CFB 손상 헤더 패닉, DIB 과대 할당, 무한루프·오버플로 6건 등.
+- HWP3 IR 배선 누락 정정 연작 — 각주 옵션·분리선 길이/여백/본문 간격, 각주 사이 간격
+  (한컴 HWP3→HWPX 변환 실측 기반 ×4 스케일·각주 전용 적용), 차례 표시 분리,
+  책갈피 언더리드, has_border 소실 등.
+
+### 편집 — undo 충실도 연작
+- 각주·미주·수식 삽입과 머리말/꼬리말 구조 조작을 히스토리에 기록(#3207).
+- 셀(표 셀·글상자·캡션·중첩) 문단 병합 undo의 문단 범위 속성 복원(#2342 셀 경로 완결).
+- 머리말/꼬리말 필드의 표시 문자열(display_text)과 모델 좌표 분리 — 캐럿·undo·추출·
+  render-tree JSON 정합(#3216).
+- 중첩 표 셀 경로 정합(병합 undo 분할 길이·최내곽 셀 보정·Backspace 축), 표 이동
+  undo stale 인덱스, 문단 3개 이상 선택 삭제 undo 경계 등.
+
+### 렌더링 정합
+- para-float 스택의 저장 앵커-줄 신뢰 — 하단정렬 겹침·+1 과분할 해소(#2813).
+- 폰트 조달의 환경 종속 경로 제거(4파일 하드코딩 통합) + Web Canvas base-family
+  폴백 경로 보완 — 10k 서베이 r23 폰트-클린 신규 기준선 확립(쪽수 회귀 0).
+- 한양·휴먼 계열 ASCII 메트릭 실측 교정(셀 재래핑 오발동 해소), 반복 표 헤더 격자
+  정합, TAC margin 이중 가산 정정, 동일 이미지 겹침-clip 역방향 절단 수정,
+  3D 입체·ofPie 보조플롯 차트 렌더(#1431 Track C), CanvasKit positioned text replay.
+- 10k 한글 오라클 서베이 r16→r23: PI 일치율 93.75%, 측정 갭 역대 최소(65),
+  전 구간 쪽수 회귀 0 검증.
+
+### rhwp-studio
+- 반응성·한글 입력 지연 개선, 그림 변환 결과 메모화(편집마다 반복되던 JPEG 전체
+  디코드 제거).
+- 입력 검증 일괄 정비 — 글자 크기/장평/자간/줄 간격/단 간격/시작 번호 등 대화상자·
+  툴바 clamp 20여 건, 필드·책갈피·스타일 이름 길이 가드(레코드 손상 방지).
+- 외부 연결 그림 표시(#3313 1차)·HWPX OLE 개체 선택(#3319), 호스트 저장 완료 통지
+  API notifySaved, IME·그리드 뷰 정비.
+
+### 브라우저 확장
+- **버전 체계 통일**: Chrome/Edge/Firefox/Safari 확장 버전을 라이브러리와 동일한
+  0.8.0으로 통일(기존 0.2.8 독립 넘버링 종료).
+- 설정 저장·복구와 자동 열기 방어 강화.
+
+### 인프라·문서
+- svg2pdf 결정화 패치 공급원을 rhwp 산하 포크로 이관, wasm-pack 0.15.0 핀.
+- CI: Native Skia·테스트 archive 병렬화, Frontend·Lint 병렬화, 필수 gate 실패 시
+  후속 중단, github-script 재시도. (self-hosted 러너 실험은 검증 후 호스티드로
+  원복 — 함정 카탈로그를 문서로 보존.)
+- PR 검토 워크플로를 조건별 가이드로 분리, 직렬화 무효화 계약 canonical 문서,
+  대량 PR 분류 도구(pr_triage.sh), 편집-스윕 상설화.
+
+### 기여자
+
+이번 사이클(v0.7.19 이후)에 머지된 기여자 PR 200건 (GitHub 핸들, 알파벳순):
+
+- @chrisryugj — 편집-스윕 상설화(#2458), OVR 자가 검증 원커맨드화(#2449) *(첫 기여 환영!)*
+- @cskwork — embed loadFile 기본 대화상자 교착 방지(#2518)
+- @donggyun112 — 템플릿 문서 PrvText placeholder 보정(#2388), 구역 시작 표식 이관(#2386) *(첫 기여 환영!)*
+- @humdrum00001010 — studio 반응성·한글 입력 지연 개선(#3255)
+- @jangster77 (Taesup Jang) — 외부 PR 통합·검토 기록 연작 42건: #3216 머리말/꼬리말
+  필드 통합(#3325), PR 검토 워크플로 조건별 가이드 분리(#3299), kevin9327·planet6897
+  대량 유입 통합 다수
+- @johndoekim — 3D 입체·ofPie 보조플롯 차트 렌더(#2500), 호스트 저장 통지 notifySaved(#2660)
+- @kevin9327 — 88건: HWPX/HWP5 저장 왕복 보존 축배치 연작(A~M·G3~G12), HWP3 IR 배선
+  연작, WMF/CFB/EMF 악성 입력 방어, CLI JSON 조회·검증 도구 8종(#3304), studio 입력
+  clamp·대화상자 동기화 연작
+- @lpaiu-cs — undo 충실도 연작 18건: 다이얼로그·개체 조작 히스토리 기록(#2337~#2378),
+  각주·미주·수식·HF 구조 조작 기록(#3208), 셀 병합 문단 속성 복원(#3324),
+  머리말/꼬리말 display_text 분리(#3323)
+- @myeolinmalchi — export-doclang: DocLang v0.6 XML 내보내기(#3132) *(첫 기여 환영!)*
+- @planet6897 (Jaeook Ryu) — 28건: 10k 한글 오라클 서베이 r16~r23 연작(폰트-클린
+  기준선 확립), para-float 앵커-줄 신뢰(#3270), crop 폴백 회귀 복원(#3241), 렌더·
+  레이아웃 정합 통합 다수, 폰트 폴백(#3300/#3314)
+- @postmelee (Taegyu Lee) — 13건: wasm-pack 0.15.0 핀·toolchain 정합(#2420), 반복 표
+  헤더 격자 정합(#2512), Native Skia cache writer 복구(#3123), chrome 확장 설정
+  저장·복구 방어(#2658), 프론트 구조 정리
+- @seo-rii — CanvasKit 연작: positioned text replay(#2939), document-scoped 자동
+  선택(#2394), direct PageLayerTree PDF(#2372)
+- @sxngt — embed loadFile suppressDialogs 옵션(#2390) *(첫 기여 환영!)*
+
+## [0.7.19] — 2026-07-17
+
+> v0.7.18 후속 patch — 저장 지오메트리 신호(intra-para vpos 리셋/되감김) 존중 계보의
+> 렌더·편집 양 경로 정합, 표 페이지네이션 정밀도(rowspan 선언-잔여·서식 문서 과소분할),
+> 메모리·PDF 결정성 개선, HML 포맷 지원, 프론트 legacy /web 결합 제거.
+> 공개 API 하위 호환 유지 — PATCH.
+
+### 렌더링 정합 — 저장 신호 존중 계보
+- 문단 중간 vpos 0-리셋(쪽 경계 인코딩)을 비-0 단 시작 문단에서도 분할점으로 승격 —
+  treatise p2 오른쪽 단 하단 잘림·내용 소실 해소, p4 동종 결함 동반 정정(#2320).
+- 전면 tac 그림 + 후행 tac 표 문단의 intra-para 리셋 존중 + 유령 높이 계상 제거 —
+  붙임 포스터 문서 5→3쪽 한글 정합(#2311).
+- 저장 LINE_SEG 없는 기계생성 문서의 텍스트-host tac 표 높이 붕괴 수정 — 진안군 서식
+  1→2쪽, 시장구조조사 핀 309→312(정답 315 방향)(#2319).
+- 전면 서식 표 2장 문서 과소분할 2결함 — 표 문단 경로의 float 배타영역 소비 +
+  전면급(≥30000HU) TAC 표 인라인 오판 정정(#2322).
+- tac TopAndBottom 소형 개체 줄의 쪽 하단 여백 스필 — 저장 page-last 신뢰 확장,
+  r12 OVER+SHAPE 오라클 +3(#2137 부분).
+- 바탕쪽 개체의 wrap(글 앞으로)을 본문 기준 plane 으로 승격하던 결함 — master_page
+  provenance 로 BehindText 상한 고정, studio·skia 에서 바탕쪽이 본문 텍스트를 가리던
+  현상 해소(#2318).
+
+### 표 페이지네이션 정밀도
+- rowspan 병합 셀 선언-잔여를 마지막 걸침 행에 가산 — 한글 행 괘선 실측 관례 확정,
+  연결맵 380→385쪽. 부실 저장(ls==1 폭 초과) 셀 문단 재래핑 + rowspan 블록 offset
+  walk 의 relaxed hard-break(거대 셀 한정)(#2291/#2237).
+- 표 밀집 문서 과소분할 2결함 — RowBreak rowspan 블록 연속 조각 잔여 증발 +
+  TAC 그림 문단 높이 계상(#2287), 쪽 하단 밴드 필 오프셋 컷 재시도(#2097).
+- 한글 fresh 레이아웃 측정 정합 5수정 + footer lead/margin 오차 규명·계측(#2279).
+- 80168 규제영향분석서 157쪽 정합 — 상쇄망 축 분해 7축 세트(#2070), RowBreak 대형 표
+  밀도(행미 공백 유령 줄 + aim 패딩 0 존중) + 비-Percent 줄간격 2×스케일 정정(#2070).
+- KBU=1(글자 단위 줄바꿈) 행두 금칙 retraction — 마침표 줄머리 고립 방지, 한컴 2024
+  오라클 정합(#2244). 한글 줄 나눔 단위 의미 반전 정정(#2185). HWPX 비정상 줄
+  metrics 재조판(#2093).
+
+### 편집 정합 (rhwp-studio)
+- 편집 vpos 재계산이 저장 리셋(단/쪽 경계 인코딩)과 문단 간격을 보존 — 다단 단-밴드
+  소멸·쪽수 이탈 수정, 편집-스윕 574건에서 가짜 페이지 변동 60건 해소(#2299).
+- 거대 셀(115쪽) 연속 입력 미표시 — normalized-state cache coherence 표적 무효화(#2214).
+- undo/redo 후 stale 개체·표 선택 ref 정리 — 개체 속성 실행 실패 해소(#2303),
+  undo 계약 e2e 실키 Ctrl+Z smoke + 하네스 모달 잔존 수정(#2317).
+- 표 셀 clip 을 정적 그림 레이어에 보존(#2228). 짤림보기 기본값 켜짐(#2205 계열).
+- 파일 메뉴 '최근 문서' 서브메뉴 — meta-only 기록 + 재열기(#2285).
+
+### 렌더 파이프라인·폰트
+- CanvasKit readiness gate + public opt-in 강화(#2224), proof-gated 리소스 replay 와
+  실패 격리(#2248), cross-backend 진단·회귀 코퍼스 갱신 + render profile 전달
+  일반화(export-png 기본 인쇄 등가)(#2297 계열).
+- 로컬 글꼴 다국어 매칭과 CanvasKit 등록(#2227), CanvasKit 글머리 기호 폰트 보정(#2190).
+- skia PNG: 차트 RawSvg 조각 viewBox 이중 오프셋 잘림 수정(#2292), 폰트 폴백을
+  한국어 가용 폰트 우선으로 정정 — 차트 텍스트 소실 해소(#2293).
+- OOXML 차트 C2a stock HLC 렌더 + 2D fidelity 정합(#2277, #1431 Track C).
+- HWP5 취소선: bit 추정 대신 strike shape whitelist — 3D placeholder 관행 오판 차단
+  (#2258, 스펙 정오표 34 등재).
+
+### 성능·메모리·결정성
+- BinData 지연 로딩 — 파싱 시 내장 이미지 전량 상주 제거, RSS 244MB→49MB(#2263).
+- PDF 메모리 지배항(svg2pdf 텍스트 임베드)에 `--text-as-paths` 옵션(#2264),
+  svg2pdf 결정화 벤더 패치로 export-pdf 바이트 재현성 확보(#2269, 폰트 채번 비결정
+  규명 + 정규화 비교 도구 동반).
+
+### 포맷 지원
+- HML(HWPML) 문서 열기 + 의미 보존 저장(#1157).
+- @rhwp/editor MessageChannel 임베드 transport v1(#2186).
+
+### 프론트 인프라
+- legacy `/web` 개발 앱 제거(18 entries, 616KB) — CI detector·metrics·font contract 의
+  결합 정리, non-legacy 무영향을 함수 단위 metrics 로 실증(#2313).
+- assets/fonts canonical font root 이전(#2254 계열), 프론트 패키지 변경 시
+  build/test CI gate(#2183), Phase 0 baseline freeze(#2124 진행).
+
+### 도구·문서
+- HWP 2020 MCP client 장문서 timeout 동기화(#2253), hwpdocs 10k 표본 검증 13차
+  보고(#2262), 행 앵커 대조 도구(tools/task2287), cli_commands 인쇄 모드 현행화,
+  PR 검토 기록 보존 체계 지속(jangster77 검토 문서 연작).
+
+### 기여자
+
+이번 사이클(v0.7.18 이후)에 머지된 기여자 PR 55건 (GitHub 핸들, 알파벳순):
+
+- @cskwork — HML 문서 열기·의미 보존 저장(#2219), @rhwp/editor MessageChannel 임베드 transport v1(#2187)
+- @jangster77 (Taesup Jang) — 외부 PR 통합·검토 기록 연작 17건: 로컬 글꼴 다국어 매칭(#2227), 표 셀 clip 정적 레이어 보존(#2229), HWPX 비정상 줄 재조판(#2231), CanvasKit 글머리 기호 폰트(#2196), MCP timeout(#2255) 등
+- @johndoekim — OOXML 차트 C2a stock HLC 렌더 정합(#2288)
+- @lpaiu-cs — 편집 vpos 저장 리셋 보존(#2314), undo/redo stale 선택 ref 정리(#2304), undo 계약 실키 e2e smoke(#2324)
+- @planet6897 (Jaeook Ryu) — 렌더링·페이지네이션 정합 연작 21건: rowspan 선언-잔여 관례(#2309), r15 서식 스택 3부작(#2315/#2321/#2323), BinData 지연 로딩(#2265), svg2pdf 결정화(#2281), 10k 표본 검증(#2262) 등
+- @postmelee (Taegyu Lee) — legacy /web 제거(#2316), 거대 셀 편집 cache coherence(#2241), 줄 나눔 단위 반전 정정(#2194), canonical font root(#2254), frontend CI gate(#2216/#2235), Phase 0 freeze(#2174)
+- @seo-rii — CanvasKit readiness gate(#2224), proof-gated 리소스 replay(#2248), cross-backend 진단·profile 전달(#2297)
+- @yeonic (Jongyeon Kim) — HWP5 취소선 strike shape whitelist(#2258) *(첫 기여 환영!)*
+
+## [0.7.18] — 2026-07-11
+
+> v0.7.17 후속 patch — 렌더링 정합 대규모 보정(부동/전면 개체 페이지네이션, RowBreak 표,
+> 미주 흐름), 초대형 표 성능, 편집기 캐럿·undo·OLE 정합, 관용 파싱·HWPX 보존 확대,
+> WMF 도형 재작성. 내부 리팩토링 21라운드(행동 회귀 0) 동반. 공개 API 하위 호환 유지 — PATCH.
+
+### 렌더링 정합
+- 부동/전면 개체 페이지네이션 일치: 전면 이미지·tac 스택 쪽당-1장 분할(#1995/#2004/#2006),
+  용지-앵커 글뒤로 표 절대배치(#1994), 부동 폼 별지 서식 과분할 81→18쪽(#2019),
+  1×1 중첩셀 콘텐츠 분할 6→15쪽=한글(#2007).
+- RowBreak 표: 블록컷 sliver 흡수(#1921), 각주 다수 과분할(#1937), 부재-LINE_SEG 셀
+  라인높이 em 교정 213→159쪽(#1842), 선언-fit 확대(#2097), vert_offset 이중계상(#2015).
+- 쪽 하단 saved-bounds 신뢰 확대(#2093), 하단 고정 틀 vpos=0 리셋 보존(#1920/#2158),
+  vert=쪽 valign=Bottom 표 하단 밀착(#1858), Square-wrap 비-TAC 그림 프레임 배치(#1230),
+  TAC 표 내용 높이 확장(#1835), tac 그림 lazy vpos 이중 가산 수정(#1898).
+- 함초롬 계열 라틴/구두점 폭을 Haansoft Batang 메트릭으로 대체 — 한글 폰트 대체 동작
+  모사(#2156).
+
+### 성능
+- 거대 셀 렌더 O(pages×cell) 재계산 제거 — cell_units 메모이즈(#1949), 초대형 표
+  O(n²) 셀 측정 제거로 52,694셀 문서 렌더 타임아웃 해소(#2063), Rc→Arc 로
+  DocumentCore: Send 복원(#2087).
+
+### 편집기 (rhwp-studio)
+- 후반 페이지 셀 캐럿 계산 3,064ms→33ms — 캐럿 페이지 힌트 탐색(#2021).
+- undo 스냅샷 라우팅 일원화: 찾아 바꾸기(#2037), 그림/수식 속성 다이얼로그(#2028/#2077).
+- OLE 개체 선택/캡션/붙여넣기 한컴 호환(#2069), 표 셀 Enter 캐럿 정정(#2164),
+  표 셀 장문 입력 캐럿·IME 경계 보정(#1951), 반복 셀 Enter 좌표 재계산(#2164).
+
+### 파서·직렬화
+- 관용 파싱: UTF-16/UTF-8 디코딩 폴백으로 부분 손상 실문서 로드(#1932), 미등록
+  styleIDRef 기본 스타일 강등(#1933), 암호화 HWPX 감지·분류(#1946), DRM/빈 파일
+  분류(#1982), MAX_XML_SIZE 256MB(#1917).
+- HWPX 보존 확대: 각주/미주 모양(#1984), breakLatinWord(#1986), secPr 2필드(#1987),
+  curSz=0 sentinel(#2017), BinData 빈 확장자(#1981). HWP5: page_def 소실(#1915),
+  CommonObjAttr 왕복(#1916). HWP3→HWP5 탭 단위 통일(#1950).
+
+### WMF/도형
+- write_line 완전 재작성 — connectLine 변질·컴포넌트 소실 수정(#1943), legacy 공용
+  도형 drawText 미방출 수정(#1944), 도형 restrictInPage 하단 클램프(#2075),
+  셀 앵커 그림 셀 vertical_align 반영(#2071).
+
+### CLI·도구
+- export-png hide_fill 검은 페이지 수정(#2083), ir-diff 출력 가드/요약 유지 재구조,
+  코드 품질 대시보드 총량 지표·시계열 발행(mydocs/metrics/, #2130/#2132).
+
+### 내부 품질
+- 복잡도 리팩토링 21라운드: 최대 CC 288→117(−59%), 행동 회귀 통산 0 (#1904/#2131 결산,
+  산식 v2.1·감소 잠재량 스캐너 도입 #2130). 프론트 Phase 0 기준선 진행(#2124).
+
+### 기여자
+
+이번 사이클(v0.7.17 이후)에 머지된 기여자 PR 268건 (GitHub 핸들, 알파벳순):
+
+- @humdrum00001010 — HWPX 패키지 그래프 직렬화 복원(#1675), 미주 배치·구분선·번호 한컴 정합(#1875) 외 5건
+- @jangster77 (Taesup Jang) — 표/편집 정합·외부 PR 통합·검토 130건: 행정업무 편람 페이지 정합(#1691), OLE 개체 선택/캡션/붙여넣기(#2103), 표 셀 장문 입력 캐럿·IME(#2172) 등
+- @johndoekim — 방점 렌더 정합(#1738), OOXML 차트 C1c/C1d(#1890/#1954/#2140) 외 6건
+- @kkyu8925 — 빈-host co-anchored float 표 orphan control(#1767) 외 4건 *(첫 기여 환영!)*
+- @lpaiu-cs — undo 스냅샷 라우팅 3부작(#2028/#2039/#2078), restrictInPage 클램프(#2033/#2076), BinData 채번(#2040), 셀 앵커 그림 valign(#2074) *(첫 기여 환영!)*
+- @oleg-sung — TAC 도형 뒤 가운데 정렬 셀 vpos 수정(#1674) *(첫 기여 환영!)*
+- @physwkim — cell_units Rc→Arc Send 복원(#2087), 새 문단 서식 상속(#2095)
+- @planet6897 (Jaeook Ryu) — 렌더링 정합 연작 74건: RowBreak 표·부동/전면 개체 페이지네이션·초대형 표 성능(#2063)·10k 표본 검증 등
+- @postmelee (Taegyu Lee) — CI release-test 전환(#1739), 프론트 리팩터링 계획 v2(#2080)·Phase 0 기준선(#2174 진행) 등 28건
+- @seo-rii — CanvasKit 개체 gap 진단 정렬(#1806) 외 3건
+- @snvtac — 미주 reset rewind 열 배치 수정(#1495) *(첫 기여 환영!)*
+
+의존성: dependabot 6건 (quick-xml 0.41 보안 릴리스 포함).
+
+
+## [0.7.17] — 2026-06-23
+
+> v0.7.16 후속 patch — OOXML 차트 렌더 정합 첫 작업, legacy 도형 shapeComment 직렬화,
+> WASM options object API, rhwp-studio 표/그림/커서 편집 정합 다수, 렌더 권위 보강,
+> 의존성 일괄 업데이트. 공개 API 하위 호환 유지(positional API 유지) — PATCH. 브라우저 확장 0.2.6 동반.
+
+### API
+- WASM public API 의 고인자(7+) 함수 26개에 options object 변형 `*Ex(options_json[, image_data])`
+  를 추가했다 (#1413). 기존 positional API 는 그대로 유지되며(하위 호환), `*Ex` 는 JSON
+  options 로 같은 동작을 한다. downstream 은 중간 삽입형 시그니처 변경에 덜 취약하다.
+  - 대상: insertPicture(하이브리드: image_data 별도 인자), insertClickHereFieldInCell,
+    splitTableCellsInRange, splitTableCellInto, moveVertical, setPageHide,
+    setCharShapeIdInCell, insertClickHereFieldByPath, getSelectionRectsInCell,
+    exportSelectionInCellHtml, deleteRangeInCell, copySelectionInCell, applyCharFormatInCell,
+    setNoteEquationProperties, setFormValueInCell, setActiveFieldInCell, removeFieldAtInCell,
+    pasteHtmlInCell, moveLineEndpoint, mergeTableCells, insertTextInCell, insertClickHereField,
+    getTextInCell, getFieldInfoAtInCell, evaluateTableFormula, deleteTextInCell.
+  - 설계 관행·breaking change 표기 규약: `mydocs/manual/wasm_api_options_convention.md`.
+  - 소비자(@rhwp/core) README 에 `*Ex` 안내 + 소비자 편집 API 매뉴얼 추가 (#1445).
+  - **권고**: 고인자 API 는 `*Ex` 사용을 권장한다. positional 시그니처 변경 시 CHANGELOG
+    `### API` 에 인자 index 변경을 명시한다.
+
+### 렌더링 (차트)
+- OOXML 차트 27종 중 데이터가 추출되던 7종(3D막대4·3D원형1·ofPie2)을 요소명 라우팅으로 2D 근사
+  렌더 전환 — "차트 (미지원)" placeholder 제거 (#1453, C1a / #1431 Track C).
+- 막대 차트 `c:grouping`(stacked/percentStacked) 반영 — 누적/백분율 막대 6종 정합 (#1453).
+
+### HWPX 저장 계약 (serializer fidelity)
+- `render_common_shape_xml` 경유 legacy 도형(ellipse/arc/polygon/curve/chart/ole)의
+  `hp:shapeComment` 직렬화 누락 정정 — round-trip 보존 (#1451).
+- `ir-diff` tab_extended 예약 필드[3,4,5]의 거짓 차이 보고 제외 (#1473).
+
+### 렌더링
+- Text IR v2 폰트 fallback 시 권위 gap 유지, CanvasKit replay 계약 가드 확장 (#1429/#1447/#1469).
+- 표 셀 TAC 그림과 텍스트 세로 정렬 보정 (#1352). 글자처럼 해제 그림 재흐름 보정 (#1459).
+
+### rhwp-studio
+- 미저장 문서 자동 백업 + 복구 UI (#1448). 로컬 글꼴 감지 동의(opt-in) 흐름 (#1328).
+- 쪽 테두리 미리보기 버튼 토글 복구 (#1426). 그림 삽입·인라인 커서 정합 (#1452).
+- 표 줄/칸 입력·지우기 회귀 보정(생성 직후 칸/줄 추가 시 표 높이 보존) + 한컴식 통합 대화상자·단축키 (#1481).
+- 표 셀 드래그 선택·한컴 호환 표 편집 (#1443), 셀 보호 속성 보존·입력 차단 UX (#493).
+- 크기 고정 개체 조작 차단 (#1436), 온새미로 그림 어울림·문단 테두리 정합 (#1440).
+- 스타일 적용·표 캡션/모양복사 보정 (#1470), 플랫폼별 메뉴 단축키 표시 보정 (#1476).
+
+### 브라우저 확장 (0.2.6)
+- viewer 인라인 스크립트 CSP 위반 정정(theme-init.js 분리) + 다크 아이콘 자산 누락 복구 (#1444).
+- Chrome 다운로드 `onDeterminingFilename` 리스너의 전역 부작용 제거 — 다른 확장의
+  `download({filename})` 하위폴더 저장을 방해하지 않도록 `onCreated`/`onChanged` 관찰자로 전환 (#1471).
+
+### 인프라
+- `Cargo.lock` git 추적 — 재현 가능 빌드 + CI 캐시 키 안정화 (#1423, macOS FFI 영역 제외).
+- 의존성 일괄 업데이트: zip 8.6.0, serde_json 1.0.150, snafu 0.9.1, subsetter 0.2.6,
+  skia-safe 0.99.0, unicode-segmentation 1.13.3, wasm-bindgen-test 0.3.75, @types/chrome 0.2.0
+  (#1461~#1468).
+
+### 기여자
+
+이번 사이클(v0.7.16 이후)에 머지된 기여자 PR (GitHub 핸들, 가나다·알파벳순):
+
+- @jangster77 (Taesup Jang) — 표 줄/칸 입력·지우기 회귀 보정(#1481), 표 셀 드래그 선택·편집(#1443)·셀 보호(#493), TAC 그림 정렬·크기 고정·온새미로(#1352/#1436/#1440), 자동 백업 복구(#1448), 그림/커서 정합(#1452/#1459), 스타일·캡션·단축키(#1470/#1476)
+- @johndoekim — OOXML 차트 C1a 라우팅 + 막대 누적 (#1453)
+- @oksure (Hyunwoo Park) — ir-diff tab_extended 예약 필드 거짓 차이 제외 (#1473)
+- @postmelee — 로컬 글꼴 동의 흐름(#1328), 쪽 테두리 토글(#1426), Chrome 다운로드 interceptor 부작용 수정(#1471), PR 리뷰 워크플로 문서(#1425)
+- @seo-rii — Text IR v2 폰트 권위 유지(#1429), CanvasKit replay 가드 확장(#1447/#1469)
+
+## [0.7.16] — 2026-06-19
+
+> v0.7.15 후속 patch — HWPX 저장 계약(serializer fidelity) 정밀화, 누름틀 안내문 한컴 호환,
+> rhwp-studio 드래그&드롭 보안 게이트, 렌더·표·그림 정합과 외부 기여자 PR 다수 반영.
+> 공개 API 하위 호환 유지 — PATCH.
+
+### HWPX 저장 계약 (serializer fidelity)
+- 셀·글상자 subList 내부 컨트롤 보존, lineseg 원본 보존, 표/그림/묶음 캡션 직렬화 (#1379/#1380/#1387/#1403).
+- secPr 페이지 여백·본문 단(colPr) 정의를 IR 값으로 치환 — 템플릿 하드코딩 제거 (#1388/#1407).
+- 그림 크기 요소(curSz/imgRect/imgDim), MEMO 필드 parameters, shapeComment, borderFill/numbering 등록 축, 표 pageBreak 보존 (#1389/#1391/#1392/#1384/#1409/#1393).
+- 파서 autoNum 폭 일관화, newNum 슬롯 위치 정정 (#1382/#1407). 열거 속성 표면 표기 정합 검사 추가 (#1402).
+- DocInfo·numbering paraHead·cellzoneList·useKerning·useFontSpace 등 무손실 라운드트립 보강 (#1405/#1350), hp:tc 셀 필드 이름 파싱 (#1401).
+
+### 한컴 호환
+- 누름틀(ClickHere) 안내문(Direction) command 포맷을 한컴 정답지 동형으로 정정 — 한컴 에디터에서 안내문이 바인딩되지 않던 문제 해소 (#1434).
+
+### rhwp-studio 보안·UX
+- 드래그&드롭 로컬 파일 로딩을 기본 동작에서 제외하고, 드롭 시 모달 확인 대화상자로 명시적 동의(opt-in) 후에만 로딩 (#1439). 확장/웹 공통.
+- 누름틀 양식 모드·경계 편집, 편집 커서/포커스, 개체 속성 비율 유지·크기 고정, 표 셀 TAC 그림 세로 정렬 (#1419/#1428/#1430/#1436/#1352/#258).
+- 다크테마 지원 + 잔여 UI 대비 정리 (#1420/#1422). replaceAll 저장 유실 정정, 이미지 Shift 크기 조절, 표 생성 직후 F5 처리 (#1398/#1400/#1404).
+
+### 렌더링
+- native PDF export API(DocumentCore) + report-only PDF visual diff (#1359). Text IR v2 폰트 증명 게이트, exact font replay proof, glyph orientation/transform authority 정밀화 (#1421/#1429/#1312).
+- 미주 높이 모델 측정 SSOT·게이트 재보정, 공식 미주 모양 모델 정규화, 적분기호 글리프 (#1363/#1370/#1410/#1314/#1377). 쪽 영역 제한 표 셀/회전 셀 그림 배치 정합 (#1282).
+
+### 기타
+- 차트 샘플 코퍼스 27종(OOXML+레거시) 검증 fixture 추가 (#1431 P-1). 미주 덤프·sweep 검증 인프라 분리 (#1395).
+- 인쇄 시 혼합 용지 크기 보존 (#1383). 온새미로 그림 어울림·문단 테두리 정합 (#1441).
+
+### 기여자
+
+이번 사이클(v0.7.15 이후)에 머지된 외부 기여자 PR (GitHub 핸들, 가나다·알파벳순):
+
+- @Martinel2 — useFontSpace IR 필드 + HWP5/HWPX 파서·직렬화 (#1350)
+- @Mireutale — HWPX 표 셀 탭/줄바꿈 인라인 직렬화, 그림 effects/shadow roundtrip 보존 (#1360/#1349)
+- @jangster77 (Taesup Jang) — 미주 모양 모델 정규화, 누름틀 양식·편집, 다크테마, 표 셀 그림·크기 고정, 온새미로 정합 (#1410/#1419/#1420/#1427/#1430/#1435/#1437/#1441), 검증 인프라 (#1395)
+- @johndoekim — 차트 샘플 코퍼스 27종 (#1431/PR #1432)
+- @msjang (Minseok Jang) — 인쇄 시 혼합 용지 크기 보존 (#1383)
+- @mrshinds — TAC 표 host-line spacing (#1376)
+- @oksure (Hyunwoo Park) — replaceAll 저장 유실, createEmpty 기본 구역, 이미지 크기 조절, hp:tc 셀 이름, 표 생성 후 F5, 캡션 파싱·직렬화 (#1398/#1399/#1400/#1401/#1404/#1406)
+- @physwkim (Sang Woo Kim) — HWPX 무손실 라운드트립(DocInfo·cellzoneList·useKerning 등) (#1405)
+- @planet6897 (Jaeuk Ryu) — 미주 높이 SSOT·게이트, 적분기호 글리프, 미주 발산 진단·종결 (#1314/#1371/#1374/#1377/PR #1390)
+- @postmelee — rhwp-studio 다크모드 잔여 UI 대비 (#1422/PR #1424)
+- @seo-rii (Seohyun Lee) — 렌더러 baseline sweep, native PDF export API, Text IR v2 폰트 증명 게이트 (#1312/#1359/#1421/#1429)
+
+## [0.7.15] — 2026-06-06
+
+> v0.7.14 후속 security patch — 브라우저 확장 service worker fetch 경로 보안 강화,
+> 수식 TAC 흐름·커서 이동 보정, HWPX 저장 계약 후속 보강. 공개 API 하위 호환 유지 — PATCH.
+
+### 보안
+- Chrome/Firefox 확장 service worker의 문서 fetch 경로를 강화했다 (#1307).
+  - message sender 검증을 추가해 extension viewer와 content script 호출 경계를 분리.
+  - localhost, loopback, link-local, private network, 내부 호스트명 URL을 차단.
+  - redirect 이후 최종 URL을 같은 정책으로 재검증.
+  - extension-side fetch에 `credentials: "omit"` 적용.
+  - 자동 thumbnail 데이터가 page DOM에 직접 노출되지 않도록 hover card 내부 처리를 보강.
+- Chrome/Edge/Firefox 확장 `0.2.4` 배포 준비: 새 권한 또는 새 외부 네트워크 endpoint 없음.
+
+### 수식·미주 흐름
+- 수식 TAC-only 라인의 자동 줄넘김과 문단 들여쓰기 적용을 보강하고, 미주 영역 커서 이동 회귀를 정정 (#1310).
+- 강제 줄넘김 뒤 TAC 수식 커서 이동과 문단 간 이동에서 중복 정지/스킵 현상을 줄임 (#1308/#1310).
+- 미주 수식 script 렌더링, continuation spacing, superscript alignment 후속 보정 (#1301/#1303/#1306).
+
+### HWPX 저장 계약
+- HWPX 그림 직렬화에서 flip/rotation 하드코딩 및 `isEmbeded` 누락을 정정 (#1309).
+- HWPX 대각선 셀 테두리 `hh:slash` / `hh:backSlash` type 보존 (#1311).
+- zero-length HWPX field ordering 보존 (#1299).
+
+### rhwp-studio·문서
+- 문단 정보 대화상자에서 왼쪽 여백과 내어쓰기 바인딩을 분리 (#1307 후속 작업 중 발견).
+- visual sweep contributor guide와 rsvg/font 준비 문서를 보강 (#1292).
+- CLI 분석·디버깅 명령 가이드 보강.
+
+### 기여자
+보안 제보와 재검증에 도움을 준 Dangel, 그리고 본 패치 사이클에 기여한 모든 외부 기여자와
+Dependabot에 감사드립니다.
+
+## [0.7.14] — 2026-06-05
+
+> v0.7.13 후속 patch 사이클 (5/26~6/5) — 미주(해설) 흐름·간격 정합 집중, 수식 렌더링/배치
+> 정밀화, 표 셀 안 그림 편집(삽입·복사·hit-test) 한컴 정합, HWPX 저장 계약 확장, 외부 기여자
+> PR 다수 흡수. 공개 API 하위 호환 유지 — PATCH.
+
+### 미주(Endnote) 흐름·간격
+- compact 미주의 문제 제목 사이 간격(between-notes 7mm), 다줄 문단 줄간격, 연속 인라인 수식
+  다행 병합, 구분선 아래 여백을 한컴 기준으로 정합 (#1240, #1241, #1247, #1255, #1259, #1262,
+  task #1245/#1248/#1256/#1257/#1258)
+- 미주 다단(EACH_COLUMN) 흐름에서 단 끝 줄 위치·오버플로우 보정
+
+### 수식(Equation) 렌더링
+- 스크립트 토큰 처리: root/sqrt·관계연산자 glued-split, rm+bar(overline) leak, prime/cdots 연접 (#1208)
+- LEFT-RIGHT 구분기호 그룹 뒤 첨자 결합(`|x|^3`) (#1226)
+- 큰 연산자(Σ/∏/∫) 피연산자 간격, 수식 포함 줄 본문 한글 압축·겹침 해소 (#1235, #1223)
+- HWPX 미주/각주 prefixChar 마커 접두문자('문') 복원 (#1202)
+
+### 표 셀 안 그림(Picture) 편집 — 한컴 정합
+- 표 + picture 삽입/토글/시각/클릭 정합 (#1177), 셀 내부 도형 '개체 속성' 다이얼로그 (#1150)
+- 중첩 표 셀 picture 복사(Ctrl+C) + 떠있는 개체 paste cascade (#1228)
+- 사각형 글상자 안 picture 클릭 hit-test/속성/삽입 (#1254), 중첩 표 셀 붙여넣기 경로 보존 (#1207)
+- HWP5 wrap=Square 호스트 본문 커서 전진(답안↔문제 겹침), 수식-only 셀 z-표 행 압축 (#1220, #1225)
+
+### 레이아웃·렌더링
+- HWPX curve 도형 `<hp:seg>` 외곽선 렌더링 (#1203), textFlow 속성 roundtrip 보존 (#1213)
+- BehindText/InFrontOfText z-order 합성, 용지 기준 BehindText 그림/표 z-order, 바탕쪽 글상자 번호 (#1163, #1252)
+- 회전 90°/270° 이미지 bbox 이중회전 정정 (#1102), RawSvg(OLE/차트) 첫 로드 백지 렌더 (#1182)
+- 폰트 충실도: 한컴 돋움 폴백을 Noto Sans KR ExtraLight로 (#1234)
+- 한컴오피스식 격자 보기·쪽 테두리, 잔상 통합 fix (#1137, #1164)
+
+### HWPX 저장 계약
+- Bookmark/Field dispatcher 연결, OLE chart, 회전 그림, 맞쪽 편집 여백 교대, masterpage idRef (#1289, #1242)
+- 본문·표 셀 문단 id 전역 유니크 (#1222), external image reference/bytes injection contract (#1142/#1143)
+
+### rhwp-studio
+- 입력 편집 재렌더 비용 축소(narrow invalidation) (#1212), 모달 대화상자 드래그 공통화
+- mac 창 리사이즈 가운데 정렬, 찾기/이동 대화상자 Enter 처리, hit-test caret snapping (#1193, #1281, #1291)
+
+### 인프라·문서
+- Dependabot 결합 의존성 그룹화, vite/puppeteer-core dev-dep bump (#1214, #1216)
+- macOS headless Skia font lookup hang 방지 (task #823), Rust 테스트 경고 정리 (#1180)
+- ClickHere 필드 값 설정 시 파일 손상 정정 (#1076)
+
+### 기여자
+@planet6897, @postmelee, @jangster77, @johndoekim, @Martinel2, @Mireutale, @chkwon, @oksure,
+@seo-rii, @xogh3198, @twoLoop-40, @lidge-jun, @humdrum00001010, @HaimLee-4869, @wonbbnote
+및 Dependabot. 감사합니다.
+
+## [0.7.13] — 2026-05-26
+
+> v0.7.12 후속 patch 사이클 (5/18~26) — HWPX 렌더링/저장 호환성 집중 정정, 시험지·공공기관 문서군 회귀 해소, 외부 기여자 PR 다수 cherry-pick.
+
+### 핵심 변경
+
+- **HWPX → HWP 저장 호환성 대폭 보강**
+  - 표/셀 axis contract, cell LIST_HEADER materialization, gradient `BORDER_FILL`, 셀 안쪽 여백, 셀 배경 이미지 채우기 유형 저장 정합.
+  - 메모 컨트롤 직렬화, 목차 필드 마커/페이지 표기 출력, 페이지 번호 감추기/새 페이지 번호 시작 등 문단 컨트롤 저장 보강.
+  - `hwpx-h-01/02/03`, `mel-001`, `aift`, `exam_kor`, `exam_social` 계열 파일손상/중단 케이스 다수 해소.
+- **HWPX 렌더링 정합**
+  - 바탕쪽(짝수/홀수/마지막), 머리말/꼬리말, 문단번호, 글상자 위치·그라데이션·곡률, 문단 테두리/지문 박스 렌더링 보강.
+  - `exam_kor.hwpx`, `exam_social.hwpx`, `hwp3-sample16-hwp5.hwpx` 등 한컴 변환본과의 SVG/웹 캔버스 시각 정합 개선.
+- **페이지네이션·조판 정정**
+  - HWPX `treat_as_char` 표 LINE_SEG lh over-inflation, 중첩 표 페이지 분할, 그림 pushdown/vpos 이중 계상, 다단 미주 vpos absolute, 본문 하단 overflow 측정 통일 보강.
+  - HWP3/HWP5 변환본 sample16 계열 page break 및 문단 간격 분석 인프라 보강.
+- **rhwp-studio / 확장 UX**
+  - TAC 도형 커서 이동 및 연속 공백 이동 경험 개선.
+  - Chrome 확장에서 로컬 `file://` HWP/HWPX 열기 시 파일 URL 접근 권한 안내 및 중복 다운로드 억제 (#1131/#1132).
+- **인프라와 PR 처리**
+  - CI runner 디스크 부족 완화 step 추가 (#1109).
+  - 외부 PR #1077/#1078/#1080/#1081/#1117/#1120/#1125/#1132 등 검토·cherry-pick 반영.
+  - CanvasKit glyph payload gate 및 COLRv1 glyph gradient replay 단계 보강.
+
+### 잔존
+
+- GitHub Actions 장애로 v0.7.13 준비 시점의 원격 CI 자동 실행이 지연될 수 있음. 로컬 build/test/wasm 검증으로 보완한다.
+- `exam_social` HWPX → HWP 저장의 3페이지 홀수 머리말 글상자 높이 문제는 후속 이슈로 분리.
+
 ## [0.7.12] — 2026-05-18
 
 > v0.7.11 후속 patch 사이클 (5/12~18) — 외부 기여자 다수 PR 19건 머지 + 본 사이클 @jangster77 PR 시리즈 7건 (#956~#968). 416 files / +64383 / -3323.

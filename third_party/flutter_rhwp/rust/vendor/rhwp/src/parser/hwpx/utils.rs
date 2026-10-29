@@ -7,9 +7,36 @@ use quick_xml::Reader;
 
 use super::HwpxError;
 
+/// XML 이름을 바이트 태그 비교에 쓰기 위한 공통 입력 경계.
+///
+/// quick-xml 0.42부터 이벤트 이름이 UTF-8 문자열이므로, 기존 HWPX 파서의 바이트
+/// 태그 매치 계약은 이 경계에서만 유지한다. 테스트의 바이트 리터럴도 계속 받는다.
+pub trait XmlNameBytes {
+    fn xml_name_bytes(&self) -> &[u8];
+}
+
+impl XmlNameBytes for str {
+    fn xml_name_bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl XmlNameBytes for [u8] {
+    fn xml_name_bytes(&self) -> &[u8] {
+        self
+    }
+}
+
+impl<const N: usize> XmlNameBytes for [u8; N] {
+    fn xml_name_bytes(&self) -> &[u8] {
+        self
+    }
+}
+
 /// XML 네임스페이스 접두사를 제거하고 로컬 이름만 반환
 /// 예: b"hp:p" → b"p", b"tbl" → b"tbl"
-pub fn local_name(name: &[u8]) -> &[u8] {
+pub fn local_name<T: XmlNameBytes + ?Sized>(name: &T) -> &[u8] {
+    let name = name.xml_name_bytes();
     if let Some(pos) = name.iter().position(|&b| b == b':') {
         &name[pos + 1..]
     } else {
@@ -17,14 +44,26 @@ pub fn local_name(name: &[u8]) -> &[u8] {
     }
 }
 
-/// 속성 값을 String으로 변환
+/// 속성 값을 String으로 변환 (XML 엔티티 unescape 포함).
+///
+/// quick-xml 은 속성값을 **원문 그대로**(`&amp;` 등 이스케이프된 형태) 보관한다.
+/// IR 은 시맨틱 값(예: `R&D`)을 저장해야 하고, 직렬화 측 writer 가 유일한 escape
+/// 권위가 되어야 대칭이 성립한다. unescape 를 빠뜨리면 폼 caption 등 문자열 속성이
+/// 저장할 때마다 한 겹씩 이중 이스케이프된다(`R&&D`→`R&amp;&amp;D`→…, Task #1534).
+///
+/// 숫자/열거형 속성은 엔티티가 없어 unescape 가 no-op 이라 무영향. 미정의 엔티티/
+/// malformed 입력은 원문 lossy 로 안전 폴백한다.
 pub fn attr_str(attr: &quick_xml::events::attributes::Attribute) -> String {
-    String::from_utf8_lossy(&attr.value).to_string()
+    let raw = attr.value.as_ref();
+    match quick_xml::escape::unescape(raw) {
+        Ok(value) => value.into_owned(),
+        Err(_) => raw.to_owned(),
+    }
 }
 
 /// 속성 값이 특정 문자열과 일치하는지 확인 (비교용)
 pub fn attr_eq(attr: &quick_xml::events::attributes::Attribute, val: &str) -> bool {
-    attr.value.as_ref() == val.as_bytes()
+    attr.value.as_ref() == val
 }
 
 pub fn parse_u8(attr: &quick_xml::events::attributes::Attribute) -> u8 {
@@ -49,6 +88,22 @@ pub fn parse_u32(attr: &quick_xml::events::attributes::Attribute) -> u32 {
 
 pub fn parse_i32(attr: &quick_xml::events::attributes::Attribute) -> i32 {
     attr_str(attr).parse().unwrap_or(0)
+}
+
+/// HWPX는 음수 HWPUNIT 값을 unsigned 32-bit decimal 문자열로 저장하는 경우가 있다.
+///
+/// 예: `4294964867`은 HWP5 little-endian 필드에서 `0xfffff683`, 즉 signed `-2429`이다.
+/// 일반 `i32::parse`는 이 값을 overflow로 실패하므로, 먼저 i32를 시도하고 실패하면
+/// u32로 읽어 wrapping cast 한다.
+pub fn parse_i32_wrapping(attr: &quick_xml::events::attributes::Attribute) -> i32 {
+    let s = attr_str(attr);
+    if let Ok(v) = s.parse::<i32>() {
+        return v;
+    }
+    if let Ok(v) = s.parse::<u32>() {
+        return v as i32;
+    }
+    0
 }
 
 /// "#RRGGBB" → 0x00BBGGRR, "#AARRGGBB" → 0xAABBGGRR (alpha 보존)
@@ -107,6 +162,17 @@ pub fn parse_hatch_style(value: &str) -> Option<i32> {
     }
 }
 
+/// OWPML gradient type 값을 HWP5 gradient kind 값으로 변환한다.
+pub fn parse_gradient_type(value: &str) -> i16 {
+    match value {
+        "LINEAR" => 1,
+        "RADIAL" => 2,
+        "CONICAL" => 3,
+        "SQUARE" => 4,
+        _ => value.parse().unwrap_or(0),
+    }
+}
+
 /// XML 요소를 자식 포함하여 건너뛰기 (깊이 추적)
 pub fn skip_element(reader: &mut Reader<&[u8]>, _end_tag: &[u8]) -> Result<(), HwpxError> {
     let mut buf = Vec::new();
@@ -148,7 +214,7 @@ mod tests {
         assert_eq!(parse_color_str("#00FF00"), 0x0000FF00); // 초록
         assert_eq!(parse_color_str("#0000FF"), 0x00FF0000); // 파랑
         assert_eq!(parse_color_str("#000000"), 0x00000000); // 검정
-        assert_eq!(parse_color_str("none"), 0xFFFFFFFF);    // 투명
+        assert_eq!(parse_color_str("none"), 0xFFFFFFFF); // 투명
     }
 
     #[test]

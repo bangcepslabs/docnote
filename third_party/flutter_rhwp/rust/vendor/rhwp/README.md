@@ -15,13 +15,14 @@
   <a href="https://www.npmjs.com/package/@rhwp/core"><img src="https://img.shields.io/npm/v/@rhwp/core?label=npm" alt="npm" /></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode"><img src="https://img.shields.io/badge/VS%20Code-Marketplace-007ACC" alt="VS Code" /></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
-  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust" /></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.93.1-orange.svg" alt="Rust" /></a>
   <a href="https://webassembly.org/"><img src="https://img.shields.io/badge/WebAssembly-Ready-blue.svg" alt="WASM" /></a>
 </p>
 
 <p align="center">
-  <a href="https://oosmetrics.com/repo/edwardkim/rhwp"><img src="https://api.oosmetrics.com/api/v1/badge/achievement/921c34bc-4dd3-4409-ba2e-2d99c8b4a9b6.svg" alt="Top 2 in WebAssembly by originality - 2026-04-21" /></a>
-  <a href="https://oosmetrics.com/repo/edwardkim/rhwp"><img src="https://api.oosmetrics.com/api/v1/badge/achievement/fd1e3217-b99a-4ec2-8cba-98429f3d91c7.svg" alt="Top 2 in Editors by originality - 2026-04-21" /></a>
+  <a href="https://chromewebstore.google.com/detail/pgakpjflombjmehnebnbpnalhegaanag"><img src="https://img.shields.io/chrome-web-store/v/pgakpjflombjmehnebnbpnalhegaanag?label=Chrome%20Web%20Store&logo=googlechrome&logoColor=white" alt="Chrome Web Store" /></a>
+  <a href="https://microsoftedge.microsoft.com/addons/detail/rhwp/nfkdfobhmanddlhdbclkpoanbccpigcn"><img src="https://img.shields.io/badge/Edge%20Add--ons-Store-0078D7" alt="Edge Add-ons" /></a>
+  <a href="https://addons.mozilla.org/firefox/addon/rhwp-free-hwp-editor/"><img src="https://img.shields.io/amo/v/rhwp-free-hwp-editor?label=Firefox%20Add-ons&logo=firefoxbrowser&logoColor=white" alt="Firefox Add-ons" /></a>
 </p>
 
 <p align="center">
@@ -30,7 +31,7 @@
 
 ---
 
-HWP 파일을 **어디서든** 열어보세요. 무료, 설치 없이.
+HWP/HWPX 파일과 지원되는 HML 문서를 **어디서든** 열어보세요. 무료, 설치 없이.
 
 rhwp는 Rust + WebAssembly 기반의 오픈소스 HWP/HWPX 뷰어/에디터입니다. 닫힌 포맷의 벽을 깨고, 모든 사람, 모든 AI, 모든 플랫폼에서 한글 문서를 자유롭게 읽고 쓸 수 있게 합니다.
 
@@ -44,134 +45,39 @@ rhwp는 Rust + WebAssembly 기반의 오픈소스 HWP/HWPX 뷰어/에디터입�
 
 혼자 뼈대를 세우고, 함께 살을 붙이고, 모두의 것으로 완성한다.
 
-```
-0.5 ──── 1.0 ──── 2.0 ──── 3.0
-뼈대      조판      협업      완성
-```
+현재는 **v0.8.7 — v1.0 조판 엔진 체계화**를 중심으로 작업하면서, 40명이 넘는 외부 기여자와
+두 명의 공동 유지보수자(콜레보레이터)가 참여하는 **v2.0 협업 기반**도 함께 발전시키고 있습니다.
+버전별 목표와 완료 기준, 함께 진행되는 작업, AI 활용 세부 로드맵의 위치는
+[프로젝트 로드맵](ROADMAP.md)에서 설명합니다. rhwp 업스트림에 기여할 기능과 별도 다운스트림
+프로젝트에서 구현할 제품의 경계도 같은 문서에서 확인할 수 있습니다.
 
-| 단계 | 방향 | 전략 |
-|------|------|------|
-| **0.5 → 1.0** | 읽기/쓰기 기반 위에 조판 엔진 체계화 | 핵심 아키텍처를 혼자 견고하게 |
-| **1.0 → 2.0** | AI 조판 파이프라인 위에 커뮤니티 참여 개방 | 기여 진입 장벽을 낮추는 구조 |
-| **2.0 → 3.0** | 커뮤니티가 채운 기능 위에 공공 자산화 | 한컴 대등 수준 달성 |
+## 현재 이정표
 
-> 0.5.0까지 혼자 뼈대를 완성하고 공개하는 이유 — 커뮤니티가 붙었을 때 방향이 흔들리지 않으려면 핵심 아키텍처가 먼저 견고해야 합니다.
-
-## 이정표
-
-### v0.5.0 ~ v0.7.x — 뼈대 (현재)
+### v0.5.0 ~ v0.8.x — 뼈대 (현재)
 
 > 역공학 완성, 읽기/쓰기 기반 구축
 
 - HWP 5.0 / HWPX 파서, 문단·표·수식·이미지·차트 렌더링
+- HML(HWPML 2.9/2.91) 가져오기: 본문·서식·표·사각형 글상자·지원 수식, loss-safe HML/HWP/HWPX 저장
 - 페이지네이션 (다단 분할, 표 행 분할), 머리말/꼬리말/바탕쪽/각주
-- SVG 내보내기 (CLI) + Canvas 렌더링 (WASM/Web)
+- SVG/PNG/PDF 내보내기 (CLI) + Canvas/CanvasKit 렌더링 (WASM/Web)
 - 웹 에디터 + hwpctl 호환 API (30 Actions, Field API)
-- 1,100+ 테스트
+- 3,400+ Rust 테스트 + studio 단위/e2e/시각 회귀 CI
 
-#### v0.7.9 사이클 (2026-05-01 ~ 2026-05-02)
+> HML은 실제 corpus로 확인된 HWPML 2.9/2.91 구조만 제한 지원합니다. 지원 범위의 수식은
+> 가져와 편집할 수 있고, 보존 불가 요소가 없는 HML 원본은 preflight 검사 후 HML로 다시
+> 저장할 수 있습니다. 그림·내장/외부 리소스 등 미지원 요소는 경고하고 손실 저장을 차단합니다.
 
-> Task #501 (cell.padding 한컴 방어 로직 모방) + Task #509 (PUA 글머리표 회귀) + PR #428/#494/#478/#498/#506/#510 cherry-pick + 외부 기여자 6명 흡수
+#### 릴리즈 이력
 
-**회귀 정정 (메인테이너)**
-- mel-001.hwp 2쪽 표 셀 높이 회귀 정정 ([#501](https://github.com/edwardkim/rhwp/issues/501)) — 비정상 큰 cell.padding (1700 HU vs cell.height 1280 HU) 의 한컴 자체 방어 로직 모방 가드 추가. 트러블슈팅 + 위키 ([HWP 셀 Padding 방어 로직](https://github.com/edwardkim/rhwp/wiki/HWP-%EC%85%80-Padding-%EB%B0%A9%EC%96%B4-%EB%A1%9C%EC%A7%81)) 작성
-- PUA (Private Use Area) 글머리표 글리프 회귀 정정 ([#509](https://github.com/edwardkim/rhwp/issues/509)) — Option F (PR #251 draw_text 영역 보존 + 매핑 표 한컴 PDF 정답지 정확화). 정정 매핑 2건 + 신규 매핑 10건 + `gen-pua` 검증 도구 추가
-
-**외부 PR cherry-pick (5 건)**
-- 그룹 내 그림(Picture) 직렬화 구현 (외부 기여 by [@oksure](https://github.com/oksure) — PR [#428](https://github.com/edwardkim/rhwp/pull/428))
-- `Paragraph::utf16_pos_to_char_idx` 외부 노출 ([#484](https://github.com/edwardkim/rhwp/issues/484)) — 외부 기여 by [@DanMeon](https://github.com/DanMeon), PR [#494](https://github.com/edwardkim/rhwp/pull/494)
-- Layout 정합 + 수식 정정 합본 (7 Task / 10 commits — #488/#490/#483/#489/#495/#480/#476) — 외부 기여 by [@planet6897](https://github.com/planet6897), PR [#478](https://github.com/edwardkim/rhwp/pull/478)
-- HWP 3.0 파서 + Square wrap 어울림 렌더링 (Task #417 + Task #460, 51 commits) — 외부 기여 by [@jangster77](https://github.com/jangster77), PR [#506](https://github.com/edwardkim/rhwp/pull/506)
-- PageLayerTree image paint op 에 brightness/contrast JSON 필드 추가 ([#508](https://github.com/edwardkim/rhwp/issues/508)) — alhangeul-macos downstream 의 backend replay contract 보강. 외부 기여 by [@postmelee](https://github.com/postmelee), PR [#510](https://github.com/edwardkim/rhwp/pull/510)
-
-**회귀 검증 인프라 (외부 기여)**
-- Canvas visual diff 파이프라인 (legacy Canvas ↔ PageLayerTree replay 픽셀 diff 자동 검증, relates [#364](https://github.com/edwardkim/rhwp/issues/364)) — 외부 기여 by [@seo-rii](https://github.com/seo-rii), PR [#498](https://github.com/edwardkim/rhwp/pull/498)
-
-#### v0.7.8 사이클 (2026-04-29)
-
-> 외부 컨트리뷰터 다수 + 메인테이너 회귀 정정 + 위키/README 정비 — 외부 PR 15건 cherry-pick
-
-- 다단 섹션 누적 공식 회귀 정정 ([#391](https://github.com/edwardkim/rhwp/issues/391)) — 외부 기여 by [@planet6897](https://github.com/planet6897)
-- 수식 렌더링 개선 ([#174](https://github.com/edwardkim/rhwp/issues/174), [#175](https://github.com/edwardkim/rhwp/issues/175)) + 그림 밝기/대비 효과 ([#150](https://github.com/edwardkim/rhwp/issues/150)) — 외부 기여 by [@oksure](https://github.com/oksure)
-- 수식 ATOP 파싱 + HWPX 수식 직렬화 보존 ([#286](https://github.com/edwardkim/rhwp/issues/286)) — 외부 기여 by [@cskwork](https://github.com/cskwork) (본 저장소 첫 외부 컨트리뷰터)
-- Canvas → PageLayerTree replay 전환 P2 — 외부 기여 by [@seo-rii](https://github.com/seo-rii) (PR [#456](https://github.com/edwardkim/rhwp/pull/456))
-- WASM API 확장 (insertParagraph / deleteParagraph, [#269](https://github.com/edwardkim/rhwp/issues/269), [#271](https://github.com/edwardkim/rhwp/issues/271)) + set_field 라운드트립 정정 — 외부 기여 by [@oksure](https://github.com/oksure)
-
-#### v0.7.7 사이클 (2026-04-27)
-
-> v0.7.6 회귀 정정 — TypesetEngine 페이지네이션 fit drift / page_num 갱신 / PartialTable + Square wrap 처리 8항목 누적 정정 ([#354](https://github.com/edwardkim/rhwp/issues/354), [#359](https://github.com/edwardkim/rhwp/issues/359), [#361](https://github.com/edwardkim/rhwp/issues/361), [#362](https://github.com/edwardkim/rhwp/issues/362))
-
-#### v0.7.6 사이클 (2026-04-26)
-
-**외부 기여자 다수 + 조판 정밀화**
-- 목차 리더 도트 + 페이지번호 우측 탭 정렬 ([#279](https://github.com/edwardkim/rhwp/issues/279)) — 외부 기여 by [@seanshin](https://github.com/seanshin), PR [#282](https://github.com/edwardkim/rhwp/pull/282)
-- form-002 인너 표 페이지 분할 결함 ([#324](https://github.com/edwardkim/rhwp/issues/324)) — 외부 기여 by [@planet6897](https://github.com/planet6897), PR [#327](https://github.com/edwardkim/rhwp/pull/327)
-- typeset 경로 PageHide / Shape / 중복 emit 결함 ([#340](https://github.com/edwardkim/rhwp/issues/340)) — 외부 기여 by [@planet6897](https://github.com/planet6897), PR [#341](https://github.com/edwardkim/rhwp/pull/341)
-- Task #321~#332 누적 정리 + vpos / cell padding 회귀 해소 ([#342](https://github.com/edwardkim/rhwp/issues/342)) — 외부 기여 by [@planet6897](https://github.com/planet6897), PR [#343](https://github.com/edwardkim/rhwp/pull/343)
-
-**API · 출력 (외부 기여 by [@oksure](https://github.com/oksure))**
-- `replaceOne(query, newText, caseSensitive)` WASM API 추가 ([#268](https://github.com/edwardkim/rhwp/issues/268), PR [#334](https://github.com/edwardkim/rhwp/pull/334))
-- SVG/HTML `draw_image` base64 임베딩 (PR [#335](https://github.com/edwardkim/rhwp/pull/335))
-
-**Firefox AMO (외부 기여 by [@postmelee](https://github.com/postmelee) — PR [#339](https://github.com/edwardkim/rhwp/pull/339))**
-- AMO 검증 워닝 해소 + viewer 번들 보안 sanitize → rhwp-firefox 0.2.2
-
----
-
-#### 최근 변경 (v0.7.3 / 확장 v0.2.1, 2026-04-19)
-
-**rhwp-studio (라이브러리 0.7.3)**
-- HWPX 출처 문서 저장 비활성화 + 사용자 안내 ([#196](https://github.com/edwardkim/rhwp/issues/196)) — 데이터 손상 방지 (HWPX→HWP 완전 변환기 [#197](https://github.com/edwardkim/rhwp/issues/197) 완성 시까지)
-- HWPX→HWP IR 매핑 어댑터 자산 보존 ([#178](https://github.com/edwardkim/rhwp/issues/178)) — rhwp 자기 호환 100% 회복, 한컴 호환은 #197 후속
-- 회전된 도형 리사이즈 커서 개선 + Flip 처리 (외부 기여 by [@bapdodi](https://github.com/bapdodi) — PR [#192](https://github.com/edwardkim/rhwp/pull/192))
-- HWP 그림 효과(그레이스케일/흑백) SVG 반영 (외부 기여 by [@marsimon](https://github.com/marsimon) — PR [#149](https://github.com/edwardkim/rhwp/pull/149))
-- Windows 환경의 CFB 경로 구분자 오류 수정 (외부 기여 by [@dreamworker0](https://github.com/dreamworker0) — PR [#152](https://github.com/edwardkim/rhwp/pull/152))
-- HWPX Serializer 구현 — Document IR → HWPX 저장 (외부 기여 by [@seunghan91](https://github.com/seunghan91) — PR [#170](https://github.com/edwardkim/rhwp/pull/170))
-- HWPX ZIP 엔트리 압축 한도 + strikeout shape 화이트리스트 (외부 기여 by [@seunghan91](https://github.com/seunghan91) — PR [#153](https://github.com/edwardkim/rhwp/pull/153), PR [#154](https://github.com/edwardkim/rhwp/pull/154))
-- 도형 리사이즈 시 너비/높이 클램프 (외부 기여 by [@seunghan91](https://github.com/seunghan91) — PR [#163](https://github.com/edwardkim/rhwp/pull/163))
-- 모바일 드롭다운 메뉴 아이콘/라벨 겹침 수정 (외부 기여 by [@seunghan91](https://github.com/seunghan91) — PR [#161](https://github.com/edwardkim/rhwp/pull/161))
-
-**rhwp-chrome / Edge 확장 (v0.2.1)**
-- Chrome 확장 활성 시 일반 파일 다운로드의 마지막 위치 기억 동작 복원 ([#198](https://github.com/edwardkim/rhwp/issues/198))
-- 옵션 페이지 CSP 호환 수정 ([#166](https://github.com/edwardkim/rhwp/issues/166))
-- HWP 파일 `Ctrl+S` 시 같은 파일 직접 덮어쓰기 (외부 기여 by [@ahnbu](https://github.com/ahnbu) — PR [#189](https://github.com/edwardkim/rhwp/pull/189))
-- 썸네일 로딩 스피너 정리 + options CSP 호환 (외부 기여 by [@postmelee](https://github.com/postmelee) — PR [#168](https://github.com/edwardkim/rhwp/pull/168))
-- DEXT5 류 핸들러 다운로드 시 빈 뷰어 탭 차단
-
-**기여자 감사**
-v0.7.x 배포 주기 누적 외부 기여자: [@ahnbu](https://github.com/ahnbu), [@bapdodi](https://github.com/bapdodi), [@cskwork](https://github.com/cskwork), [@DanMeon](https://github.com/DanMeon), [@dreamworker0](https://github.com/dreamworker0), [@jangster77](https://github.com/jangster77), [@marsimon](https://github.com/marsimon), [@oksure](https://github.com/oksure), [@planet6897](https://github.com/planet6897), [@postmelee](https://github.com/postmelee), [@seanshin](https://github.com/seanshin), [@seo-rii](https://github.com/seo-rii), [@seunghan91](https://github.com/seunghan91)
-
-### v1.0.0 — 조판 엔진
-
-> AI 조판 파이프라인, 뼈대 완성
-
-- 편집 시 동적 재조판 체계화 (LINE_SEG 재계산 + 페이지네이션 연동)
-- AI 기반 문서 생성/편집 파이프라인
-- 문서 조판 품질 한컴 뷰어 수준 도달
-
-### v2.0.0 — 협업
-
-> 커뮤니티가 기능을 채워가는 단계, 살 붙이기
-
-- 플러그인/확장 아키텍처, 실시간 협업 편집
-- 다양한 출력 포맷 (PDF, DOCX 등)
-
-### v3.0.0 — 완성
-
-> 한컴과 대등한 수준, 완전한 공공 자산
-
-- 전체 HWP 기능 커버리지, 접근성(a11y), 모바일 대응
-- 공공기관 실무 투입 가능 수준
-
-자세한 내용은 [로드맵 문서](mydocs/report/rhwp-milestone.md)를 참조하세요.
-
----
+사이클별 상세 변경 사항(기여자 목록 포함)은 [CHANGELOG.md](CHANGELOG.md)에 기록합니다.
 
 ## Features
 
 ### Parsing (파싱)
 - HWP 5.0 binary format (OLE2 Compound File)
 - HWPX (Open XML-based format)
+- HML (HWPML 2.9/2.91) — 검증된 구조 제한 지원
 - Sections, paragraphs, tables, textboxes, images, equations, charts
 - Header/footer, master pages, footnotes/endnotes
 
@@ -201,34 +107,19 @@ v0.7.x 배포 주기 누적 외부 기여자: [@ahnbu](https://github.com/ahnbu)
 
 ### Output (출력)
 - SVG export (CLI, legacy + layer replay)
-- Canvas rendering (WASM/Web)
+- PNG export (native Skia, `--features native-skia`)
+- PDF export: SVG compatibility 기본(`--text-as-paths` 지원, 바이트 재현성), native Skia direct opt-in(`--features native-skia`, `--backend direct`)
+- Canvas rendering (WASM/Web) + 명시 opt-in 문서 단위 Canvas2D/CanvasKit 자동 선택
+- 저장: HWP 편집 저장, HWPX/HML 의미 보존 저장, HWPX → HWP 변환 경로
 - Debug overlay (paragraph/table boundaries + indices + y-coordinates)
 
 ### Multi-Renderer Backends (멀티 렌더러 백엔드)
-- `PageRenderTree` can be lowered into a `PageLayerTree` paint IR before backend replay.
-- P1 public surfaces are Rust native `DocumentCore::build_page_layer_tree(page)` and WASM `getPageLayerTree(page)`.
-- Layer JSON starts at `schemaVersion: 1`, uses additive `schemaMinorVersion` / `resourceTableMinorVersion`, `unit: "px"`, and `coordinateSystem: "page-top-left-y-down"` to match the existing page render coordinates.
-- Compatible schema changes should be additive; incompatible JSON shape changes require a schema version bump.
-- **Legacy SVG** remains the default compatibility output.
-- **Layered SVG** can be exercised with `RHWP_RENDER_PATH=layer-svg`.
-- The layered SVG path is a transition adapter that expands `PageLayerTree` back into the existing SVG renderer.
-- Browser/native Canvas paths render through `PageLayerTree` replay by default.
-- Legacy Canvas remains available through `renderPageCanvasLegacy` / `renderPageToCanvasLegacy` for parity checks.
-- P3 visual regression coverage runs `npm run e2e:render-diff:ci` in `rhwp-studio` to compare legacy Canvas and layer Canvas in Chromium; CI uploads render-diff artifacts and writes a summary.
-- The default render-diff fixtures cover basic text/table output, business-document layout, and treat-as-char object placement; override with `RHWP_RENDER_DIFF_FILES`, `RHWP_RENDER_DIFF_MAX_PAGES`, or `RHWP_RENDER_DIFF_ALL=1`.
-- P4 adds native-only `DocumentCore::render_page_png_native(page)` behind `--features native-skia`; it renders `PageLayerTree` to encoded PNG through `SkiaLayerRenderer`.
-- P5 adds native Skia equation replay from `EquationNode.layout_box`, so equations are no longer placeholder boxes in the PNG path.
-- P5 replays the existing equation layout tree directly; it does not add CanvasKit equation replay or native form replay.
-- P6 adds native Skia `RawSvg` fragment rasterization through `resvg`, with external file href loading disabled.
-- P11 adds the Text IR v2 compatibility contract: `textSources`, per-`TextRun` source spans, paint style metadata, run placement/clusters, feature arrays, and explicit special text visual ops. `TextRun` remains the fallback replay path.
-- P12 adds guarded `GlyphRun` sidecar variants, font blob/face identity metadata, and a shape-lowering API. Canvas2D/layered SVG still use `TextRun` fallback; native Skia also keeps the fallback until exact blob-backed typeface replay is wired. Normal lowering does not emit glyph ids until a shaping pass explicitly inserts them.
-- P14 adds guarded `GlyphOutline` sidecar variants and backend text variant selection diagnostics. Existing renderers still keep the `TextRun` fallback path.
-- P15 adds diagnostics-only CanvasKit replay policy planning through `getCanvasKitReplayPlan(page, mode)`. `default` mode forbids hidden Canvas2D overlays, while `compat` mode reports transition overlays explicitly.
-- CI covers the native Skia path with `cargo test --features native-skia skia --lib`; the feature is not available on `wasm32` targets.
-- The initial native Skia path is a PNG raster backend with core image/equation/raw-svg replay; CanvasKit glyph replay, exact native glyph replay, real font blob extraction, complex text shaping, advanced image parity, and native form replay stay as follow-up work.
-- C ABI export is intentionally left for a later PR.
-- `ResourceArena` now reserves font blob storage and font resource identity for glyph replay; document image/SVG interning stays as follow-up work.
-- This phase establishes the frontend/backend boundary for later CanvasKit and fuller native Skia backends.
+- 공통 paint IR: `PageRenderTree` → `PageLayerTree` (Rust `DocumentCore::build_page_layer_tree`, WASM `getPageLayerTree`) — `schemaVersion: 1`, 호환 변경은 additive 원칙
+- 백엔드: legacy/layered SVG, Canvas2D, CanvasKit 직접 replay, native Skia PNG/direct PDF(`--features native-skia`)
+- Studio, 브라우저 확장/embed, VS Code 뷰어의 기본 요청은 호환 경로인 Canvas2D입니다. Studio 계열에서 `?renderer=auto`를 명시하면 bounded document preflight가 완전하고 적격이며 필요한 문서 폰트를 준비할 수 있는 경우만 CanvasKit으로 고정합니다. 표준 선·도형 점선과 수평 글자 겹침, 탭 리더, 밑줄·취소선·강조점, 위치가 확정된 공백·탭·문단 끝·줄바꿈 부호, nominal glyph replay가 안전한 일반 `TextRun`의 세로쓰기·장평·음영·그림자·외곽선·양각·음각은 CanvasKit이 직접 재생합니다. 방향과 cluster advance 권한이 아직 없는 복합 shaping 문자, 옛한글·boxed-PUA와 장평 또는 paint effect의 조합, 세로·회전된 특수 시각 op, `[표]`, `[그림]` 같은 구조 조판 부호를 포함하는 `showControlCodes`, 판정·초기화·리소스 준비·런타임 실패는 해당 문서 revision 전체를 Canvas2D로 고정합니다. `?renderer=canvas2d`와 `?renderer=canvaskit`은 명시적 강제 선택입니다.
+- Text IR v2: 폰트 blob 증명 기반 GlyphRun/GlyphOutline 사이드카 — 검증된 수평 nominal GlyphRun은 CanvasKit direct replay, 나머지는 `TextRun` 폴백 (호환 계약)
+- direct PDF는 print profile과 CSS px→PDF point `72/96` 변환을 사용합니다. 손실되는 gradient/pattern/shadow/connector/image adjustment는 SVG backend 사용을 안내하며 실패하고, Raw SVG만 `--raster-dpi` 기반 bounded raster fallback을 사용합니다.
+- 시각 회귀 CI: render-diff(Canvas 계열 + browser/compatibility PDF report), selected direct/compatibility PDF 2% hard gate, 4-backend 공통 replay-plane(배경→글뒤→본문→글앞) 계약
 
 ### Web Editor (웹 에디터)
 - Text editing (insert, delete, undo/redo)
@@ -289,12 +180,27 @@ document.getElementById('viewer').innerHTML = doc.renderPageSvg(0);
 | [@rhwp/editor](https://www.npmjs.com/package/@rhwp/editor) | 완전한 에디터 UI (iframe) | `npm i @rhwp/editor` |
 | [@rhwp/core](https://www.npmjs.com/package/@rhwp/core) | WASM 파서/렌더러 (API) | `npm i @rhwp/core` |
 
+## 설치 — 빌드 없이 CLI·MCP 쓰기
+
+빌드 도구 없이 CLI(그리고 아래 MCP 서버)를 바로 쓰려면
+[Releases](https://github.com/edwardkim/rhwp/releases/latest)에서 플랫폼 바이너리를
+받으세요 — 매 릴리스에 linux x86_64 · macOS(x86_64/aarch64) · windows x86_64
+4종과 무결성 검증용 `SHA256SUMS.txt` 가 첨부됩니다.
+
+```bash
+tar xzf rhwp-v*-linux-x86_64.tar.gz          # windows 는 zip 해제
+sha256sum -c SHA256SUMS.txt --ignore-missing # 무결성 확인 (선택)
+./rhwp/rhwp capabilities                     # 첫 확인 — 전 명령 기계 계약 자기서술
+```
+
+PATH 에 두면 아래 MCP 절의 `"command": "rhwp"` 가 그대로 동작합니다.
+
 ## Quick Start (소스 빌드)
 
 처음 프로젝트에 참여하는 개발자는 [온보딩 가이드](mydocs/manual/onboarding_guide.md)를 먼저 읽어보세요. 프로젝트 아키텍처, 디버깅 도구, 개발 워크플로우를 한눈에 파악할 수 있습니다.
 
 ### Requirements
-- Rust 1.75+
+- Rust 1.93.1 (`rust-toolchain.toml` 기준)
 - Docker (for WASM build)
 - Node.js 18+ (for web editor)
 
@@ -303,7 +209,7 @@ document.getElementById('viewer').innerHTML = doc.renderPageSvg(0);
 ```bash
 cargo build                    # Development build
 cargo build --release          # Release build
-cargo test                     # Run tests (1,100+ tests)
+cargo test                     # Run tests (3,400+ tests)
 ```
 
 ### WASM Build
@@ -327,6 +233,32 @@ npx vite --host 0.0.0.0 --port 7700
 
 Open `http://localhost:7700` in your browser.
 
+## AI 에이전트에서 쓰기 (MCP)
+
+rhwp 는 MCP(Model Context Protocol) 서버를 내장한다 — 설정 한 줄이면 Claude Code 등
+MCP 호스트가 HWP/HWPX 를 읽고·검색하고·채우고·변환한다:
+
+```jsonc
+// .mcp.json
+{ "mcpServers": { "rhwp": { "command": "rhwp", "args": ["mcp-serve"] } } }
+```
+
+`rhwp` 실행 파일은 위 "설치" 절의 릴리스 바이너리면 충분하다 — 소스 빌드 없이
+바로 동작한다.
+
+첫 호출 3종 (조사 → 위치 → 채움):
+
+```jsonc
+hwp_info        { "path": "문서.hwp" }                       // 규모·형식 파악
+hwp_search      { "path": "문서.hwp", "query": "위임전결" }   // 몇 쪽 어느 셀인지
+hwp_fill_fields { "path": "서식.hwp", "data": {"성명":"홍길동"} }  // 누름틀 채움
+```
+
+대형 문서는 `hwp_open` → `hwp_doc_*` 세션 도구로 재파싱 없이 반복 조회·편집한다.
+전체 도구 지도·오류 의미론은 [MCP 통합 가이드](mydocs/manual/mcp_integration_guide.md),
+막히면 [에이전트 실패 사전](mydocs/manual/agent_troubleshooting_guide.md).
+CLI 만 쓸 때의 입구는 `rhwp capabilities` 한 번이면 된다(전 명령 기계 계약 자기서술).
+
 ## CLI Usage
 
 ### SVG Export
@@ -336,6 +268,14 @@ rhwp export-svg sample.hwp                         # Export to output/
 rhwp export-svg sample.hwp -o my_dir/              # Export to custom directory
 rhwp export-svg sample.hwp -p 0                    # Export specific page (0-indexed)
 rhwp export-svg sample.hwp --debug-overlay         # Debug overlay (paragraph/table boundaries)
+```
+
+### PNG / PDF Export
+
+```bash
+rhwp export-png sample.hwp -o out/                 # PNG (requires --features native-skia build)
+rhwp export-pdf sample.hwp -o out.pdf              # PDF (byte-reproducible)
+rhwp export-pdf sample.hwp --text-as-paths         # Text as vector paths (font-free)
 ```
 
 ### Document Inspection
@@ -370,9 +310,14 @@ src/
 │   ├── layout/                # Layout (paragraph, table, shapes, cells)
 │   ├── pagination/            # Pagination engine
 │   ├── equation/              # Equation parser/layout/renderer
+│   ├── typeset.rs             # Typeset engine (main pagination)
 │   ├── svg.rs                 # SVG output
-│   └── web_canvas.rs          # Canvas output
-├── serializer/                # HWP file serializer (save)
+│   ├── web_canvas.rs          # Canvas output
+│   └── skia/                  # Native Skia PNG/PDF (--features native-skia)
+├── paint/                     # PageLayerTree paint IR + replay planes
+├── emf/                       # EMF parser + SVG converter
+├── ooxml_chart/               # OOXML chart parser + SVG renderer
+├── serializer/                # HWP/HWPX/HML serializer (save)
 └── wasm_api.rs                # WASM bindings
 
 rhwp-studio/                   # Web editor (TypeScript + Vite)
@@ -385,12 +330,19 @@ rhwp-studio/                   # Web editor (TypeScript + Vite)
 ├── e2e/                       # E2E tests (Puppeteer + Chrome CDP)
 │   └── helpers.mjs            # Test helpers (headless/host modes)
 
+npm/editor/                    # @rhwp/editor (iframe embed package)
+rhwp-chrome/ rhwp-firefox/     # Browser extensions (+ rhwp-safari, rhwp-vscode)
+rhwp-shared/                   # Shared frontend modules
+assets/fonts/                  # Canonical open-source font root
+
 mydocs/                        # Project documentation (Korean)
-├── orders/                    # Daily task tracking
-├── plans/                     # Task plans and implementation specs
+├── orders/                    # Daily task tracking (archives/: past months)
+├── plans/                     # Task plans (archives/: completed)
+├── working/ report/           # Stage reports / final reports
+├── pr/                        # External PR review records (archives/)
 ├── feedback/                  # Code review feedback
-├── tech/                      # Technical documents
-└── manual/                    # Manuals and guides
+├── tech/ manual/              # Technical docs / guides
+└── troubleshootings/          # Troubleshooting records
 
 scripts/                       # Build & quality tools
 ├── metrics.sh                 # Code quality metrics collection
@@ -411,11 +363,11 @@ scripts/                       # Build & quality tools
 |--|-----------|-----------|
 | **사람의 역할** | AI 출력 수락 | 지시, 검토, 결정 |
 | **계획** | 없음 — "그냥 만들어" | 계획서 작성 → 승인 → 실행 |
-| **품질 관문** | 동작하길 바람 | 1,100+ 테스트 + Clippy + CI + 코드 리뷰 |
+| **품질 관문** | 동작하길 바람 | 3,400+ 테스트 + Clippy + CI + 코드 리뷰 |
 | **디버깅** | AI에게 AI 버그 수정 요청 | 사람이 진단, AI가 구현 |
 | **아키텍처** | 우연히 형성 | 의도적 설계 (CQRS, 의존성 방향) |
-| **문서** | 없음 | 2,200+개 파일의 프로세스 기록 |
-| **결과물** | 취약, 유지보수 어려움 | 프로덕션 수준, 100K+ 라인 |
+| **문서** | 없음 | 10,000+개 파일의 프로세스 기록 |
+| **결과물** | 취약, 유지보수 어려움 | 프로덕션 수준, 450K+ 라인 |
 
 AI는 배율기입니다. 하지만 배율기는 기존 프로세스를 증폭시킵니다. 프로세스 없음 × AI = 빠른 혼돈. 좋은 프로세스 × AI = 비범한 결과물.
 
@@ -433,7 +385,7 @@ AI는 배율기입니다. 하지만 배율기는 기존 프로세스를 증폭�
 품질 및 정확성 판단            ←    코드, 문서, 테스트 생성
 ```
 
-`mydocs/` 디렉토리(2,200+개 파일, 영문 번역: `mydocs/eng/`)에 전체 개발 기록이 있습니다: 일일 작업 기록, 구현 계획서, 코드 리뷰 피드백, 기술 연구 문서, 트러블슈팅 기록.
+`mydocs/` 디렉토리(10,000+개 파일, 영문 번역: `mydocs/eng/`)에 전체 개발 기록이 있습니다: 일일 작업 기록, 구현 계획서, 코드 리뷰 피드백, 기술 연구 문서, 트러블슈팅 기록.
 
 > `mydocs/`는 코드에 대한 문서가 아닙니다 — **AI로 소프트웨어를 만드는 방법**에 대한 문서입니다. 오픈소스 방법론입니다.
 
@@ -443,14 +395,16 @@ AI는 배율기입니다. 하지만 배율기는 기존 프로세스를 증폭�
 
 ```
 local/task{N}  ──커밋──커밋──┐
-                              ├─→ devel merge (관련 타스크 묶어서)
-                              ├─→ main merge + 태그 (릴리즈 시점)
+                              ├─→ local/devel merge (작업 단위)
+                              ├─→ devel merge + push (검증 후)
+                              ├─→ main merge + 태그 (릴리즈 시점, PR 기반)
 ```
 
 | 브랜치 | 용도 |
 |--------|------|
-| `main` | 릴리즈 (태그: v0.5.0 등) |
-| `devel` | 개발 통합 |
+| `main` | 릴리즈 (태그: v0.8.0 등) |
+| `devel` | 개발 통합 (원격 push 대상) |
+| `local/devel` | devel 의 로컬 작업 브랜치 |
 | `local/task{N}` | GitHub Issue 번호 기반 타스크 브랜치 |
 
 ### 타스크 관리
@@ -530,6 +484,7 @@ graph TB
 
 - **PR base 는 `devel`** 입니다 (`main` 아님). GitHub 기본 브랜치는 `main` 이지만 기여 PR 은 모두 `devel` 로 받습니다.
 - **이슈 먼저 확인**: 동일 영역에 진행 중인 작업이 있는지 [열린 이슈](https://github.com/edwardkim/rhwp/issues) 와 [열린 PR](https://github.com/edwardkim/rhwp/pulls) 을 먼저 확인해 주세요. 중복 작업을 방지합니다.
+- **Claude·Codex 재사용 기능**: 에이전트나 Skill을 새로 만들기 전 [capability 카탈로그](mydocs/manual/agent_capability_registry.md)에서 기존 기능과 Issue 기반 `CAP-<N>` 등록 규칙을 확인해 주세요.
 - **이슈 close 는 메인테이너**: 작업 완료 후 PR 만 제출해 주세요. 이슈는 PR 머지 시 메인테이너가 close 합니다.
 - **한컴 PDF 는 정답지가 아닙니다**: 한컴 도구 (편집기 / Viewer / 한컴독스), 버전 (2010 / 2020 / 2022), 출력 경로 (한컴 자체 / OS 인쇄) 별로 PDF 결과가 다릅니다. 자세한 내용과 환경별 비교 자료는 [한컴 PDF 환경 의존성 위키](https://github.com/edwardkim/rhwp/wiki/한컴-PDF-환경-의존성) 를 참고하세요.
 

@@ -34,22 +34,19 @@ impl Brush {
     pub fn as_filter(&self) -> Node {
         match self {
             Brush::DIBPatternPT { brush_hatch, .. } => {
-                let data = crate::wmf::converter::Bitmap::from(brush_hatch.clone())
+                let data = crate::wmf::converter::Bitmap::from(brush_hatch.clone()).as_data_url();
+                Node::new("filter").add(Node::new("feImage").set("href", data))
+            }
+            Brush::Hatched {
+                color_ref,
+                brush_hatch,
+            } => {
+                let data = crate::wmf::converter::Bitmap::from((color_ref.clone(), *brush_hatch))
                     .as_data_url();
                 Node::new("filter").add(Node::new("feImage").set("href", data))
             }
-            Brush::Hatched { color_ref, brush_hatch } => {
-                let data = crate::wmf::converter::Bitmap::from((
-                    color_ref.clone(),
-                    *brush_hatch,
-                ))
-                .as_data_url();
-                Node::new("filter").add(Node::new("feImage").set("href", data))
-            }
             Brush::Pattern { brush_hatch } => {
-                let bitmap = crate::wmf::parser::DeviceIndependentBitmap::from(
-                    brush_hatch.clone(),
-                );
+                let bitmap = crate::wmf::parser::DeviceIndependentBitmap::from(brush_hatch.clone());
                 let data = crate::wmf::converter::Bitmap::from(bitmap).as_data_url();
 
                 Node::new("filter").add(Node::new("feImage").set("href", data))
@@ -67,9 +64,7 @@ impl Brush {
                 .add(
                     Node::new("feMerge")
                         .add(Node::new("feMergeNode").set("in", "bg"))
-                        .add(
-                            Node::new("feMergeNode").set("in", "SourceGraphic"),
-                        ),
+                        .add(Node::new("feMergeNode").set("in", "SourceGraphic")),
                 ),
             Brush::Null => Node::new("filter")
                 .set("x", "0")
@@ -95,8 +90,7 @@ impl From<Brush> for Fill {
     fn from(v: Brush) -> Self {
         match v {
             Brush::DIBPatternPT { brush_hatch, .. } => {
-                let data = crate::wmf::converter::Bitmap::from(brush_hatch.clone())
-                    .as_data_url();
+                let data = crate::wmf::converter::Bitmap::from(brush_hatch.clone()).as_data_url();
                 let image = Node::new("image")
                     .set("x", "0")
                     .set("y", "0")
@@ -114,7 +108,10 @@ impl From<Brush> for Fill {
 
                 Fill::Pattern { pattern }
             }
-            Brush::Hatched { color_ref, brush_hatch } => {
+            Brush::Hatched {
+                color_ref,
+                brush_hatch,
+            } => {
                 let path = match brush_hatch {
                     HatchStyle::HS_HORIZONTAL => {
                         let data = Data::new().move_to("0 0").line_to("10 0");
@@ -180,9 +177,7 @@ impl From<Brush> for Fill {
                 Fill::Pattern { pattern }
             }
             Brush::Pattern { brush_hatch } => {
-                let bitmap = crate::wmf::parser::DeviceIndependentBitmap::from(
-                    brush_hatch.clone(),
-                );
+                let bitmap = crate::wmf::parser::DeviceIndependentBitmap::from(brush_hatch.clone());
                 let data = crate::wmf::converter::Bitmap::from(bitmap).as_data_url();
                 let image = Node::new("image")
                     .set("x", "0")
@@ -201,10 +196,12 @@ impl From<Brush> for Fill {
 
                 Fill::Pattern { pattern }
             }
-            Brush::Solid { color_ref } => {
-                Fill::Value { value: css_color_from_color_ref(&color_ref) }
-            }
-            Brush::Null => Fill::Value { value: "none".to_owned() },
+            Brush::Solid { color_ref } => Fill::Value {
+                value: css_color_from_color_ref(&color_ref),
+            },
+            Brush::Null => Fill::Value {
+                value: "none".to_owned(),
+            },
         }
     }
 }
@@ -244,7 +241,10 @@ impl Default for Stroke {
 impl From<Pen> for Stroke {
     fn from(v: Pen) -> Self {
         if v.style.style == PenStyle::PS_NULL {
-            return Self { none: true, ..Default::default() };
+            return Self {
+                none: true,
+                ..Default::default()
+            };
         }
 
         let mut stroke = Self::default();
@@ -273,31 +273,32 @@ impl From<Pen> for Stroke {
             }
         }
 
+        // [fuzz] 펜 두께는 파일의 i16 이라 `* 10` 이 넘친다 — i32 로 올려 계산한다.
         match v.style.style {
             PenStyle::PS_DASH => {
-                stroke.dash_array = format!("{v} {v}", v = v.width.x * 10);
+                stroke.dash_array = format!("{v} {v}", v = i32::from(v.width.x) * 10);
             }
             PenStyle::PS_ALTERNATE | PenStyle::PS_DOT => {
-                stroke.dash_array = format!("{} {}", v.width.x, v.width.x * 10);
+                stroke.dash_array = format!("{} {}", v.width.x, i32::from(v.width.x) * 10);
             }
             PenStyle::PS_DASHDOT => {
                 stroke.dash_array = format!(
                     "{} {} {} {}",
-                    v.width.x * 10,
-                    v.width.x * 2,
+                    i32::from(v.width.x) * 10,
+                    i32::from(v.width.x) * 2,
                     v.width.x,
-                    v.width.x * 2,
+                    i32::from(v.width.x) * 2,
                 );
             }
             PenStyle::PS_DASHDOTDOT => {
                 stroke.dash_array = format!(
                     "{} {} {} {} {} {}",
-                    v.width.x * 10,
-                    v.width.x * 2,
+                    i32::from(v.width.x) * 10,
+                    i32::from(v.width.x) * 2,
                     v.width.x,
-                    v.width.x * 2,
+                    i32::from(v.width.x) * 2,
                     v.width.x,
-                    v.width.x * 2,
+                    i32::from(v.width.x) * 2,
                 );
             }
             _ => {}
@@ -312,14 +313,22 @@ impl From<Pen> for Stroke {
 impl From<Brush> for Stroke {
     fn from(v: Brush) -> Self {
         match v {
-            Brush::DIBPatternPT { .. } => {
-                Self { none: true, ..Default::default() }
-            }
-            Brush::Hatched { color_ref, .. } | Brush::Solid { color_ref } => {
-                Self { color: color_ref, ..Default::default() }
-            }
-            Brush::Pattern { .. } => Self { ..Default::default() },
-            Brush::Null => Self { none: true, width: 0, ..Default::default() },
+            Brush::DIBPatternPT { .. } => Self {
+                none: true,
+                ..Default::default()
+            },
+            Brush::Hatched { color_ref, .. } | Brush::Solid { color_ref } => Self {
+                color: color_ref,
+                ..Default::default()
+            },
+            Brush::Pattern { .. } => Self {
+                ..Default::default()
+            },
+            Brush::Null => Self {
+                none: true,
+                width: 0,
+                ..Default::default()
+            },
         }
     }
 }
@@ -364,11 +373,7 @@ impl Stroke {
 }
 
 impl Font {
-    pub fn set_props(
-        &self,
-        mut elem: Node,
-        point: &PointS,
-    ) -> (Node, Vec<String>) {
+    pub fn set_props(&self, mut elem: Node, point: &PointS) -> (Node, Vec<String>) {
         let mut styles = Vec::with_capacity(2);
 
         if self.italic {
@@ -392,7 +397,8 @@ impl Font {
         };
 
         if self.orientation != 0 {
-            let ori = self.orientation - self.escapement;
+            // [fuzz] 파일의 i16 끝값에서 뺄셈·부호 반전이 넘치지 않게 i32 로 계산한다.
+            let ori = i32::from(self.orientation) - i32::from(self.escapement);
 
             if ori != 0 {
                 elem = elem.set("rotate", -ori / 10);
@@ -404,7 +410,7 @@ impl Font {
                 "transform",
                 format!(
                     "rotate({}, {} {})",
-                    -self.escapement / 10,
+                    -i32::from(self.escapement) / 10,
                     point.x,
                     point.y
                 ),
@@ -421,9 +427,9 @@ impl Font {
         // 한컴 WMF 의 한국어 폰트 (예: "굴림체") 가 시스템에 미설치된 환경에서
         // SVG renderer 가 fallback 못 찾으면 글자가 깨져 보임. facename/fallback
         // 에 한글 char (U+AC00~U+D7A3) 있으면 시스템 한국어 폰트 chain 추가.
-        let has_korean = font_family.iter().any(|f| {
-            f.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c))
-        });
+        let has_korean = font_family
+            .iter()
+            .any(|f| f.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c)));
         if has_korean {
             for fallback in [
                 "Apple SD Gothic Neo",
@@ -438,7 +444,7 @@ impl Font {
 
         elem = elem
             .set("font-family", format!("'{}'", font_family.join("','")))
-            .set("font-size", self.height.abs())
+            .set("font-size", self.height.saturating_abs())
             .set("font-weight", self.weight);
 
         (elem, styles)

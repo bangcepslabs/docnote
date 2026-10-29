@@ -288,14 +288,21 @@ impl From<(ColorRef, HatchStyle)> for Bitmap {
                 color_important: 0,
             }),
             colors: Colors::RGBTriple(vec![
-                RGBTriple { red: 0, green: 0, blue: 0 },
+                RGBTriple {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                },
                 RGBTriple {
                     red: color_ref.red,
                     green: color_ref.green,
                     blue: color_ref.blue,
                 },
             ]),
-            bitmap_buffer: BitmapBuffer { undefined_space: vec![], a_data },
+            bitmap_buffer: BitmapBuffer {
+                undefined_space: vec![],
+                a_data,
+            },
         }
         .into()
     }
@@ -306,13 +313,16 @@ impl DeviceIndependentBitmap {
         // nothing to do.
         if matches!(
             self.colors,
-            crate::wmf::parser::Colors::Null
-                | crate::wmf::parser::Colors::PaletteIndices(_)
+            crate::wmf::parser::Colors::Null | crate::wmf::parser::Colors::PaletteIndices(_)
         ) {
             return self;
         }
 
-        let Self { dib_header_info, colors, bitmap_buffer } = self;
+        let Self {
+            dib_header_info,
+            colors,
+            bitmap_buffer,
+        } = self;
         let bit_count = dib_header_info.bit_count();
         let palette: Vec<_> = match colors {
             Colors::RGBTriple(values) => values
@@ -327,20 +337,32 @@ impl DeviceIndependentBitmap {
         };
 
         let new_bit_count = crate::wmf::parser::BitCount::BI_BITCOUNT_5;
-        let new_line_bits = dib_header_info.width() * (new_bit_count as usize);
-        let new_line_bytes = ((new_line_bits + 31) / 32) * 4;
-        let new_line_padding = new_line_bytes
-            - dib_header_info.width() * (new_bit_count as usize / 8);
+        // [fuzz] 폭은 파일 값이라 32비트 usize(WASM)에서 곱이 넘칠 수 있다 — 포화시킨다.
+        let new_line_bits = dib_header_info
+            .width()
+            .saturating_mul(new_bit_count as usize);
+        let new_line_bytes = (new_line_bits.saturating_add(31) / 32).saturating_mul(4);
+        let new_line_padding = new_line_bytes.saturating_sub(
+            dib_header_info
+                .width()
+                .saturating_mul(new_bit_count as usize / 8),
+        );
 
-        let line_bits = dib_header_info.width() * (bit_count as usize);
-        let line_bytes = ((line_bits + 31) / 32) * 4;
-        let mut position = 0;
+        let line_bits = dib_header_info.width().saturating_mul(bit_count as usize);
+        let line_bytes = (line_bits.saturating_add(31) / 32).saturating_mul(4);
+        let mut position: usize = 0;
         let mut new_data = vec![];
 
         for _ in 0..dib_header_info.height() {
-            let mut reader = BitReader::new(
-                &bitmap_buffer.a_data[position..(position + line_bytes)],
-            );
+            // [fuzz] 헤더의 폭·높이가 실제 픽셀 데이터보다 크면 줄 슬라이스가 범위를 벗어난다
+            // (릴리스 빌드에서도 패닉). 남은 데이터가 한 줄에 못 미치면 거기서 멈춘다.
+            let Some(line) = bitmap_buffer
+                .a_data
+                .get(position..position.saturating_add(line_bytes))
+            else {
+                break;
+            };
+            let mut reader = BitReader::new(line);
 
             for _ in 0..dib_header_info.width() {
                 let Some(idx) = reader.read_bits(bit_count as u8) else {
@@ -356,7 +378,7 @@ impl DeviceIndependentBitmap {
             }
 
             new_data.extend(vec![0; new_line_padding]);
-            position += line_bytes;
+            position = position.saturating_add(line_bytes);
         }
 
         Self {
@@ -406,7 +428,11 @@ struct BitReader<'a> {
 
 impl<'a> BitReader<'a> {
     fn new(data: &'a [u8]) -> Self {
-        BitReader { data, byte_index: 0, bit_index: 0 }
+        BitReader {
+            data,
+            byte_index: 0,
+            bit_index: 0,
+        }
     }
 
     fn read_bits(&mut self, num_bits: u8) -> Option<u32> {

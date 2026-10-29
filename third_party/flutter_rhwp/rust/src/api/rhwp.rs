@@ -90,7 +90,7 @@ impl RhwpSession {
     }
 
     pub fn export_hwp(&self) -> Result<Vec<u8>, String> {
-        let mut inner = self.lock()?;
+        let inner = self.lock()?;
         inner
             .document
             .export_hwp_with_adapter()
@@ -352,13 +352,14 @@ impl RhwpSession {
                 offset,
             } => inner
                 .document
-                .split_paragraph_in_cell(
-                    section,
-                    paragraph,
-                    control_index,
-                    cell_index,
-                    cell_paragraph,
-                    offset,
+                .split_paragraph_in_cell_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    cell_index as usize,
+                    cell_paragraph as usize,
+                    offset as usize,
+                    None,
                 )
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::MergeParagraphInTableCell {
@@ -369,12 +370,12 @@ impl RhwpSession {
                 cell_paragraph,
             } => inner
                 .document
-                .merge_paragraph_in_cell(
-                    section,
-                    paragraph,
-                    control_index,
-                    cell_index,
-                    cell_paragraph,
+                .merge_paragraph_in_cell_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    cell_index as usize,
+                    cell_paragraph as usize,
                 )
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::GetCellParagraphCount {
@@ -384,7 +385,12 @@ impl RhwpSession {
                 cell_index,
             } => inner
                 .document
-                .get_cell_paragraph_count(section, paragraph, control_index, cell_index)
+                .get_cell_paragraph_count_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    cell_index as usize,
+                )
                 .map(|count| format!(r#"{{"count":{count}}}"#))
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::GetCellParagraphLength {
@@ -395,12 +401,12 @@ impl RhwpSession {
                 cell_paragraph,
             } => inner
                 .document
-                .get_cell_paragraph_length(
-                    section,
-                    paragraph,
-                    control_index,
-                    cell_index,
-                    cell_paragraph,
+                .get_cell_paragraph_length_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    cell_index as usize,
+                    cell_paragraph as usize,
                 )
                 .map(|length| format!(r#"{{"length":{length}}}"#))
                 .map_err(|error| format!("{error:?}")),
@@ -553,7 +559,7 @@ impl RhwpSession {
                 text,
             } => inner
                 .document
-                .insert_hyperlink_native(
+                .flutter_insert_hyperlink_native(
                     section as usize,
                     paragraph as usize,
                     offset as usize,
@@ -567,7 +573,7 @@ impl RhwpSession {
                 text,
             } => inner
                 .document
-                .update_hyperlink_native(field_id, &url, &text)
+                .flutter_update_hyperlink_native(field_id, &url, &text)
                 .map_err(error_to_string),
             RhwpCommand::InsertHiddenComment {
                 section,
@@ -634,6 +640,7 @@ impl RhwpSession {
                     section as usize,
                     paragraph as usize,
                     offset as usize,
+                    &[],
                     &image_data,
                     width,
                     height,
@@ -641,6 +648,8 @@ impl RhwpSession {
                     natural_height_px,
                     &extension,
                     &description,
+                    None,
+                    None,
                 )
                 .map_err(error_to_string),
             RhwpCommand::InsertShape {
@@ -680,7 +689,7 @@ impl RhwpSession {
                 offset,
             } => inner
                 .document
-                .split_paragraph_native(section as usize, paragraph as usize, offset as usize)
+                .split_paragraph_native(section as usize, paragraph as usize, offset as usize, None)
                 .map_err(error_to_string),
             RhwpCommand::InsertParagraph { section, paragraph } => inner
                 .document
@@ -726,7 +735,7 @@ impl RhwpSession {
                 .map_err(error_to_string),
             RhwpCommand::GetColumnDef { section } => inner
                 .document
-                .get_column_def(section)
+                .flutter_get_column_def_native(section as usize)
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::SetColumnDef {
                 section,
@@ -772,7 +781,7 @@ impl RhwpSession {
             }
             RhwpCommand::GetBookmarks => inner
                 .document
-                .get_bookmarks()
+                .get_bookmarks_native()
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::AddBookmark {
                 section,
@@ -781,7 +790,7 @@ impl RhwpSession {
                 name,
             } => inner
                 .document
-                .add_bookmark(section, paragraph, offset, &name)
+                .add_bookmark_native(section as usize, paragraph as usize, offset as usize, &name)
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::DeleteBookmark {
                 section,
@@ -789,7 +798,11 @@ impl RhwpSession {
                 control_index,
             } => inner
                 .document
-                .delete_bookmark(section, paragraph, control_index)
+                .delete_bookmark_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                )
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::RenameBookmark {
                 section,
@@ -798,36 +811,43 @@ impl RhwpSession {
                 name,
             } => inner
                 .document
-                .rename_bookmark(section, paragraph, control_index, &name)
+                .rename_bookmark_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    &name,
+                )
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::GetPageOfPosition { section, paragraph } => inner
                 .document
-                .get_page_of_position(section, paragraph)
+                .get_page_of_position_native(section as usize, paragraph as usize)
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::GetFieldList => Ok(inner.document.get_field_list()),
             RhwpCommand::GetFieldValue { field_id } => inner
                 .document
-                .get_field_value(field_id)
+                .get_field_value_by_id(field_id)
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::GetFieldValueByName { name } => inner
                 .document
-                .get_field_value_by_name_api(&name)
+                .get_field_value_by_name(&name)
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::SetFieldValue { field_id, value } => inner
                 .document
-                .set_field_value(field_id, &value)
+                .set_field_value_by_id(field_id, &value)
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::SetFieldValueByName { name, value } => inner
                 .document
-                .set_field_value_by_name_api(&name, &value)
+                .set_field_value_by_name(&name, &value)
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::GetFieldInfoAt {
                 section,
                 paragraph,
                 offset,
-            } => Ok(inner
-                .document
-                .get_field_info_at_api(section, paragraph, offset)),
+            } => Ok(inner.document.flutter_get_field_info_at(
+                section as usize,
+                paragraph as usize,
+                offset as usize,
+            )),
             RhwpCommand::GetFieldInfoAtInTableCell {
                 section,
                 paragraph,
@@ -836,13 +856,13 @@ impl RhwpSession {
                 cell_paragraph,
                 offset,
                 is_text_box,
-            } => Ok(inner.document.get_field_info_at_in_cell_api(
-                section,
-                paragraph,
-                control_index,
-                cell_index,
-                cell_paragraph,
-                offset,
+            } => Ok(inner.document.flutter_get_field_info_at_in_cell(
+                section as usize,
+                paragraph as usize,
+                control_index as usize,
+                cell_index as usize,
+                cell_paragraph as usize,
+                offset as usize,
                 is_text_box,
             )),
             RhwpCommand::SetActiveField {
@@ -883,9 +903,12 @@ impl RhwpSession {
                 section,
                 paragraph,
                 offset,
-            } => Ok(inner
+            } => inner
                 .document
-                .remove_field_at_api(section, paragraph, offset)),
+                .flutter_remove_field_at(section as usize, paragraph as usize, offset as usize)
+                .or_else(|error| {
+                    Ok(serde_json::json!({"ok": false, "error": error.to_string()}).to_string())
+                }),
             RhwpCommand::RemoveFieldAtInTableCell {
                 section,
                 paragraph,
@@ -894,15 +917,20 @@ impl RhwpSession {
                 cell_paragraph,
                 offset,
                 is_text_box,
-            } => Ok(inner.document.remove_field_at_in_cell_api(
-                section,
-                paragraph,
-                control_index,
-                cell_index,
-                cell_paragraph,
-                offset,
-                is_text_box,
-            )),
+            } => inner
+                .document
+                .flutter_remove_field_at_in_cell(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    cell_index as usize,
+                    cell_paragraph as usize,
+                    offset as usize,
+                    is_text_box,
+                )
+                .or_else(|error| {
+                    Ok(serde_json::json!({"ok": false, "error": error.to_string()}).to_string())
+                }),
             RhwpCommand::GetClickHereProperties { field_id } => {
                 Ok(inner.document.get_click_here_props(field_id))
             }
@@ -964,6 +992,7 @@ impl RhwpSession {
                         } else {
                             Some(column_widths.as_slice())
                         },
+                        None,
                     )
                     .map_err(error_to_string)
             }
@@ -1175,7 +1204,11 @@ impl RhwpSession {
                 control_index,
             } => inner
                 .document
-                .get_table_properties(section, paragraph, control_index)
+                .get_table_properties_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                )
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::SetTableProperties {
                 section,
@@ -1184,7 +1217,12 @@ impl RhwpSession {
                 properties,
             } => inner
                 .document
-                .set_table_properties(section, paragraph, control_index, &properties.to_string())
+                .set_table_properties_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    &properties.to_string(),
+                )
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::GetCellProperties {
                 section,
@@ -1193,7 +1231,12 @@ impl RhwpSession {
                 cell_index,
             } => inner
                 .document
-                .get_cell_properties(section, paragraph, control_index, cell_index)
+                .get_cell_properties_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    cell_index as usize,
+                )
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::SetCellProperties {
                 section,
@@ -1203,11 +1246,11 @@ impl RhwpSession {
                 properties,
             } => inner
                 .document
-                .set_cell_properties(
-                    section,
-                    paragraph,
-                    control_index,
-                    cell_index,
+                .set_cell_properties_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    cell_index as usize,
                     &properties.to_string(),
                 )
                 .map_err(|error| format!("{error:?}")),
@@ -1218,7 +1261,12 @@ impl RhwpSession {
                 updates,
             } => inner
                 .document
-                .resize_table_cells(section, paragraph, control_index, &updates.to_string())
+                .resize_table_cells_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    &updates.to_string(),
+                )
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::EvaluateTableFormula {
                 section,
@@ -1228,25 +1276,28 @@ impl RhwpSession {
                 column,
                 formula,
                 write_result,
-            } => inner
-                .document
-                .evaluate_table_formula(
-                    section,
-                    paragraph,
-                    control_index,
-                    row,
-                    column,
-                    &formula,
-                    write_result,
-                )
-                .map_err(|error| format!("{error:?}")),
+            } => rhwp_core::DocumentCore::evaluate_table_formula(
+                &mut inner.document,
+                section as usize,
+                paragraph as usize,
+                control_index as usize,
+                row as usize,
+                column as usize,
+                &formula,
+                write_result,
+            )
+            .map_err(|error| format!("{error:?}")),
             RhwpCommand::DeleteTableControl {
                 section,
                 paragraph,
                 control_index,
             } => inner
                 .document
-                .delete_table_control(section, paragraph, control_index)
+                .delete_table_control_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                )
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::MoveTableOffset {
                 section,
@@ -1256,7 +1307,13 @@ impl RhwpSession {
                 delta_v,
             } => inner
                 .document
-                .move_table_offset(section, paragraph, control_index, delta_h, delta_v)
+                .move_table_offset_native(
+                    section as usize,
+                    paragraph as usize,
+                    control_index as usize,
+                    delta_h,
+                    delta_v,
+                )
                 .map_err(|error| format!("{error:?}")),
             RhwpCommand::DeleteObjectControl {
                 section,
@@ -1276,7 +1333,12 @@ impl RhwpSession {
                 control_index,
             } => inner
                 .document
-                .copy_control_native(section as usize, paragraph as usize, control_index as usize)
+                .copy_control_native(
+                    section as usize,
+                    paragraph as usize,
+                    &[],
+                    control_index as usize,
+                )
                 .map_err(error_to_string),
             RhwpCommand::ClipboardHasObjectControl => Ok(format!(
                 r#"{{"ok":true,"hasControl":{}}}"#,
@@ -1337,6 +1399,7 @@ impl RhwpSession {
                 .export_control_html_native(
                     section as usize,
                     paragraph as usize,
+                    &[],
                     control_index as usize,
                 )
                 .map_err(error_to_string),
@@ -3548,6 +3611,79 @@ mod tests {
     }
 
     #[test]
+    fn invalid_native_table_targets_return_errors_without_wasm_panics() {
+        let session = open_bytes(BLANK_2010_HWP.to_vec(), None).unwrap();
+        for command in [
+            r#"{"type":"moveTableOffset","section":99,"paragraph":0,"controlIndex":0,"deltaH":10,"deltaV":10}"#,
+            r#"{"type":"getTableProperties","section":99,"paragraph":0,"controlIndex":0}"#,
+            r#"{"type":"getCellProperties","section":99,"paragraph":0,"controlIndex":0,"cellIndex":0}"#,
+            r#"{"type":"deleteTableControl","section":99,"paragraph":0,"controlIndex":0}"#,
+            r#"{"type":"getColumnDef","section":99}"#,
+        ] {
+            assert!(
+                session.apply_command(command.to_string()).is_err(),
+                "{command}"
+            );
+            assert!(session.page_count().unwrap() > 0);
+        }
+    }
+
+    #[test]
+    fn hyperlink_edit_survives_hwp_and_hwpx_reopen() {
+        for hwpx in [false, true] {
+            let session = open_bytes(BLANK_2010_HWP.to_vec(), None).unwrap();
+            session.apply_command(r#"{"type":"insertHyperlink","section":0,"paragraph":0,"offset":0,"url":"https://example.com/first","text":"First link"}"#.to_string()).unwrap();
+            let bytes = if hwpx {
+                session.export_hwpx()
+            } else {
+                session.export_hwp()
+            }
+            .unwrap();
+            let reopened = open_bytes(bytes, None).unwrap();
+            let fields: Value = serde_json::from_str(
+                &reopened
+                    .apply_command(r#"{"type":"getFieldList"}"#.to_string())
+                    .unwrap(),
+            )
+            .unwrap();
+            let id = fields
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|f| f["fieldType"] == "hyperlink")
+                .unwrap()["fieldId"]
+                .as_u64()
+                .unwrap();
+            reopened.apply_command(serde_json::json!({"type":"updateHyperlink", "fieldId":id, "url":"https://example.com/updated", "text":"Updated link"}).to_string()).unwrap();
+            let bytes = if hwpx {
+                reopened.export_hwpx()
+            } else {
+                reopened.export_hwp()
+            }
+            .unwrap();
+            let final_doc = open_bytes(bytes, None).unwrap();
+            let fields: Value = serde_json::from_str(
+                &final_doc
+                    .apply_command(r#"{"type":"getFieldList"}"#.to_string())
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(
+                fields
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|f| f["fieldType"] == "hyperlink"
+                        && f["command"]
+                            .as_str()
+                            .is_some_and(|s| s.contains("example.com/updated"))
+                        && f["value"] == "Updated link"),
+                "hwpx={hwpx}: {fields}"
+            );
+        }
+    }
+
+    #[test]
     fn applies_commands_exports_and_reopens() {
         let session =
             open_bytes(BLANK_2010_HWP.to_vec(), None).expect("vendored sample should open");
@@ -3812,10 +3948,13 @@ mod tests {
         );
         session
             .apply_command(
-                r#"{"type":"insertPicture","section":0,"paragraph":0,"offset":6,"imageData":[137,80,78,71],"width":750,"height":750,"naturalWidthPx":10,"naturalHeightPx":10,"extension":"png","description":"test"}"#
+                r#"{"type":"insertPicture","section":0,"paragraph":0,"offset":6,"imageData":[137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1,8,4,0,0,0,181,28,12,2,0,0,0,11,73,68,65,84,120,218,99,252,255,31,0,3,3,2,0,239,154,218,42,0,0,0,0,73,69,78,68,174,66,96,130],"width":750,"height":750,"naturalWidthPx":10,"naturalHeightPx":10,"extension":"png","description":"test"}"#
                     .to_string(),
             )
             .expect("insert picture command should be accepted");
+        session
+            .apply_command(r#"{"type":"insertParagraph","section":0,"paragraph":1}"#.to_string())
+            .expect("explicit paragraph insertion should succeed");
         session
             .apply_command(
                 r#"{"type":"insertText","section":0,"paragraph":1,"offset":0,"text":"next"}"#
@@ -3993,6 +4132,9 @@ mod tests {
         let table_paragraph = table_result["paraIdx"]
             .as_u64()
             .expect("table insert result should expose paraIdx");
+        let table_control = table_result["controlIdx"]
+            .as_u64()
+            .expect("table control index");
         let table_layer_tree = session
             .page_layer_tree(0)
             .expect("table layer tree should be available after insert");
@@ -4002,7 +4144,7 @@ mod tests {
         assert!(table_layer_tree.contains(r#""kind":"tableCell""#));
         let table_properties = session
             .apply_command(format!(
-                r#"{{"type":"getTableProperties","section":0,"paragraph":{},"controlIndex":0}}"#,
+                r#"{{"type":"getTableProperties","section":0,"paragraph":{},"controlIndex":{table_control}}}"#,
                 table_paragraph
             ))
             .expect("table properties query should be accepted");
@@ -4012,14 +4154,14 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"setTableProperties","section":0,"paragraph":{},"controlIndex":0,"properties":{{"cellSpacing":10,"paddingLeft":100,"paddingRight":110,"paddingTop":120,"paddingBottom":130,"pageBreak":1,"repeatHeader":true}}}}"#,
+                    r#"{{"type":"setTableProperties","section":0,"paragraph":{},"controlIndex":{table_control},"properties":{{"cellSpacing":10,"paddingLeft":100,"paddingRight":110,"paddingTop":120,"paddingBottom":130,"pageBreak":1,"repeatHeader":true}}}}"#,
                     table_paragraph
                 ),
             )
             .expect("set table properties command should be accepted");
         let cell_properties = session
             .apply_command(format!(
-                r#"{{"type":"getCellProperties","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0}}"#,
+                r#"{{"type":"getCellProperties","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0}}"#,
                 table_paragraph
             ))
             .expect("cell properties query should be accepted");
@@ -4030,7 +4172,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"setCellProperties","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"properties":{{"width":6000,"height":3200,"paddingLeft":210,"paddingRight":220,"paddingTop":230,"paddingBottom":240,"verticalAlign":2,"textDirection":1,"isHeader":true,"cellProtect":true}}}}"#,
+                    r#"{{"type":"setCellProperties","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"properties":{{"width":6000,"height":3200,"paddingLeft":210,"paddingRight":220,"paddingTop":230,"paddingBottom":240,"verticalAlign":2,"textDirection":1,"isHeader":true,"cellProtect":true}}}}"#,
                     table_paragraph
                 ),
             )
@@ -4038,7 +4180,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"insertTextInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":0,"offset":0,"text":"cell"}}"#,
+                    r#"{{"type":"insertTextInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":0,"offset":0,"text":"cell"}}"#,
                     table_paragraph
                 ),
             )
@@ -4046,7 +4188,7 @@ mod tests {
         let table_cell_hyperlink = session
             .apply_command(
                 format!(
-                    r#"{{"type":"insertHyperlinkInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":2,"cellParagraph":0,"offset":0,"url":"https://example.com","text":"Link"}}"#,
+                    r#"{{"type":"insertHyperlinkInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":2,"cellParagraph":0,"offset":0,"url":"https://example.com","text":"Link"}}"#,
                     table_paragraph
                 ),
             )
@@ -4074,7 +4216,7 @@ mod tests {
         let table_cell_hyperlink_info = session
             .apply_command(
                 format!(
-                    r#"{{"type":"getFieldInfoAtInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":2,"cellParagraph":0,"offset":1}}"#,
+                    r#"{{"type":"getFieldInfoAtInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":2,"cellParagraph":0,"offset":1}}"#,
                     table_paragraph
                 ),
             )
@@ -4086,7 +4228,7 @@ mod tests {
         let table_cell_comment = session
             .apply_command(
                 format!(
-                    r#"{{"type":"insertHiddenCommentInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":2,"cellParagraph":0,"offset":4,"text":"셀 검토"}}"#,
+                    r#"{{"type":"insertHiddenCommentInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":2,"cellParagraph":0,"offset":4,"text":"셀 검토"}}"#,
                     table_paragraph
                 ),
             )
@@ -4097,7 +4239,7 @@ mod tests {
         let table_cell_comment_hit = session
             .apply_command(
                 format!(
-                    r#"{{"type":"hiddenCommentAtInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":2,"cellParagraph":0,"offset":4}}"#,
+                    r#"{{"type":"hiddenCommentAtInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":2,"cellParagraph":0,"offset":4}}"#,
                     table_paragraph
                 ),
             )
@@ -4109,7 +4251,7 @@ mod tests {
         let table_cell_comment_update = session
             .apply_command(
                 format!(
-                    r#"{{"type":"updateHiddenCommentAtInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":2,"cellParagraph":0,"offset":4,"text":"셀 수정"}}"#,
+                    r#"{{"type":"updateHiddenCommentAtInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":2,"cellParagraph":0,"offset":4,"text":"셀 수정"}}"#,
                     table_paragraph
                 ),
             )
@@ -4121,7 +4263,7 @@ mod tests {
         let table_cell_comment_delete = session
             .apply_command(
                 format!(
-                    r#"{{"type":"deleteHiddenCommentAtInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":2,"cellParagraph":0,"offset":4}}"#,
+                    r#"{{"type":"deleteHiddenCommentAtInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":2,"cellParagraph":0,"offset":4}}"#,
                     table_paragraph
                 ),
             )
@@ -4133,7 +4275,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r##"{{"type":"applyCharFormatInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":0,"startOffset":0,"endOffset":4,"properties":{{"bold":true,"fontSize":1100,"textColor":"#2563eb"}}}}"##,
+                    r##"{{"type":"applyCharFormatInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":0,"startOffset":0,"endOffset":4,"properties":{{"bold":true,"fontSize":1100,"textColor":"#2563eb"}}}}"##,
                     table_paragraph
                 ),
             )
@@ -4141,14 +4283,14 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"applyParaFormatInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":0,"properties":{{"alignment":"center","lineSpacing":180,"lineSpacingType":"Percent"}}}}"#,
+                    r#"{{"type":"applyParaFormatInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":0,"properties":{{"alignment":"center","lineSpacing":180,"lineSpacingType":"Percent"}}}}"#,
                     table_paragraph
                 ),
             )
             .expect("apply para format in table cell command should be accepted");
         let cell_para_properties = session
             .apply_command(format!(
-                r#"{{"type":"getCellParaPropertiesAt","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":0}}"#,
+                r#"{{"type":"getCellParaPropertiesAt","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":0}}"#,
                 table_paragraph
             ))
             .expect("cell paragraph properties query should be accepted");
@@ -4158,7 +4300,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r##"{{"type":"applyTableCellStyle","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"properties":{{"fillType":"solid","fillColor":"#fef08a","verticalAlign":1,"borderLeft":{{"type":1,"width":1,"color":"#475569"}},"borderRight":{{"type":1,"width":1,"color":"#475569"}},"borderTop":{{"type":1,"width":1,"color":"#475569"}},"borderBottom":{{"type":1,"width":1,"color":"#475569"}}}}}}"##,
+                    r##"{{"type":"applyTableCellStyle","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"properties":{{"fillType":"solid","fillColor":"#fef08a","verticalAlign":1,"borderLeft":{{"type":1,"width":1,"color":"#475569"}},"borderRight":{{"type":1,"width":1,"color":"#475569"}},"borderTop":{{"type":1,"width":1,"color":"#475569"}},"borderBottom":{{"type":1,"width":1,"color":"#475569"}}}}}}"##,
                     table_paragraph
                 ),
             )
@@ -4166,21 +4308,21 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"applyTableCellStyle","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"properties":{{"verticalAlign":2}}}}"#,
+                    r#"{{"type":"applyTableCellStyle","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"properties":{{"verticalAlign":2}}}}"#,
                     table_paragraph
                 ),
             )
             .expect("apply table cell vertical alignment command should be accepted");
         session
             .apply_command(format!(
-                r#"{{"type":"applyCellStyle","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":0,"styleId":{style_id}}}"#,
+                r#"{{"type":"applyCellStyle","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":0,"styleId":{style_id}}}"#,
                 table_paragraph
             ))
             .expect("apply cell style command should be accepted");
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"deleteTextInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":0,"offset":0,"count":1}}"#,
+                    r#"{{"type":"deleteTextInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":0,"offset":0,"count":1}}"#,
                     table_paragraph
                 ),
             )
@@ -4188,7 +4330,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"deleteRangeInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"startCellParagraph":0,"startOffset":0,"endCellParagraph":0,"endOffset":1}}"#,
+                    r#"{{"type":"deleteRangeInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"startCellParagraph":0,"startOffset":0,"endCellParagraph":0,"endOffset":1}}"#,
                     table_paragraph
                 ),
             )
@@ -4196,7 +4338,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"mergeTableCells","section":0,"paragraph":{},"controlIndex":0,"startRow":0,"startColumn":0,"endRow":1,"endColumn":1}}"#,
+                    r#"{{"type":"mergeTableCells","section":0,"paragraph":{},"controlIndex":{table_control},"startRow":0,"startColumn":0,"endRow":1,"endColumn":1}}"#,
                     table_paragraph
                 ),
             )
@@ -4204,7 +4346,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"splitTableCell","section":0,"paragraph":{},"controlIndex":0,"row":0,"column":0}}"#,
+                    r#"{{"type":"splitTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"row":0,"column":0}}"#,
                     table_paragraph
                 ),
             )
@@ -4212,7 +4354,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"splitTableCellInto","section":0,"paragraph":{},"controlIndex":0,"row":0,"column":0,"rows":2,"columns":2,"equalRowHeight":true,"mergeFirst":false}}"#,
+                    r#"{{"type":"splitTableCellInto","section":0,"paragraph":{},"controlIndex":{table_control},"row":0,"column":0,"rows":2,"columns":2,"equalRowHeight":true,"mergeFirst":false}}"#,
                     table_paragraph
                 ),
             )
@@ -4220,7 +4362,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"insertTableRow","section":0,"paragraph":{},"controlIndex":0,"row":0,"below":true}}"#,
+                    r#"{{"type":"insertTableRow","section":0,"paragraph":{},"controlIndex":{table_control},"row":0,"below":true}}"#,
                     table_paragraph
                 ),
             )
@@ -4228,7 +4370,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"insertTableColumn","section":0,"paragraph":{},"controlIndex":0,"column":0,"right":true}}"#,
+                    r#"{{"type":"insertTableColumn","section":0,"paragraph":{},"controlIndex":{table_control},"column":0,"right":true}}"#,
                     table_paragraph
                 ),
             )
@@ -4236,7 +4378,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"deleteTableRow","section":0,"paragraph":{},"controlIndex":0,"row":1}}"#,
+                    r#"{{"type":"deleteTableRow","section":0,"paragraph":{},"controlIndex":{table_control},"row":1}}"#,
                     table_paragraph
                 ),
             )
@@ -4244,7 +4386,7 @@ mod tests {
         session
             .apply_command(
                 format!(
-                    r#"{{"type":"deleteTableColumn","section":0,"paragraph":{},"controlIndex":0,"column":1}}"#,
+                    r#"{{"type":"deleteTableColumn","section":0,"paragraph":{},"controlIndex":{table_control},"column":1}}"#,
                     table_paragraph
                 ),
             )
@@ -4409,10 +4551,11 @@ mod tests {
         let table_paragraph = result["paraIdx"]
             .as_u64()
             .expect("table insert should expose paraIdx");
+        let table_control = result["controlIdx"].as_u64().expect("table control index");
 
         let split_result = session
             .apply_command(format!(
-                r#"{{"type":"splitTableCellsInRange","section":0,"paragraph":{},"controlIndex":0,"startRow":0,"startColumn":0,"endRow":1,"endColumn":1,"rows":2,"columns":2,"equalRowHeight":true}}"#,
+                r#"{{"type":"splitTableCellsInRange","section":0,"paragraph":{},"controlIndex":{table_control},"startRow":0,"startColumn":0,"endRow":1,"endColumn":1,"rows":2,"columns":2,"equalRowHeight":true}}"#,
                 table_paragraph
             ))
             .expect("split table cells in range command should be accepted");
@@ -4459,10 +4602,11 @@ mod tests {
         let table_paragraph = result["paraIdx"]
             .as_u64()
             .expect("table insert should expose paraIdx");
+        let table_control = result["controlIdx"].as_u64().expect("table control index");
 
         let before = session
             .apply_command(format!(
-                r#"{{"type":"getCellProperties","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0}}"#,
+                r#"{{"type":"getCellProperties","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0}}"#,
                 table_paragraph
             ))
             .expect("cell properties query should be accepted");
@@ -4473,7 +4617,7 @@ mod tests {
 
         let resize_result = session
             .apply_command(format!(
-                r#"{{"type":"resizeTableCells","section":0,"paragraph":{},"controlIndex":0,"updates":[{{"cellIdx":0,"widthDelta":120,"heightDelta":-60}},{{"cellIdx":1,"widthDelta":120}}]}}"#,
+                r#"{{"type":"resizeTableCells","section":0,"paragraph":{},"controlIndex":{table_control},"updates":[{{"cellIdx":0,"widthDelta":120,"heightDelta":-60}},{{"cellIdx":1,"widthDelta":120}}]}}"#,
                 table_paragraph
             ))
             .expect("resize table cells command should be accepted");
@@ -4483,7 +4627,7 @@ mod tests {
 
         let after = session
             .apply_command(format!(
-                r#"{{"type":"getCellProperties","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0}}"#,
+                r#"{{"type":"getCellProperties","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0}}"#,
                 table_paragraph
             ))
             .expect("cell properties query should be accepted");
@@ -4506,23 +4650,24 @@ mod tests {
         let table_paragraph = result["paraIdx"]
             .as_u64()
             .expect("table insert should expose paraIdx");
+        let table_control = result["controlIdx"].as_u64().expect("table control index");
 
         session
             .apply_command(format!(
-                r#"{{"type":"insertTextInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":0,"offset":0,"text":"1"}}"#,
+                r#"{{"type":"insertTextInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":0,"offset":0,"text":"1"}}"#,
                 table_paragraph
             ))
             .expect("first cell text insert should be accepted");
         session
             .apply_command(format!(
-                r#"{{"type":"insertTextInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":1,"cellParagraph":0,"offset":0,"text":"2"}}"#,
+                r#"{{"type":"insertTextInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":1,"cellParagraph":0,"offset":0,"text":"2"}}"#,
                 table_paragraph
             ))
             .expect("second cell text insert should be accepted");
 
         let formula_result = session
             .apply_command(format!(
-                r#"{{"type":"evaluateTableFormula","section":0,"paragraph":{},"controlIndex":0,"row":1,"column":0,"formula":"=SUM(A1:B1)","writeResult":true}}"#,
+                r#"{{"type":"evaluateTableFormula","section":0,"paragraph":{},"controlIndex":{table_control},"row":1,"column":0,"formula":"=SUM(A1:B1)","writeResult":true}}"#,
                 table_paragraph
             ))
             .expect("table formula command should be accepted");
@@ -4548,17 +4693,18 @@ mod tests {
         let table_paragraph = result["paraIdx"]
             .as_u64()
             .expect("table insert should expose paraIdx");
+        let table_control = result["controlIdx"].as_u64().expect("table control index");
 
         session
             .apply_command(format!(
-                r#"{{"type":"insertTextInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":0,"offset":0,"text":"cell"}}"#,
+                r#"{{"type":"insertTextInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":0,"offset":0,"text":"cell"}}"#,
                 table_paragraph
             ))
             .expect("cell text insert should be accepted");
 
         let split_result = session
             .apply_command(format!(
-                r#"{{"type":"splitParagraphInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":0,"offset":2}}"#,
+                r#"{{"type":"splitParagraphInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":0,"offset":2}}"#,
                 table_paragraph
             ))
             .expect("cell paragraph split should be accepted");
@@ -4570,7 +4716,7 @@ mod tests {
 
         let count_result = session
             .apply_command(format!(
-                r#"{{"type":"getCellParagraphCount","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0}}"#,
+                r#"{{"type":"getCellParagraphCount","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0}}"#,
                 table_paragraph
             ))
             .expect("cell paragraph count should be accepted");
@@ -4580,7 +4726,7 @@ mod tests {
 
         let length_result = session
             .apply_command(format!(
-                r#"{{"type":"getCellParagraphLength","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":0}}"#,
+                r#"{{"type":"getCellParagraphLength","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":0}}"#,
                 table_paragraph
             ))
             .expect("cell paragraph length should be accepted");
@@ -4590,7 +4736,7 @@ mod tests {
 
         let merge_result = session
             .apply_command(format!(
-                r#"{{"type":"mergeParagraphInTableCell","section":0,"paragraph":{},"controlIndex":0,"cellIndex":0,"cellParagraph":1}}"#,
+                r#"{{"type":"mergeParagraphInTableCell","section":0,"paragraph":{},"controlIndex":{table_control},"cellIndex":0,"cellParagraph":1}}"#,
                 table_paragraph
             ))
             .expect("cell paragraph merge should be accepted");
@@ -4616,10 +4762,11 @@ mod tests {
         let table_paragraph = result["paraIdx"]
             .as_u64()
             .expect("table insert should expose paraIdx");
+        let table_control = result["controlIdx"].as_u64().expect("table control index");
 
         let move_result = session
             .apply_command(format!(
-                r#"{{"type":"moveTableOffset","section":0,"paragraph":{},"controlIndex":0,"deltaH":120,"deltaV":-60}}"#,
+                r#"{{"type":"moveTableOffset","section":0,"paragraph":{},"controlIndex":{table_control},"deltaH":120,"deltaV":-60}}"#,
                 table_paragraph
             ))
             .expect("table offset move should be accepted");
@@ -4629,7 +4776,7 @@ mod tests {
 
         let delete_result = session
             .apply_command(format!(
-                r#"{{"type":"deleteTableControl","section":0,"paragraph":{},"controlIndex":0}}"#,
+                r#"{{"type":"deleteTableControl","section":0,"paragraph":{},"controlIndex":{table_control}}}"#,
                 table_paragraph
             ))
             .expect("table delete should be accepted");

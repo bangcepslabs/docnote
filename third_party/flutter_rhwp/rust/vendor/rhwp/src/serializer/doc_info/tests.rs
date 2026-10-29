@@ -1,7 +1,8 @@
 use super::*;
 use crate::model::bin_data::{BinDataCompression, BinDataStatus};
 use crate::model::style::{
-    Alignment, BorderLine, DiagonalLine, Fill, LineSpacingType, NumberingHead, SolidFill,
+    Alignment, BorderLine, CenterLine, CharShape, DiagonalLine, Fill, ImageFill, ImageFillMode,
+    LineSpacingType, NumberingHead, SolidFill,
 };
 use crate::parser::doc_info::parse_doc_info;
 use crate::parser::record::Record;
@@ -35,13 +36,36 @@ fn test_serialize_document_properties() {
 }
 
 #[test]
+fn test_serialize_id_mappings_uses_modern_count_table_size() {
+    let mut doc_info = DocInfo::default();
+    doc_info.font_faces = vec![Vec::new(); 7];
+    doc_info.memo_shape_count = 1;
+
+    let data = serialize_id_mappings(&doc_info);
+    assert_eq!(data.len(), 72);
+
+    let mut r = crate::parser::byte_reader::ByteReader::new(&data);
+    for _ in 0..15 {
+        r.read_u32().unwrap();
+    }
+    assert_eq!(r.read_u32().unwrap(), 1);
+    assert_eq!(r.read_u32().unwrap(), 0);
+    assert_eq!(r.read_u32().unwrap(), 0);
+}
+
+#[test]
 fn test_serialize_face_name_simple() {
     let font = Font {
         raw_data: None,
         name: "함초롬바탕".to_string(),
         alt_type: 0,
+        is_embedded: false,
+        bin_item_id_ref: String::new(),
+        resolved_bin_data_id: None,
         alt_name: None,
+        type_info: None,
         default_name: None,
+        subst_font: None,
     };
 
     let data = serialize_face_name(&font);
@@ -58,8 +82,13 @@ fn test_serialize_face_name_with_alt() {
         raw_data: None,
         name: "맑은 고딕".to_string(),
         alt_type: 1,
+        is_embedded: false,
+        bin_item_id_ref: String::new(),
+        resolved_bin_data_id: None,
         alt_name: Some("Malgun Gothic".to_string()),
+        type_info: None,
         default_name: None,
+        subst_font: None,
     };
 
     let data = serialize_face_name(&font);
@@ -69,8 +98,36 @@ fn test_serialize_face_name_with_alt() {
     assert_eq!(attr & 0x03, 1); // alt_type
     let name = r.read_hwp_string().unwrap();
     assert_eq!(name, "맑은 고딕");
+    assert_eq!(r.read_u8().unwrap(), 1);
     let alt_name = r.read_hwp_string().unwrap();
     assert_eq!(alt_name, "Malgun Gothic");
+}
+
+#[test]
+fn test_serialize_face_name_with_type_info_and_default_name() {
+    let font = Font {
+        raw_data: None,
+        name: "굴림".to_string(),
+        alt_type: 1,
+        is_embedded: false,
+        bin_item_id_ref: String::new(),
+        resolved_bin_data_id: None,
+        alt_name: None,
+        type_info: Some([2, 11, 6, 0, 0, 1, 1, 1, 1, 1]),
+        default_name: Some("Gulim".to_string()),
+        subst_font: None,
+    };
+
+    let data = serialize_face_name(&font);
+
+    assert_eq!(
+        data,
+        vec![
+            0x61, 0x02, 0x00, 0x74, 0xad, 0xbc, 0xb9, 0x02, 0x0b, 0x06, 0x00, 0x00, 0x01, 0x01,
+            0x01, 0x01, 0x01, 0x05, 0x00, 0x47, 0x00, 0x75, 0x00, 0x6c, 0x00, 0x69, 0x00, 0x6d,
+            0x00,
+        ]
+    );
 }
 
 #[test]
@@ -106,6 +163,7 @@ fn test_serialize_char_shape_roundtrip() {
         underline_shape: 0,
         strike_shape: 0,
         kerning: false,
+        use_font_space: false,
     };
 
     let data = serialize_char_shape(&cs);
@@ -141,6 +199,73 @@ fn test_serialize_char_shape_roundtrip() {
 }
 
 #[test]
+fn serialize_char_shape_preserves_inactive_model_fields() {
+    let cs = CharShape {
+        bold: true,
+        shadow_color: 0x00b2_b2b2,
+        ..Default::default()
+    };
+
+    let data = serialize_char_shape(&cs);
+    let attr = u32::from_le_bytes(data[46..50].try_into().unwrap());
+    let shadow_color = u32::from_le_bytes(data[64..68].try_into().unwrap());
+
+    assert_eq!(attr, 0x02);
+    assert_eq!(shadow_color, 0x00b2_b2b2);
+}
+
+#[test]
+fn serialize_char_shape_preserves_active_line_and_shadow_fields() {
+    let cs = CharShape {
+        underline_type: crate::model::style::UnderlineType::Bottom,
+        underline_shape: 3,
+        strikethrough: true,
+        strike_shape: 4,
+        shadow_type: 1,
+        shadow_color: 0x0012_3456,
+        ..Default::default()
+    };
+
+    let data = serialize_char_shape(&cs);
+    let attr = u32::from_le_bytes(data[46..50].try_into().unwrap());
+    let shadow_color = u32::from_le_bytes(data[64..68].try_into().unwrap());
+
+    assert_eq!((attr >> 2) & 0x03, 1);
+    assert_eq!((attr >> 4) & 0x0f, 3);
+    assert_eq!((attr >> 18) & 0x07, 2);
+    assert_eq!((attr >> 26) & 0x0f, 4);
+    assert_eq!((attr >> 11) & 0x03, 1);
+    assert_eq!(shadow_color, 0x0012_3456);
+}
+
+#[test]
+fn test_serialize_char_shape_use_font_space_bit() {
+    let mut cs = CharShape {
+        base_size: 1000,
+        ratios: [100; 7],
+        relative_sizes: [100; 7],
+        shade_color: 0x00FFFFFF,
+        shadow_color: 0x00B2B2B2,
+        use_font_space: true,
+        ..Default::default()
+    };
+
+    let data = serialize_char_shape(&cs);
+    let mut r = crate::parser::byte_reader::ByteReader::new(&data);
+    r.skip(14 + 7 + 7 + 7 + 7 + 4).unwrap();
+    let attr = r.read_u32().unwrap();
+    assert_ne!(attr & (1 << 25), 0);
+
+    cs.attr = 1 << 25;
+    cs.use_font_space = false;
+    let data = serialize_char_shape(&cs);
+    let mut r = crate::parser::byte_reader::ByteReader::new(&data);
+    r.skip(14 + 7 + 7 + 7 + 7 + 4).unwrap();
+    let attr = r.read_u32().unwrap();
+    assert_eq!(attr & (1 << 25), 0);
+}
+
+#[test]
 fn test_serialize_para_shape_roundtrip() {
     let ps = ParaShape {
         raw_data: None,
@@ -162,9 +287,13 @@ fn test_serialize_para_shape_roundtrip() {
         line_spacing_v2: 0,
         head_type: crate::model::style::HeadType::None,
         para_level: 0,
+        break_latin_word: None,
+        hwpx_plain_para_margin: false,
+        hwpx_plain_para_margin_physical: false,
     };
 
     let data = serialize_para_shape(&ps);
+    assert_eq!(data.len(), 58);
     let mut r = crate::parser::byte_reader::ByteReader::new(&data);
     assert_eq!(r.read_u32().unwrap(), 0x04);
     assert_eq!(r.read_i32().unwrap(), 1000);
@@ -176,6 +305,35 @@ fn test_serialize_para_shape_roundtrip() {
     assert_eq!(r.read_u16().unwrap(), 1);
     assert_eq!(r.read_u16().unwrap(), 2);
     assert_eq!(r.read_u16().unwrap(), 3);
+    assert_eq!(&data[54..58], &[0, 0, 0, 0]);
+}
+
+#[test]
+fn serialize_para_shape_writes_outline_level_into_tail() {
+    // [#2734] 말미 4바이트는 개요 수준(0~9 = 1수준~10수준)이다. 종전엔 0 리터럴이라
+    // 재직렬화되는 모든 문단 모양의 개요 수준이 사라졌다(코퍼스 실측 872건).
+    // attr1 bit25~27 은 3비트라 한컴처럼 6 에서 포화해야 한다.
+    for lvl in 0u8..=9 {
+        let ps = ParaShape {
+            para_level: lvl,
+            ..Default::default()
+        };
+        let data = serialize_para_shape(&ps);
+        assert_eq!(data.len(), 58, "58바이트 길이 계약(#1110) 유지");
+
+        let tail = u32::from_le_bytes([data[54], data[55], data[56], data[57]]);
+        assert_eq!(
+            tail as u8, lvl,
+            "말미 4바이트에 개요 수준 {lvl} 이 실려야 함"
+        );
+
+        let attr1 = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        assert_eq!(
+            (attr1 >> 25) & 0x07,
+            lvl.min(6) as u32,
+            "attr1 bit25~27 은 6 에서 포화(한컴 실측 규약)"
+        );
+    }
 }
 
 #[test]
@@ -186,8 +344,10 @@ fn test_serialize_style_roundtrip() {
         english_name: "Normal".to_string(),
         style_type: 0,
         next_style_id: 0,
+        lang_id: 1042,
         para_shape_id: 1,
         char_shape_id: 2,
+        lock_form: false,
     };
 
     let data = serialize_style(&style);
@@ -196,8 +356,12 @@ fn test_serialize_style_roundtrip() {
     assert_eq!(r.read_hwp_string().unwrap(), "Normal");
     assert_eq!(r.read_u8().unwrap(), 0);
     assert_eq!(r.read_u8().unwrap(), 0);
+    // [Task #1058 후속] lang_id (INT16) — HWP5 spec 표 47
+    assert_eq!(r.read_i16().unwrap(), 1042);
     assert_eq!(r.read_u16().unwrap(), 1);
     assert_eq!(r.read_u16().unwrap(), 2);
+    // trailing 2 byte zero
+    assert_eq!(r.read_u16().unwrap(), 0);
 }
 
 #[test]
@@ -249,6 +413,7 @@ fn test_serialize_border_fill_solid() {
             },
         ],
         diagonal: DiagonalLine::default(),
+        center_line: CenterLine::None,
         fill: Fill {
             fill_type: FillType::Solid,
             solid: Some(SolidFill {
@@ -260,6 +425,7 @@ fn test_serialize_border_fill_solid() {
             image: None,
             alpha: 0,
         },
+        three_d: false,
     };
 
     let data = serialize_border_fill(&bf);
@@ -278,17 +444,142 @@ fn test_serialize_border_fill_solid() {
 }
 
 #[test]
+fn test_serialize_border_fill_preserves_solid_and_image_alpha() {
+    // 채우기는 BorderFill 헤더(attr 2 + 4테두리×6 + 대각선 6) 뒤 오프셋 32 부터.
+    const FILL_OFFSET: usize = 32;
+
+    // Solid: alpha=180 이 왕복해야 한다(종전엔 additional_size=1+0x00 로 항상 0).
+    let mut bf = BorderFill {
+        raw_data: None,
+        attr: 0,
+        borders: [BorderLine::default(); 4],
+        diagonal: DiagonalLine::default(),
+        center_line: CenterLine::None,
+        fill: Fill {
+            fill_type: FillType::Solid,
+            solid: Some(SolidFill {
+                background_color: 0x00FFFFFF,
+                pattern_color: 0,
+                pattern_type: -1,
+            }),
+            gradient: None,
+            image: None,
+            alpha: 180,
+        },
+        three_d: false,
+    };
+    let data = serialize_border_fill(&bf);
+    let mut r = crate::parser::byte_reader::ByteReader::new(&data[FILL_OFFSET..]);
+    let parsed = crate::parser::doc_info::parse_fill(&mut r);
+    assert_eq!(parsed.alpha, 180, "Solid 채우기 alpha 가 왕복에서 유실됨");
+
+    // Image: alpha=200 이 왕복해야 한다(종전엔 alpha 바이트를 아예 안 냈다).
+    bf.fill = Fill {
+        fill_type: FillType::Image,
+        solid: None,
+        gradient: None,
+        image: Some(crate::model::style::ImageFill {
+            fill_mode: crate::model::style::ImageFillMode::TileAll,
+            brightness: 0,
+            contrast: 0,
+            effect: 0,
+            bin_data_id: 1,
+        }),
+        alpha: 200,
+    };
+    let data = serialize_border_fill(&bf);
+    let mut r = crate::parser::byte_reader::ByteReader::new(&data[FILL_OFFSET..]);
+    let parsed = crate::parser::doc_info::parse_fill(&mut r);
+    assert_eq!(parsed.alpha, 200, "Image 채우기 alpha 가 왕복에서 유실됨");
+}
+
+#[test]
+fn test_serialize_border_fill_cross_centerline_uses_hwp5_center_bits() {
+    let bf = BorderFill {
+        raw_data: None,
+        attr: (0b010 << 2) | (0b010 << 5),
+        borders: [BorderLine::default(); 4],
+        diagonal: DiagonalLine::default(),
+        center_line: CenterLine::Cross,
+        fill: Fill::default(),
+        three_d: false,
+    };
+
+    let data = serialize_border_fill(&bf);
+    let mut r = crate::parser::byte_reader::ByteReader::new(&data);
+
+    assert_eq!(
+        r.read_u16().unwrap(),
+        (1 << 13) | (0x03 << 8) | (1 << 10),
+        "HWP5 바이너리 CROSS 중심선은 한컴 중심선 보조 비트를 함께 저장해야 함"
+    );
+}
+
+#[test]
+fn test_serialize_border_fill_image_fill_mode_uses_hwp5_values() {
+    let cases = [
+        (ImageFillMode::TileAll, 0),
+        (ImageFillMode::TileHorzTop, 1),
+        (ImageFillMode::TileHorzBottom, 2),
+        (ImageFillMode::TileVertLeft, 3),
+        (ImageFillMode::TileVertRight, 4),
+        (ImageFillMode::FitToSize, 5),
+        (ImageFillMode::Center, 6),
+        (ImageFillMode::CenterTop, 7),
+        (ImageFillMode::CenterBottom, 8),
+        (ImageFillMode::LeftCenter, 9),
+        (ImageFillMode::LeftTop, 10),
+        (ImageFillMode::LeftBottom, 11),
+        (ImageFillMode::RightCenter, 12),
+        (ImageFillMode::RightTop, 13),
+        (ImageFillMode::RightBottom, 14),
+        (ImageFillMode::None, 15),
+    ];
+
+    for (mode, expected) in cases {
+        let bf = BorderFill {
+            raw_data: None,
+            attr: 0,
+            borders: [BorderLine::default(); 4],
+            diagonal: DiagonalLine::default(),
+            center_line: CenterLine::None,
+            fill: Fill {
+                fill_type: FillType::Image,
+                solid: None,
+                gradient: None,
+                image: Some(ImageFill {
+                    fill_mode: mode,
+                    brightness: 0,
+                    contrast: 0,
+                    effect: 0,
+                    bin_data_id: 7,
+                }),
+                alpha: 0,
+            },
+            three_d: false,
+        };
+
+        let data = serialize_border_fill(&bf);
+        let mut r = crate::parser::byte_reader::ByteReader::new(&data[32..]);
+        assert_eq!(r.read_u32().unwrap(), 2);
+        assert_eq!(
+            r.read_u8().unwrap(),
+            expected,
+            "{mode:?} must use HWP5 image fill mode {expected}"
+        );
+    }
+}
+
+#[test]
 fn test_serialize_tab_def() {
     let td = TabDef {
         raw_data: None,
         attr: 0x03,
-        tabs: vec![
-            crate::model::style::TabItem {
-                position: 7200,
-                tab_type: 0,
-                fill_type: 0,
-            },
-        ],
+        tabs: vec![crate::model::style::TabItem {
+            position: 7200,
+            tab_type: 0,
+            fill_type: 0,
+        }],
         auto_tab_left: true,
         auto_tab_right: true,
     };
@@ -325,8 +616,13 @@ fn test_serialize_doc_info_roundtrip() {
         raw_data: None,
         name: "함초롬바탕".to_string(),
         alt_type: 0,
+        is_embedded: false,
+        bin_item_id_ref: String::new(),
+        resolved_bin_data_id: None,
         alt_name: None,
+        type_info: None,
         default_name: None,
+        subst_font: None,
     });
     doc_info.char_shapes.push(CharShape {
         raw_data: None,
@@ -359,6 +655,7 @@ fn test_serialize_doc_info_roundtrip() {
         underline_shape: 0,
         strike_shape: 0,
         kerning: false,
+        use_font_space: false,
     });
     doc_info.para_shapes.push(ParaShape {
         raw_data: None,
@@ -380,6 +677,9 @@ fn test_serialize_doc_info_roundtrip() {
         line_spacing_v2: 0,
         head_type: crate::model::style::HeadType::None,
         para_level: 0,
+        break_latin_word: None,
+        hwpx_plain_para_margin: false,
+        hwpx_plain_para_margin_physical: false,
     });
     doc_info.styles.push(Style {
         raw_data: None,
@@ -387,8 +687,10 @@ fn test_serialize_doc_info_roundtrip() {
         english_name: "Normal".to_string(),
         style_type: 0,
         next_style_id: 0,
+        lang_id: 1042,
         para_shape_id: 0,
         char_shape_id: 0,
+        lock_form: false,
     });
 
     // 직렬화 → 역직렬화
@@ -431,4 +733,151 @@ fn test_serialize_numbering_roundtrip() {
     // 형식 문자열 "^1."
     let len = r.read_u16().unwrap();
     assert_eq!(len, 3);
+}
+
+/// IR 로 생성된 번호(WASM create_numbering)는 attr=0 이고 number_format 만 세팅된다.
+/// serialize_numbering 이 number_format 을 attr 비트 5~8 로 재인코딩하지 않으면 저장·재로드
+/// 시 파서가 number_format=(0>>5)&0xF=0(DIGIT)로 복원해 모든 수준의 번호 형식이 유실된다.
+#[test]
+fn numbering_serializes_number_format_into_attr_bits() {
+    let mut numbering = Numbering::default();
+    numbering.heads[0] = NumberingHead {
+        attr: 0,
+        width_adjust: 0,
+        text_distance: 0,
+        char_shape_id: 0,
+        number_format: 8, // 예: HANGUL_MIXED
+    };
+    numbering.level_formats[0] = "^1.".to_string();
+    numbering.level_start_numbers = [1; 7];
+
+    let data = serialize_numbering(&numbering);
+    let mut r = crate::parser::byte_reader::ByteReader::new(&data);
+    let attr = r.read_u32().unwrap();
+    assert_eq!(
+        (attr >> 5) & 0x0F,
+        8,
+        "number_format 가 attr 비트 5~8 로 방출돼야 재로드 시 형식이 보존된다"
+    );
+}
+
+/// HWPX 유래/IR 생성 TabDef 는 attr=0 이고 auto_tab 불리언만 세팅된다. serialize_tab_def 이
+/// 불리언을 attr 하위 2비트로 재인코딩하지 않으면 자동 탭 설정이 저장·재로드 시 유실된다.
+#[test]
+fn tab_def_serializes_auto_tab_bits_from_bools() {
+    use crate::model::style::TabDef;
+    let td = TabDef {
+        raw_data: None,
+        attr: 0,
+        tabs: vec![],
+        auto_tab_left: false,
+        auto_tab_right: true,
+    };
+    let bytes = serialize_tab_def(&td);
+    let mut r = crate::parser::byte_reader::ByteReader::new(&bytes);
+    let attr = r.read_u32().unwrap();
+    assert_eq!(
+        attr & 0x03,
+        0b10,
+        "auto_tab_right=true → attr bit1 이 세팅돼야 저장 보존"
+    );
+}
+
+/// [#1793] BULLET 레코드 직렬화 레이아웃 — 문단 머리 정보는 char_shape_id 포함
+/// 12바이트. char_shape_id 4바이트 누락 시 재파싱에서 bullet_char 오프셋이
+/// 어긋나 글머리표 문자가 NUL 로 손상된다 (HWPX→HWP 저장 후 렌더 손상).
+#[test]
+fn test_serialize_bullet_layout_and_roundtrip() {
+    let bullet = crate::model::style::Bullet {
+        raw_data: None,
+        attr: 0,
+        width_adjust: 0,
+        text_distance: 50,
+        char_shape_id: 2,
+        bullet_char: '-',
+        image_bullet: 0,
+        image_data: [0; 4],
+        check_bullet_char: '\0',
+        raw_para_head: None,
+    };
+
+    // 레이아웃: 문단 머리 정보 12바이트 후 offset 12 에 bullet_char
+    let data = serialize_bullet(&bullet);
+    assert_eq!(data.len(), 24);
+    let mut r = crate::parser::byte_reader::ByteReader::new(&data);
+    assert_eq!(r.read_u32().unwrap(), 0); // attr
+    assert_eq!(r.read_i16().unwrap(), 0); // width_adjust
+    assert_eq!(r.read_i16().unwrap(), 50); // text_distance
+    assert_eq!(r.read_u32().unwrap(), 2); // char_shape_id
+    assert_eq!(r.read_u16().unwrap(), '-' as u16); // bullet_char
+
+    // 전체 doc_info 라운드트립에서도 bullet_char 가 보존되어야 한다
+    let doc_props = DocProperties {
+        section_count: 1,
+        page_start_num: 1,
+        footnote_start_num: 1,
+        endnote_start_num: 1,
+        picture_start_num: 1,
+        table_start_num: 1,
+        equation_start_num: 1,
+        raw_data: None,
+        caret_list_id: 0,
+        caret_para_id: 0,
+        caret_char_pos: 0,
+    };
+    let mut doc_info = DocInfo::default();
+    doc_info.font_faces = vec![Vec::new(); 7];
+    doc_info.bullets.push(bullet);
+
+    let stream = serialize_doc_info(&doc_info, &doc_props);
+    let (parsed_info, _) = parse_doc_info(&stream).unwrap();
+    assert_eq!(parsed_info.bullets.len(), 1);
+    assert_eq!(parsed_info.bullets[0].bullet_char, '-');
+    assert_eq!(parsed_info.bullets[0].char_shape_id, 2);
+    assert_eq!(parsed_info.bullets[0].text_distance, 50);
+}
+
+/// [#4898] HWPX 출처 글꼴은 `default_name` 이 비어 있다 — 한글은 그 자리에 영문 기본
+/// 이름을 싣는다. 실측표로 같은 값을 채워 FACE_NAME 이 한컴 저장본과 같은 모양이 되게 한다.
+///
+/// 실측: 09254 의 FACE_NAME 33개가 한글 오라클 37~65바이트 vs rhwp 19~23바이트였고,
+/// 표 적용 후 크기가 일치했다(일치 레코드 399 → 410).
+/// 표 자체는 한컴 저장 `.hwp` 796건에서 모은 36,351쌍의 이름별 최빈값이다.
+#[test]
+fn issue4898_face_name_fills_measured_default_font_name() {
+    let mut font = Font {
+        name: "굴림체".to_string(),
+        ..Default::default()
+    };
+    font.default_name = None;
+
+    let bytes = serialize_face_name(&font);
+    // attr bit 0x20 = 기본 글꼴 이름 있음
+    assert_ne!(bytes[0] & 0x20, 0, "기본 글꼴 이름 플래그가 서야 한다");
+
+    let parsed = crate::parser::doc_info::parse_face_name(&bytes).expect("FACE_NAME 재파싱");
+    assert_eq!(
+        parsed.default_name.as_deref(),
+        Some("GulimChe"),
+        "한글이 싣는 영문 기본 이름과 같아야 한다"
+    );
+
+    // 원본이 이미 값을 갖고 있으면 그 값이 이긴다(표가 덮어쓰지 않는다).
+    let mut explicit = Font {
+        name: "굴림체".to_string(),
+        ..Default::default()
+    };
+    explicit.default_name = Some("Explicit".to_string());
+    let parsed = crate::parser::doc_info::parse_face_name(&serialize_face_name(&explicit))
+        .expect("FACE_NAME 재파싱");
+    assert_eq!(parsed.default_name.as_deref(), Some("Explicit"));
+
+    // 표에 없는 이름은 종전대로 비운다.
+    let unknown = Font {
+        name: "존재하지않는글꼴".to_string(),
+        ..Default::default()
+    };
+    let parsed = crate::parser::doc_info::parse_face_name(&serialize_face_name(&unknown))
+        .expect("FACE_NAME 재파싱");
+    assert_eq!(parsed.default_name, None);
 }

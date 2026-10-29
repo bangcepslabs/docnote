@@ -17,20 +17,17 @@ impl BitmapInfoHeader {
     pub fn parse<R: crate::wmf::Read>(
         buf: &mut R,
     ) -> Result<(Self, usize), crate::wmf::parser::ParseError> {
-        let (header_size, mut consumed_bytes) =
-            crate::wmf::parser::read_u32_from_le_bytes(buf)?;
+        let (header_size, mut consumed_bytes) = crate::wmf::parser::read_u32_from_le_bytes(buf)?;
 
         match header_size {
             0x0000000C => {
-                let (header, c) =
-                    BitmapInfoHeaderCore::parse(buf, header_size)?;
+                let (header, c) = BitmapInfoHeaderCore::parse(buf, header_size)?;
                 consumed_bytes += c;
 
                 Ok((Self::Core(header), consumed_bytes))
             }
             13..=40 => {
-                let (header, c) =
-                    BitmapInfoHeaderInfo::parse(buf, header_size)?;
+                let (header, c) = BitmapInfoHeaderInfo::parse(buf, header_size)?;
                 consumed_bytes += c;
 
                 Ok((Self::Info(header), consumed_bytes))
@@ -75,16 +72,23 @@ impl BitmapInfoHeader {
     }
 
     pub fn size(&self) -> usize {
-        let size = match self {
+        // Width/Height/BitCount come straight from the metafile and are
+        // attacker-controlled. `dib_image_size` evaluates the byte-count
+        // formula in `u64` with saturating arithmetic so crafted dimensions
+        // cannot overflow the narrow header integer types (a DoS panic under
+        // debug overflow checks); the read is separately bounded downstream.
+        match self {
             Self::Core(BitmapInfoHeaderCore {
                 width,
                 height,
                 planes,
                 bit_count,
                 ..
-            }) => u32::from(
-                (((width * planes * (*bit_count as u16) + 31) & !31) / 8)
-                    * height,
+            }) => info::dib_image_size(
+                u64::from(*width),
+                u64::from(*height),
+                u64::from(*planes),
+                *bit_count as u64,
             ),
             Self::Info(BitmapInfoHeaderInfo {
                 width,
@@ -115,32 +119,35 @@ impl BitmapInfoHeader {
             }) => match compression {
                 crate::wmf::parser::Compression::BI_RGB
                 | crate::wmf::parser::Compression::BI_BITFIELDS
-                | crate::wmf::parser::Compression::BI_CMYK => {
-                    ((((*width as u32)
-                        * u32::from(*planes)
-                        * (*bit_count as u32)
-                        + 31)
-                        & !31)
-                        / 8)
-                        * height.unsigned_abs()
-                }
-                _ => *image_size,
+                | crate::wmf::parser::Compression::BI_CMYK => info::dib_image_size(
+                    u64::from(*width as u32),
+                    u64::from(height.unsigned_abs()),
+                    u64::from(*planes),
+                    *bit_count as u64,
+                ),
+                _ => *image_size as usize,
             },
-        };
-
-        size as usize
+        }
     }
 
     pub fn color_used(&self) -> u32 {
         match self {
-            Self::Core(BitmapInfoHeaderCore { bit_count, .. }) => {
-                2u32.pow(*bit_count as u32)
-            }
+            Self::Core(BitmapInfoHeaderCore { bit_count, .. }) => 2u32.pow(*bit_count as u32),
             Self::Info(BitmapInfoHeaderInfo {
-                bit_count, color_used, ..
+                bit_count,
+                color_used,
+                ..
             })
-            | Self::V4(BitmapInfoHeaderV4 { bit_count, color_used, .. })
-            | Self::V5(BitmapInfoHeaderV5 { bit_count, color_used, .. }) => {
+            | Self::V4(BitmapInfoHeaderV4 {
+                bit_count,
+                color_used,
+                ..
+            })
+            | Self::V5(BitmapInfoHeaderV5 {
+                bit_count,
+                color_used,
+                ..
+            }) => {
                 if *color_used == 0
                     && matches!(
                         bit_count,
@@ -159,23 +166,49 @@ impl BitmapInfoHeader {
 
     pub fn height(&self) -> usize {
         match self {
-            Self::Core(BitmapInfoHeaderCore { height, .. }) => {
-                usize::from(*height)
-            }
+            Self::Core(BitmapInfoHeaderCore { height, .. }) => usize::from(*height),
+            // A negative Height indicates a top-down DIB (MS-WMF 2.2.2.9);
+            // the pixel height is the magnitude, matching `size()`'s use of
+            // `unsigned_abs()` below.
             Self::Info(BitmapInfoHeaderInfo { height, .. })
             | Self::V4(BitmapInfoHeaderV4 { height, .. })
-            | Self::V5(BitmapInfoHeaderV5 { height, .. }) => *height as usize,
+            | Self::V5(BitmapInfoHeaderV5 { height, .. }) => height.unsigned_abs() as usize,
         }
     }
 
     pub fn width(&self) -> usize {
         match self {
-            Self::Core(BitmapInfoHeaderCore { width, .. }) => {
-                usize::from(*width)
-            }
+            Self::Core(BitmapInfoHeaderCore { width, .. }) => usize::from(*width),
             Self::Info(BitmapInfoHeaderInfo { width, .. })
             | Self::V4(BitmapInfoHeaderV4 { width, .. })
             | Self::V5(BitmapInfoHeaderV5 { width, .. }) => *width as usize,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // MS-WMF 2.2.2.9: a negative Height indicates a top-down DIB; the
+    // absolute value is still the pixel height. `height()` must return the
+    // magnitude, matching what `size()` already does via `unsigned_abs()`.
+    #[test]
+    fn height_of_top_down_dib_is_absolute_value() {
+        let header = BitmapInfoHeader::Info(BitmapInfoHeaderInfo {
+            header_size: 40,
+            width: 10,
+            height: -10,
+            planes: 1,
+            bit_count: crate::wmf::parser::BitCount::BI_BITCOUNT_5,
+            compression: crate::wmf::parser::Compression::BI_RGB,
+            image_size: 0,
+            x_pels_per_meter: 0,
+            y_pels_per_meter: 0,
+            color_used: 0,
+            color_important: 0,
+        });
+
+        assert_eq!(header.height(), 10);
     }
 }

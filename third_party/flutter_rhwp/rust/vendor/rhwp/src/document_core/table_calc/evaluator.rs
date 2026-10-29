@@ -1,7 +1,7 @@
 //! 계산식 평가기: AST → 숫자 결과
 
-use super::parser::{FormulaNode, BinOpKind, parse_formula};
-use super::tokenizer::DirectionKind;
+use super::parser::{parse_formula, BinOpKind, FormulaNode};
+use super::tokenizer::{DirectionKind, WILDCARD_ROW};
 
 /// 셀 값 조회 함수 타입
 /// (col_index: 0-based, row_index: 0-based) → Option<f64>
@@ -29,27 +29,20 @@ pub fn evaluate_formula(
     ctx: &TableContext,
     get_cell: CellValueFn,
 ) -> Result<f64, String> {
-    let ast = parse_formula(formula)
-        .ok_or_else(|| "수식 파싱 실패".to_string())?;
+    let ast = parse_formula(formula).ok_or_else(|| "수식 파싱 실패".to_string())?;
     eval_node(&ast, ctx, get_cell)
 }
 
-fn eval_node(
-    node: &FormulaNode,
-    ctx: &TableContext,
-    get_cell: CellValueFn,
-) -> Result<f64, String> {
+fn eval_node(node: &FormulaNode, ctx: &TableContext, get_cell: CellValueFn) -> Result<f64, String> {
     match node {
         FormulaNode::Number(n) => Ok(*n),
 
         FormulaNode::CellRef { col, row } => {
-            let (c, r) = resolve_cell_ref(*col, *row, ctx)?;
+            let (c, r) = resolve_cell_ref(col, *row, ctx)?;
             Ok(get_cell(c, r).unwrap_or(0.0))
         }
 
-        FormulaNode::Negate(inner) => {
-            Ok(-eval_node(inner, ctx, get_cell)?)
-        }
+        FormulaNode::Negate(inner) => Ok(-eval_node(inner, ctx, get_cell)?),
 
         FormulaNode::BinOp { op, left, right } => {
             let l = eval_node(left, ctx, get_cell)?;
@@ -59,55 +52,60 @@ fn eval_node(
                 BinOpKind::Sub => Ok(l - r),
                 BinOpKind::Mul => Ok(l * r),
                 BinOpKind::Div => {
-                    if r == 0.0 { Err("0으로 나눌 수 없음".into()) }
-                    else { Ok(l / r) }
+                    if r == 0.0 {
+                        Err("0으로 나눌 수 없음".into())
+                    } else {
+                        Ok(l / r)
+                    }
                 }
             }
         }
 
-        FormulaNode::Range { .. } => {
-            Err("범위 참조는 함수 인수로만 사용 가능".into())
-        }
+        FormulaNode::Range { .. } => Err("범위 참조는 함수 인수로만 사용 가능".into()),
 
-        FormulaNode::Direction(_) => {
-            Err("방향 지정자는 함수 인수로만 사용 가능".into())
-        }
+        FormulaNode::Direction(_) => Err("방향 지정자는 함수 인수로만 사용 가능".into()),
 
-        FormulaNode::FuncCall { name, args } => {
-            eval_function(name, args, ctx, get_cell)
-        }
+        FormulaNode::FuncCall { name, args } => eval_function(name, args, ctx, get_cell),
     }
 }
 
 /// 셀 참조를 (col_index, row_index) 0-based로 변환
-fn resolve_cell_ref(col: char, row: u32, ctx: &TableContext) -> Result<(usize, usize), String> {
-    let c = if col == '?' {
+fn resolve_cell_ref(col: &str, row: u32, ctx: &TableContext) -> Result<(usize, usize), String> {
+    let c = if col == "?" {
         ctx.current_col
     } else {
-        (col as usize).checked_sub('A' as usize)
-            .ok_or_else(|| format!("잘못된 열: {}", col))?
+        if col.is_empty() || !col.chars().all(|ch| ch.is_ascii_uppercase()) {
+            return Err(format!("잘못된 열: {col}"));
+        }
+        let one_based = col.chars().try_fold(0usize, |acc, ch| {
+            acc.checked_mul(26)
+                .and_then(|value| value.checked_add((ch as u8 - b'A' + 1) as usize))
+        });
+        one_based
+            .and_then(|value| value.checked_sub(1))
+            .ok_or_else(|| format!("잘못된 열: {col}"))?
     };
-    let r = if row == 0 {
+    let r = if row == WILDCARD_ROW {
         ctx.current_row // 와일드카드 행
     } else {
-        (row as usize).checked_sub(1)
+        (row as usize)
+            .checked_sub(1)
             .ok_or_else(|| "행은 1부터 시작".to_string())?
     };
     Ok((c, r))
 }
 
 /// 범위/방향에서 셀 좌표 목록을 수집
-fn collect_cells(
-    arg: &FormulaNode,
-    ctx: &TableContext,
-) -> Result<Vec<(usize, usize)>, String> {
+fn collect_cells(arg: &FormulaNode, ctx: &TableContext) -> Result<Vec<(usize, usize)>, String> {
     match arg {
         FormulaNode::Range { start, end } => {
-            if let (FormulaNode::CellRef { col: c1, row: r1 },
-                    FormulaNode::CellRef { col: c2, row: r2 }) = (start.as_ref(), end.as_ref())
+            if let (
+                FormulaNode::CellRef { col: c1, row: r1 },
+                FormulaNode::CellRef { col: c2, row: r2 },
+            ) = (start.as_ref(), end.as_ref())
             {
-                let (sc, sr) = resolve_cell_ref(*c1, *r1, ctx)?;
-                let (ec, er) = resolve_cell_ref(*c2, *r2, ctx)?;
+                let (sc, sr) = resolve_cell_ref(c1, *r1, ctx)?;
+                let (ec, er) = resolve_cell_ref(c2, *r2, ctx)?;
                 let mut cells = Vec::new();
                 let (min_r, max_r) = (sr.min(er), sr.max(er));
                 let (min_c, max_c) = (sc.min(ec), sc.max(ec));
@@ -148,7 +146,7 @@ fn collect_cells(
             Ok(cells)
         }
         FormulaNode::CellRef { col, row } => {
-            let (c, r) = resolve_cell_ref(*col, *row, ctx)?;
+            let (c, r) = resolve_cell_ref(col, *row, ctx)?;
             Ok(vec![(c, r)])
         }
         _ => Err("함수 인수가 범위/셀/방향이 아님".into()),
@@ -173,7 +171,7 @@ fn collect_values(
                 }
             }
             FormulaNode::CellRef { col, row } => {
-                let (c, r) = resolve_cell_ref(*col, *row, ctx)?;
+                let (c, r) = resolve_cell_ref(col, *row, ctx)?;
                 if let Some(v) = get_cell(c, r) {
                     values.push(v);
                 }
@@ -200,7 +198,9 @@ fn eval_function(
         }
         "AVERAGE" | "AVG" => {
             let vals = collect_values(args, ctx, get_cell)?;
-            if vals.is_empty() { return Ok(0.0); }
+            if vals.is_empty() {
+                return Ok(0.0);
+            }
             Ok(vals.iter().sum::<f64>() / vals.len() as f64)
         }
         "PRODUCT" => {
@@ -233,7 +233,13 @@ fn eval_function(
         "ATAN" => unary_fn(args, ctx, get_cell, f64::atan),
         "RADIAN" => unary_fn(args, ctx, get_cell, |d| d * std::f64::consts::PI / 180.0),
         "SIGN" => unary_fn(args, ctx, get_cell, |v| {
-            if v > 0.0 { 1.0 } else if v < 0.0 { -1.0 } else { 0.0 }
+            if v > 0.0 {
+                1.0
+            } else if v < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
         }),
         "INT" => unary_fn(args, ctx, get_cell, |v| v.trunc()),
         "CEILING" => unary_fn(args, ctx, get_cell, f64::ceil),
@@ -246,8 +252,11 @@ fn eval_function(
             }
             let a = eval_node(&args[0], ctx, get_cell)?;
             let b = eval_node(&args[1], ctx, get_cell)?;
-            if b == 0.0 { Err("0으로 나눌 수 없음".into()) }
-            else { Ok(a % b) }
+            if b == 0.0 {
+                Err("0으로 나눌 수 없음".into())
+            } else {
+                Ok(a % b)
+            }
         }
         "IF" => {
             if args.len() < 3 {
@@ -282,7 +291,12 @@ mod tests {
     use super::*;
 
     fn make_ctx() -> TableContext {
-        TableContext { row_count: 5, col_count: 5, current_row: 4, current_col: 0 }
+        TableContext {
+            row_count: 5,
+            col_count: 5,
+            current_row: 4,
+            current_col: 0,
+        }
     }
 
     fn sample_cell(col: usize, row: usize) -> Option<f64> {
@@ -394,7 +408,8 @@ mod tests {
         // a1=11, b3=32, sum(a1:b5)=11+12+21+22+31+32+41+42+51+52=315
         // avg(c3, e5-3) = avg(33, 55-3) = avg(33, 52) = 42.5
         // = 11 + (32-3)*2 + (315 + 42.5) = 11 + 58 + 357.5 = 426.5
-        let r = evaluate_formula("=a1+(b3-3)*2+sum(a1:b5,avg(c3,e5-3))", &ctx, &sample_cell).unwrap();
+        let r =
+            evaluate_formula("=a1+(b3-3)*2+sum(a1:b5,avg(c3,e5-3))", &ctx, &sample_cell).unwrap();
         assert_eq!(r, 426.5);
     }
 
@@ -403,5 +418,19 @@ mod tests {
         let ctx = make_ctx();
         let r = evaluate_formula("=1/0", &ctx, &sample_cell);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_row_zero_is_not_wildcard() {
+        // 스펙(mydocs/plans/archives/task_370.md): 행은 1부터 시작하고, 와일드카드는 '?'만 인정한다.
+        // "A0"처럼 명시적으로 0행을 참조하는 것은 잘못된 입력이며, 현재 행(current_row)으로
+        // 조용히 대체되어서는 안 된다.
+        let ctx = make_ctx(); // current_row = 4
+        let r = evaluate_formula("=A0", &ctx, &sample_cell);
+        assert!(
+            r.is_err(),
+            "A0은 현재 행(A5=41.0)으로 치환되지 않고 오류가 되어야 하는데 {:?} 를 반환함",
+            r
+        );
     }
 }

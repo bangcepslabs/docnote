@@ -90,15 +90,12 @@ impl LogColorSpaceW {
             + gamma_green_bytes
             + gamma_blue_bytes;
 
-        let filename = if size as usize - consumed_bytes >= 520 {
-            let (bytes, filename_bytes) =
-                crate::wmf::parser::read_variable(buf, 520)?;
+        let filename = if (size as usize).saturating_sub(consumed_bytes) >= 520 {
+            let (bytes, filename_bytes) = crate::wmf::parser::read_variable(buf, 520)?;
             consumed_bytes += filename_bytes;
             let len = bytes.iter().position(|&c| c == 0).unwrap_or(bytes.len());
 
-            Some(crate::wmf::parser::objects::structure::utf16le_bytes_to_string(
-                &bytes[..len],
-            )?)
+            Some(crate::wmf::parser::objects::structure::utf16le_bytes_to_string(&bytes[..len])?)
         } else {
             None
         };

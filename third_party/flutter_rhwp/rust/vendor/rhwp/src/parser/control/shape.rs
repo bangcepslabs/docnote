@@ -2,22 +2,22 @@
 //!
 //! GSO(General Shape Object) 컨트롤과 관련 서브타입을 파싱한다.
 
-use crate::parser::body_text::parse_paragraph_list;
-use crate::parser::byte_reader::ByteReader;
-use crate::parser::record::Record;
-use crate::parser::tags;
+use super::parse_caption;
 use crate::model::control::Control;
 use crate::model::image::{ImageEffect, Picture};
 use crate::model::shape::{
-    ArcShape, Caption, CaptionDirection, ChartShape, ChartType, CommonObjAttr, CurveShape, DrawingObjAttr,
-    EllipseShape, GroupShape, HorzAlign, HorzRelTo, LineShape, OleDrawingAspect, OleShape, PolygonShape,
+    ArcShape, Caption, ChartShape, CommonObjAttr, CurveShape, DrawingObjAttr, EllipseShape,
+    GroupShape, HorzAlign, HorzRelTo, LineShape, OleDrawingAspect, OleShape, PolygonShape,
     RectangleShape, ShapeComponentAttr, ShapeObject, TextWrap, VertAlign, VertRelTo,
 };
 use crate::model::style::{Fill, ShapeBorderLine};
-use crate::model::Point;
 use crate::model::Padding;
+use crate::model::Point;
+use crate::parser::body_text::parse_paragraph_list;
+use crate::parser::byte_reader::ByteReader;
 use crate::parser::doc_info;
-use super::parse_caption;
+use crate::parser::record::Record;
+use crate::parser::tags;
 
 // ============================================================
 // 그리기 개체 ('gso ')
@@ -44,23 +44,31 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
     let mut shape_component_parsed = false;
 
     // 그룹 컨테이너 사전 감지
-    let has_container_tag = child_records.iter().any(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT_CONTAINER);
-    let has_child_sc = if let Some((sc_idx, sc_rec)) = child_records.iter().enumerate()
-        .find(|(_, r)| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT) {
+    let has_container_tag = child_records
+        .iter()
+        .any(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT_CONTAINER);
+    let has_child_sc = if let Some((sc_idx, sc_rec)) = child_records
+        .iter()
+        .enumerate()
+        .find(|(_, r)| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT)
+    {
         let sc_level = sc_rec.level;
-        child_records[sc_idx + 1..].iter().any(|r|
-            r.tag_id == tags::HWPTAG_SHAPE_COMPONENT && r.level == sc_level + 1
-        )
-    } else { false };
+        child_records[sc_idx + 1..]
+            .iter()
+            .any(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT && r.level == sc_level + 1)
+    } else {
+        false
+    };
     if has_container_tag {
         is_container = true;
     } else if has_child_sc {
         is_container = true;
     }
     // SHAPE_COMPONENT 인덱스 찾기 (캡션/텍스트박스 LIST_HEADER 구분에 필요)
-    let shape_comp_idx = child_records.iter().position(|r|
-        r.tag_id == tags::HWPTAG_SHAPE_COMPONENT || r.tag_id == tags::HWPTAG_SHAPE_COMPONENT_CONTAINER
-    );
+    let shape_comp_idx = child_records.iter().position(|r| {
+        r.tag_id == tags::HWPTAG_SHAPE_COMPONENT
+            || r.tag_id == tags::HWPTAG_SHAPE_COMPONENT_CONTAINER
+    });
 
     for record in child_records {
         match record.tag_id {
@@ -113,6 +121,13 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
             tags::HWPTAG_LIST_HEADER => {}
             _ => {}
         }
+    }
+
+    // 빈 묶음: 자식 SHAPE_COMPONENT/CONTAINER 태그가 없어도 component ctrl_id 가
+    // '$con' 이면 컨테이너다 (HWP3 변환 서식류의 children=0 묶음이 사각형으로 오분류
+    // → 라운드트립 렌더 대변위, #1892).
+    if drawing.shape_attr.ctrl_id == tags::SHAPE_CONTAINER_ID {
+        is_container = true;
     }
 
     // 캡션 파싱: SHAPE_COMPONENT 앞의 LIST_HEADER는 캡션
@@ -177,8 +192,8 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
             text_box.max_width = lr.read_u32().unwrap_or(0);
             // 나머지 바이트 보존 (라운드트립용)
             if lr.remaining() > 0 {
-                text_box.raw_list_header_extra = lr.read_bytes(lr.remaining())
-                    .unwrap_or_default().to_vec();
+                text_box.raw_list_header_extra =
+                    lr.read_bytes(lr.remaining()).unwrap_or_default().to_vec();
             }
         }
 
@@ -220,7 +235,7 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
         let mut group = GroupShape::default();
         group.common = common;
         group.shape_attr = drawing.shape_attr;
-        group.children = parse_container_children(child_records);
+        group.children = parse_container_children(child_records, 0);
         group.caption = drawing.caption;
         return Control::Shape(Box::new(ShapeObject::Group(group)));
     }
@@ -298,7 +313,11 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
 /// 00 00 00 00   u32 reserved
 /// 00 00         u16 reserved/aspect
 /// ```
-pub(crate) fn parse_ole_shape(common: CommonObjAttr, drawing: DrawingObjAttr, tag_data: &[u8]) -> OleShape {
+pub(crate) fn parse_ole_shape(
+    common: CommonObjAttr,
+    drawing: DrawingObjAttr,
+    tag_data: &[u8],
+) -> OleShape {
     let mut ole = OleShape::default();
     ole.common = common;
     ole.drawing = drawing;
@@ -323,6 +342,32 @@ pub(crate) fn parse_common_obj_attr(ctrl_data: &[u8]) -> CommonObjAttr {
     let attr = r.read_u32().unwrap_or(0);
     common.attr = attr;
     common.treat_as_char = attr & 0x01 != 0;
+    // [#2784] affectLSpacing(줄 간격에 영향) — 개체 공통 속성 attr bit 2 (스펙 표 70).
+    common.affect_line_spacing = attr & (1 << 2) != 0;
+    common.flow_with_text = attr & (1 << 13) != 0;
+    common.allow_overlap = attr & (1 << 14) != 0;
+    common.size_protect = attr & (1 << 20) != 0;
+    // 개체 잠금 — HWP5 는 attr **비트 30** 에 싣는다.
+    //
+    // 실측으로 뽑았다: 한글이 `Ctrl.Properties.Item("Lock")` 을 1 로 답하는 표들의 attr 이
+    // 안 잠긴 표보다 정확히 `2^30` 만큼 크다(같은 문서 안 표 열둘로 대조). 여태 HWPX 경로에서만
+    // 읽고 HWP5 는 늘 `false` 여서, 잠긴 개체가 저장·변환에서 풀려 나갔다.
+    common.locked = attr & (1 << 30) != 0;
+    common.hwp5_gen_shape_attr_bit26 = attr & (1 << 26) != 0;
+    common.hwp5_gen_shape_attr_bit28 = attr & (1 << 28) != 0;
+    // [#5864] 개체 번호 범주(캡션 번호·상호참조 계열) — attr bits 26-28 의 3비트
+    // 열거다. 07276 실측: 표 155/155(0=NONE 23·2=TABLE 126·1=PICTURE 6), 수식
+    // 8/8(=3), gso 분포도 한글 2024 SaveAs HWPX 의 numberingType 과 정합
+    // (PICTURE 28·TABLE 1 정확 일치). 종전엔 안 읽어 h2x 산출이 전량 NONE 이
+    // 됐고, 한글이 상호참조 순번을 전부 1 로 재계산했다(07276 상호참조 153중
+    // 101 오염). bit26/28 개별 보존 플래그(hwp5_gen_shape_attr_bit26/28)는
+    // attr verbatim 왕복용으로 그대로 둔다.
+    common.numbering_type = match (attr >> 26) & 0x7 {
+        1 => crate::model::shape::ObjectNumberingType::Picture,
+        2 => crate::model::shape::ObjectNumberingType::Table,
+        3 => crate::model::shape::ObjectNumberingType::Equation,
+        _ => crate::model::shape::ObjectNumberingType::None,
+    };
     common.vert_rel_to = match (attr >> 3) & 0x03 {
         1 => VertRelTo::Page,
         2 => VertRelTo::Para,
@@ -368,10 +413,18 @@ pub(crate) fn parse_common_obj_attr(ctrl_data: &[u8]) -> CommonObjAttr {
     // hwplib 기준 TextFlowMethod: 0=어울림, 1=자리차지, 2=글뒤로, 3=글앞으로
     common.text_wrap = match (attr >> 21) & 0x07 {
         0 => TextWrap::Square,        // 어울림 (FitWithText)
-        1 => TextWrap::TopAndBottom,   // 자리차지 (TakePlace)
-        2 => TextWrap::BehindText,     // 글 뒤로
-        3 => TextWrap::InFrontOfText,  // 글 앞으로
+        1 => TextWrap::TopAndBottom,  // 자리차지 (TakePlace)
+        2 => TextWrap::BehindText,    // 글 뒤로
+        3 => TextWrap::InFrontOfText, // 글 앞으로
         _ => TextWrap::Square,
+    };
+    // bit 24-25: TextFlowSide (텍스트 흐르는 방향)
+    common.text_flow = match (attr >> 24) & 0x03 {
+        0 => crate::model::shape::TextFlow::BothSides,
+        1 => crate::model::shape::TextFlow::LeftOnly,
+        2 => crate::model::shape::TextFlow::RightOnly,
+        3 => crate::model::shape::TextFlow::LargestOnly,
+        _ => crate::model::shape::TextFlow::BothSides,
     };
 
     common.vertical_offset = r.read_u32().unwrap_or(0);
@@ -439,8 +492,12 @@ fn parse_shape_component_full(data: &[u8]) -> ShapeComponentParsed {
             attr: ShapeComponentAttr::default(),
             border: ShapeBorderLine::default(),
             fill: Fill::default(),
-            shadow_type: 0, shadow_color: 0, shadow_offset_x: 0, shadow_offset_y: 0,
-            inst_id: 0, shadow_alpha: 0,
+            shadow_type: 0,
+            shadow_color: 0,
+            shadow_offset_x: 0,
+            shadow_offset_y: 0,
+            inst_id: 0,
+            shadow_alpha: 0,
         };
     }
 
@@ -487,7 +544,10 @@ fn parse_shape_component_full(data: &[u8]) -> ShapeComponentParsed {
             for v in m.iter_mut() {
                 let bytes = r.read_bytes(8).unwrap_or_default();
                 if bytes.len() == 8 {
-                    *v = f64::from_le_bytes([bytes[0],bytes[1],bytes[2],bytes[3],bytes[4],bytes[5],bytes[6],bytes[7]]);
+                    *v = f64::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ]);
                 }
             }
             m
@@ -495,12 +555,12 @@ fn parse_shape_component_full(data: &[u8]) -> ShapeComponentParsed {
         // 두 아핀 행렬 합성: result = A × B
         fn compose(a: &[f64; 6], b: &[f64; 6]) -> [f64; 6] {
             [
-                a[0]*b[0] + a[1]*b[3],          // a
-                a[0]*b[1] + a[1]*b[4],          // b
-                a[0]*b[2] + a[1]*b[5] + a[2],   // tx
-                a[3]*b[0] + a[4]*b[3],          // c
-                a[3]*b[1] + a[4]*b[4],          // d
-                a[3]*b[2] + a[4]*b[5] + a[5],   // ty
+                a[0] * b[0] + a[1] * b[3],        // a
+                a[0] * b[1] + a[1] * b[4],        // b
+                a[0] * b[2] + a[1] * b[5] + a[2], // tx
+                a[3] * b[0] + a[4] * b[3],        // c
+                a[3] * b[1] + a[4] * b[4],        // d
+                a[3] * b[2] + a[4] * b[5] + a[5], // ty
             ]
         }
 
@@ -514,9 +574,9 @@ fn parse_shape_component_full(data: &[u8]) -> ShapeComponentParsed {
         }
         // 합성된 아핀 행렬 [a, b, tx, c, d, ty] 추출
         attr.render_sx = result[0]; // a
-        attr.render_b  = result[1]; // b (회전/전단 성분)
+        attr.render_b = result[1]; // b (회전/전단 성분)
         attr.render_tx = result[2]; // tx
-        attr.render_c  = result[3]; // c (회전/전단 성분)
+        attr.render_c = result[3]; // c (회전/전단 성분)
         attr.render_sy = result[4]; // d
         attr.render_ty = result[5]; // ty
     }
@@ -559,19 +619,50 @@ fn parse_shape_component_full(data: &[u8]) -> ShapeComponentParsed {
     };
 
     // 인스턴스 ID (4바이트) + 예약 (1바이트) + 그림자 투명도 (1바이트) = 6바이트
-    let inst_id = if r.remaining() >= 4 { r.read_u32().unwrap_or(0) } else { 0 };
-    if r.remaining() >= 1 { let _ = r.read_u8(); } // 예약 (skip)
-    let shadow_alpha = if r.remaining() >= 1 { r.read_u8().unwrap_or(0) } else { 0 };
+    let inst_id = if r.remaining() >= 4 {
+        r.read_u32().unwrap_or(0)
+    } else {
+        0
+    };
+    if r.remaining() >= 1 {
+        let _ = r.read_u8();
+    } // 예약 (skip)
+    let shadow_alpha = if r.remaining() >= 1 {
+        r.read_u8().unwrap_or(0)
+    } else {
+        0
+    };
 
-    ShapeComponentParsed { attr, border, fill, shadow_type, shadow_color, shadow_offset_x, shadow_offset_y, inst_id, shadow_alpha }
+    ShapeComponentParsed {
+        attr,
+        border,
+        fill,
+        shadow_type,
+        shadow_color,
+        shadow_offset_x,
+        shadow_offset_y,
+        inst_id,
+        shadow_alpha,
+    }
 }
 
 /// 묶음 개체(Container)의 자식 도형 파싱
 ///
 /// SHAPE_COMPONENT_CONTAINER 또는 첫 SHAPE_COMPONENT 이후의 레코드에서
 /// SHAPE_COMPONENT + 도형 태그 쌍을 찾아 각각을 개별 ShapeObject로 파싱한다.
-fn parse_container_children(child_records: &[Record]) -> Vec<ShapeObject> {
+/// [#4761] HWP5 묶음(그룹) 개체는 자식으로 다시 묶음을 가질 수 있고, 그 중첩 깊이는
+/// `level` 필드로 파일에서 온다. 상한이 없으면 깊이 중첩된 그룹 체인 하나로 네이티브
+/// 스택을 고갈시켜 프로세스를 죽일 수 있다(패닉과 달리 catch_unwind 로 못 잡는
+/// SIGSEGV). HWP3 형제 `parse_shape_list` 의 `MAX_DRAWING_OBJECT_DEPTH`(#4285)와 같은
+/// 취지·같은 값으로 상한을 둔다. 이 함수는 `Result` 가 아니므로 초과 시 빈 자식으로
+/// 절단한다(크래시 대신 깊은 중첩 유실 — 실문서의 그룹 중첩은 이에 한참 못 미친다).
+const MAX_HWP5_SHAPE_DEPTH: u32 = 256;
+
+fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeObject> {
     let mut children = Vec::new();
+    if depth > MAX_HWP5_SHAPE_DEPTH {
+        return children;
+    }
 
     // SHAPE_COMPONENT_CONTAINER 이후 또는 구버전 그룹의 첫 SHAPE_COMPONENT 이후
     let container_idx = child_records
@@ -579,7 +670,9 @@ fn parse_container_children(child_records: &[Record]) -> Vec<ShapeObject> {
         .position(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT_CONTAINER);
 
     // 첫 SHAPE_COMPONENT 위치 찾기 (캡션 등이 앞에 올 수 있음)
-    let first_sc_idx = child_records.iter().position(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT);
+    let first_sc_idx = child_records
+        .iter()
+        .position(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT);
 
     let start = match container_idx {
         Some(idx) => idx + 1,
@@ -608,7 +701,6 @@ fn parse_container_children(child_records: &[Record]) -> Vec<ShapeObject> {
             comp_indices.push(i);
         }
     }
-
 
     for (ci, &comp_start) in comp_indices.iter().enumerate() {
         let comp_end = if ci + 1 < comp_indices.len() {
@@ -645,7 +737,9 @@ fn parse_container_children(child_records: &[Record]) -> Vec<ShapeObject> {
         let mut shape_tag_id: Option<u16> = None;
         let mut shape_tag_data: &[u8] = &[];
         for record in &child_slice[1..] {
-            if record.level != direct_child_level { continue; }
+            if record.level != direct_child_level {
+                continue;
+            }
             match record.tag_id {
                 tags::HWPTAG_SHAPE_COMPONENT_LINE
                 | tags::HWPTAG_SHAPE_COMPONENT_RECTANGLE
@@ -701,8 +795,8 @@ fn parse_container_children(child_records: &[Record]) -> Vec<ShapeObject> {
                     text_box.margin_bottom = lr.read_i16().unwrap_or(0);
                     text_box.max_width = lr.read_u32().unwrap_or(0);
                     if lr.remaining() > 0 {
-                        text_box.raw_list_header_extra = lr.read_bytes(lr.remaining())
-                            .unwrap_or_default().to_vec();
+                        text_box.raw_list_header_extra =
+                            lr.read_bytes(lr.remaining()).unwrap_or_default().to_vec();
                     }
                 } else if let Some((ml, mr, mt, mb, max_w, list_attr)) = tb_attr {
                     // LIST_HEADER 레코드가 없으면 SHAPE_COMPONENT 인라인 속성 사용
@@ -724,16 +818,24 @@ fn parse_container_children(child_records: &[Record]) -> Vec<ShapeObject> {
         }
 
         // 중첩 Group 감지: shape_tag_id가 없고 하위 SHAPE_COMPONENT가 있으면 재귀
-        let has_nested_shapes = shape_tag_id.is_none() && child_slice.len() > 1
-            && child_slice[1..].iter().any(|r|
-                r.tag_id == tags::HWPTAG_SHAPE_COMPONENT && r.level > child_slice[0].level);
-        // CONTAINER 태그가 있거나 하위 SHAPE_COMPONENT가 있으면 중첩 Group
-        let has_container_tag = child_slice[1..].iter()
+        let has_nested_shapes = shape_tag_id.is_none()
+            && child_slice.len() > 1
+            && child_slice[1..].iter().any(|r| {
+                r.tag_id == tags::HWPTAG_SHAPE_COMPONENT && r.level > child_slice[0].level
+            });
+        // CONTAINER 태그가 있거나 하위 SHAPE_COMPONENT가 있으면 중첩 Group.
+        // 자식이 없어도 component ctrl_id 가 '$con' 이면 빈 묶음이다 (#1892 —
+        // 사각형 폴백으로 빠지면 재파스 렌더 트리가 Group→Rect 로 갈라진다).
+        let has_container_tag = child_slice[1..]
+            .iter()
             .any(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT_CONTAINER);
-        if has_container_tag || has_nested_shapes {
+        if has_container_tag
+            || has_nested_shapes
+            || child_drawing.shape_attr.ctrl_id == tags::SHAPE_CONTAINER_ID
+        {
             let mut group = GroupShape::default();
             group.shape_attr = child_drawing.shape_attr.clone();
-            group.children = parse_container_children(child_slice);
+            group.children = parse_container_children(child_slice, depth + 1);
             children.push(ShapeObject::Group(group));
             continue;
         }
@@ -799,11 +901,7 @@ fn parse_container_children(child_records: &[Record]) -> Vec<ShapeObject> {
 }
 
 /// 그림 개체 파싱
-fn parse_picture(
-    common: CommonObjAttr,
-    shape_attr: ShapeComponentAttr,
-    data: &[u8],
-) -> Picture {
+fn parse_picture(common: CommonObjAttr, shape_attr: ShapeComponentAttr, data: &[u8]) -> Picture {
     let mut pic = Picture::default();
     pic.common = common;
     pic.shape_attr = shape_attr;
@@ -859,6 +957,34 @@ fn parse_picture(
     // 남은 바이트 보존 (라운드트립용)
     if r.remaining() > 0 {
         pic.raw_picture_extra = r.read_bytes(r.remaining()).unwrap_or_default().to_vec();
+        if let Some(&border_opacity) = pic.raw_picture_extra.first() {
+            pic.border_opacity = border_opacity;
+        }
+        if pic.raw_picture_extra.len() >= 5 {
+            pic.instance_id = u32::from_le_bytes([
+                pic.raw_picture_extra[1],
+                pic.raw_picture_extra[2],
+                pic.raw_picture_extra[3],
+                pic.raw_picture_extra[4],
+            ]);
+        }
+        if pic.raw_picture_extra.len() >= 18 {
+            if let Some(&alpha) = pic.raw_picture_extra.last() {
+                pic.image_attr.transparency =
+                    crate::model::image::alpha_byte_to_transparency_percent(alpha);
+            }
+        }
+        // [#1929] extra 꼬리의 원본 이미지 크기(offset 9..17: w4+h4)를 img_dim 으로
+        // 적재 — HWPX `hp:imgDim` 대응 필드. 종전에는 HWP5 파스가 이를 읽지 않아
+        // HWPX→HWP5 왕복에서 imgDim 이 (0,0) 으로 소실됐다 (직렬화기 non-raw
+        // 경로가 기록해도 재파스가 버림).
+        if pic.raw_picture_extra.len() >= 17 {
+            let e = &pic.raw_picture_extra;
+            pic.img_dim = (
+                u32::from_le_bytes([e[9], e[10], e[11], e[12]]),
+                u32::from_le_bytes([e[13], e[14], e[15], e[16]]),
+            );
+        }
     }
 
     pic
@@ -866,7 +992,7 @@ fn parse_picture(
 
 /// 직선 도형 데이터 파싱
 fn parse_line_shape_data(data: &[u8], line: &mut LineShape, is_connector: bool) {
-    use crate::model::shape::{ConnectorData, ConnectorControlPoint, LinkLineType};
+    use crate::model::shape::{ConnectorControlPoint, ConnectorData, LinkLineType};
     let mut r = ByteReader::new(data);
     line.start.x = r.read_i32().unwrap_or(0);
     line.start.y = r.read_i32().unwrap_or(0);
@@ -881,9 +1007,17 @@ fn parse_line_shape_data(data: &[u8], line: &mut LineShape, is_connector: bool) 
         let start_subject_index = r.read_u32().unwrap_or(0);
         let end_subject_id = r.read_u32().unwrap_or(0);
         let end_subject_index = r.read_u32().unwrap_or(0);
-        let count = r.read_u32().unwrap_or(0) as usize;
+        // countCP 는 파일에서 온 u32 다. 남은 바이트로 실제 담을 수 있는 개수
+        // (제어점당 4+4+2=10바이트)로 상한을 둔다. 종전엔 상한이 없어
+        // (a) Vec::with_capacity 가 최대 ~51GB 예약을 시도해 RawVec 오버플로
+        // panic/abort, (b) read_*().unwrap_or(0) 가 EOF 를 삼켜 루프가 count
+        // 만큼(최대 40억회) 0 을 채우며 도는 문제가 있었다.
+        let count = (r.read_u32().unwrap_or(0) as usize).min(r.remaining() / 10);
         let mut control_points = Vec::with_capacity(count);
         for _ in 0..count {
+            if r.remaining() < 10 {
+                break;
+            }
             let x = r.read_i32().unwrap_or(0);
             let y = r.read_i32().unwrap_or(0);
             let point_type = r.read_u16().unwrap_or(0);
@@ -906,7 +1040,10 @@ fn parse_line_shape_data(data: &[u8], line: &mut LineShape, is_connector: bool) 
         });
     } else {
         // 일반 선
-        line.started_right_or_bottom = r.read_i32().unwrap_or(0) != 0;
+        // hwp5 스펙 표92: 속성 필드는 UINT16(2바이트). 선 개체 속성 전체 길이가
+        // 18바이트(4+4+4+4+2)로 명시되어 있는데 기존에는 INT32(4바이트)로 읽어
+        // 남은 2바이트로는 항상 실패해 unwrap_or(0)으로 값이 소실되고 있었다.
+        line.started_right_or_bottom = r.read_u16().unwrap_or(0) != 0;
     }
 }
 
@@ -954,23 +1091,47 @@ fn parse_arc_shape_data(data: &[u8], arc: &mut ArcShape) {
 }
 
 /// 다각형 도형 데이터 파싱
-/// hwplib: INT32 count + (INT32 x, INT32 y) × count (plain HWPUNIT)
+/// hwplib: INT32 count + (INT32 x, INT32 y) × count + skip(4)
 fn parse_polygon_shape_data(data: &[u8], poly: &mut PolygonShape) {
     let mut r = ByteReader::new(data);
-    let cnt = r.read_i32().unwrap_or(0) as usize;
+    let cnt_raw = r.read_i32().unwrap_or(0);
+    // 점 하나는 INT32 좌표 두 개(8 bytes)다. count field가 payload보다 큰 경우
+    // EOF 뒤의 0을 반복해서 push하지 않도록 실제 좌표 바이트 수로 제한한다. (#4290)
+    let cnt = if cnt_raw < 0 {
+        0
+    } else {
+        (cnt_raw as usize).min(r.remaining() / 8)
+    };
     poly.points.clear();
     for _ in 0..cnt {
         let x = r.read_i32().unwrap_or(0);
         let y = r.read_i32().unwrap_or(0);
         poly.points.push(Point { x, y });
     }
+    poly.raw_trailing = if r.remaining() > 0 {
+        r.read_bytes(r.remaining()).unwrap_or_default().to_vec()
+    } else {
+        Vec::new()
+    };
 }
 
 /// 곡선 도형 데이터 파싱
 /// hwplib: INT32 count + (INT32 x, INT32 y) × count + BYTE[count-1] segment_types + skip(4)
 fn parse_curve_shape_data(data: &[u8], curve: &mut CurveShape) {
     let mut r = ByteReader::new(data);
-    let cnt = r.read_i32().unwrap_or(0) as usize;
+    // count(INT32)는 파일에서 온 부호 있는 값이다. 음수(예: -1 = 0xFFFFFFFF)를
+    // 검증 없이 `as usize` 로 캐스팅하면 부호 확장으로 usize::MAX 근처의 거대한
+    // 값이 되어 아래 루프가 사실상 종료되지 않는(수십억 회) DoS 를 유발한다.
+    // 캐스팅 전에 음수를 0(빈 곡선)으로 처리한다. (#3012 다각형과 동일 클래스)
+    let cnt_raw = r.read_i32().unwrap_or(0);
+    // 점 하나는 INT32 좌표 두 개(8 bytes)다. segment/padding이 잘린 기존
+    // fallback semantics는 유지하되, fabricated positive count로 무한 loop나
+    // 과대 Vec allocation이 생기지 않게 좌표 바이트 수를 상한으로 쓴다. (#4290)
+    let cnt = if cnt_raw < 0 {
+        0
+    } else {
+        (cnt_raw as usize).min(r.remaining() / 8)
+    };
     curve.points.clear();
     for _ in 0..cnt {
         let x = r.read_i32().unwrap_or(0);
@@ -997,14 +1158,125 @@ mod task195_tests {
     use super::*;
 
     #[test]
+    fn line_started_right_or_bottom_parsed_from_18byte_record() {
+        // hwp5 스펙 표92: 선 개체 속성은 4+4+4+4+2=18바이트이며 마지막 필드는
+        // UINT16. 18바이트만 주어져도 플래그(1)가 정확히 읽혀야 한다.
+        let mut data = Vec::new();
+        data.extend_from_slice(&0i32.to_le_bytes()); // start.x
+        data.extend_from_slice(&0i32.to_le_bytes()); // start.y
+        data.extend_from_slice(&0i32.to_le_bytes()); // end.x
+        data.extend_from_slice(&0i32.to_le_bytes()); // end.y
+        data.extend_from_slice(&1u16.to_le_bytes()); // 속성(방향 보정 플래그)
+
+        let mut line = LineShape::default();
+        parse_line_shape_data(&data, &mut line, false);
+        assert!(
+            line.started_right_or_bottom,
+            "18바이트 레코드에서 UINT16 플래그가 true 로 읽혀야 함"
+        );
+    }
+
+    #[test]
+    fn connector_control_point_count_is_bounded_by_remaining() {
+        // 악의적 countCP(0xFFFFFFFF)가 (a) ~51GB Vec 예약으로 abort 하거나
+        // (b) EOF 를 삼킨 채 40억회 루프를 도는 일이 없어야 한다.
+        // 페이로드: link_type(4)+ssid(4)+ssidx(4)+esid(4)+esidx(4)=20, 그 뒤 countCP.
+        let mut data = Vec::new();
+        data.extend_from_slice(&0i32.to_le_bytes()); // start.x
+        data.extend_from_slice(&0i32.to_le_bytes()); // start.y
+        data.extend_from_slice(&0i32.to_le_bytes()); // end.x
+        data.extend_from_slice(&0i32.to_le_bytes()); // end.y
+        data.extend_from_slice(&0u32.to_le_bytes()); // link_type
+        data.extend_from_slice(&0u32.to_le_bytes()); // start_subject_id
+        data.extend_from_slice(&0u32.to_le_bytes()); // start_subject_index
+        data.extend_from_slice(&0u32.to_le_bytes()); // end_subject_id
+        data.extend_from_slice(&0u32.to_le_bytes()); // end_subject_index
+        data.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // countCP (악성)
+
+        let mut line = LineShape::default();
+        parse_line_shape_data(&data, &mut line, true);
+        let connector = line.connector.expect("connector 파싱");
+        assert!(
+            connector.control_points.is_empty(),
+            "남은 바이트가 없으므로 제어점은 비어야 함: {}",
+            connector.control_points.len()
+        );
+    }
+
+    #[test]
+    fn polygon_point_count_negative_is_treated_as_zero() {
+        // count(INT32)에 음수(-1 = 0xFFFFFFFF)를 넣으면 as usize 부호확장으로
+        // 사실상 무한 루프에 빠지면 안 되고 빈 다각형으로 처리되어야 한다.
+        let mut data = Vec::new();
+        data.extend_from_slice(&(-1i32).to_le_bytes()); // count (악성)
+
+        let mut poly = PolygonShape::default();
+        parse_polygon_shape_data(&data, &mut poly);
+        assert!(
+            poly.points.is_empty(),
+            "음수 count는 빈 점 목록으로 처리되어야 함: {}",
+            poly.points.len()
+        );
+    }
+
+    #[test]
+    fn curve_point_count_negative_is_treated_as_zero() {
+        // count(INT32)에 음수(-1 = 0xFFFFFFFF)를 넣으면 as usize 부호확장으로
+        // usize::MAX 근처의 거대한 값이 되어 `for _ in 0..cnt` 및
+        // `for _ in 0..(cnt - 1)` 루프가 사실상 종료되지 않는(수십억 회) DoS 를
+        // 유발한다. 음수 count 는 빈 곡선으로 처리되어야 한다. (#3012 다각형과 동일 클래스)
+        let mut data = Vec::new();
+        data.extend_from_slice(&(-1i32).to_le_bytes()); // count (악성)
+
+        let mut curve = CurveShape::default();
+        parse_curve_shape_data(&data, &mut curve);
+        assert!(
+            curve.points.is_empty(),
+            "음수 count는 빈 점 목록으로 처리되어야 함: {}",
+            curve.points.len()
+        );
+        assert!(
+            curve.segment_types.is_empty(),
+            "음수 count는 빈 세그먼트 목록으로 처리되어야 함: {}",
+            curve.segment_types.len()
+        );
+    }
+
+    #[test]
+    fn oversized_positive_point_counts_are_bounded_by_payload_coordinates() {
+        let mut polygon_data = Vec::new();
+        polygon_data.extend_from_slice(&i32::MAX.to_le_bytes());
+        polygon_data.extend_from_slice(&10i32.to_le_bytes());
+        polygon_data.extend_from_slice(&20i32.to_le_bytes());
+
+        let mut polygon = PolygonShape::default();
+        parse_polygon_shape_data(&polygon_data, &mut polygon);
+        assert_eq!(polygon.points.len(), 1);
+        assert_eq!(polygon.points[0].x, 10);
+        assert_eq!(polygon.points[0].y, 20);
+
+        let mut curve_data = Vec::new();
+        curve_data.extend_from_slice(&i32::MAX.to_le_bytes());
+        curve_data.extend_from_slice(&30i32.to_le_bytes());
+        curve_data.extend_from_slice(&40i32.to_le_bytes());
+
+        let mut curve = CurveShape::default();
+        parse_curve_shape_data(&curve_data, &mut curve);
+        assert_eq!(curve.points.len(), 1);
+        assert_eq!(curve.points[0].x, 30);
+        assert_eq!(curve.points[0].y, 40);
+        assert!(curve.segment_types.is_empty());
+    }
+
+    #[test]
     fn test_parse_ole_shape_minimal() {
         // 1.hwp 레이아웃 실측 기반: property(4) + extent_x(4) + extent_y(4) + bin_data_id(4)
         let mut data = Vec::new();
-        data.extend_from_slice(&1u32.to_le_bytes());       // property
-        data.extend_from_slice(&1000i32.to_le_bytes());    // extent_x
-        data.extend_from_slice(&2000i32.to_le_bytes());    // extent_y
-        data.extend_from_slice(&5u32.to_le_bytes());       // bin_data_id
-        data.extend_from_slice(&[0u8; 14]);                // padding
+        data.extend_from_slice(&1u32.to_le_bytes()); // property
+        data.extend_from_slice(&1000i32.to_le_bytes()); // extent_x
+        data.extend_from_slice(&2000i32.to_le_bytes()); // extent_y
+        data.extend_from_slice(&5u32.to_le_bytes()); // bin_data_id
+        data.extend_from_slice(&[0u8; 14]); // padding
 
         let ole = parse_ole_shape(CommonObjAttr::default(), DrawingObjAttr::default(), &data);
         assert_eq!(ole.extent_x, 1000);
@@ -1033,5 +1305,74 @@ mod task195_tests {
         assert_eq!(ole.extent_y, 0);
         assert_eq!(ole.bin_data_id, 0);
         assert_eq!(ole.raw_tag_data.len(), 4);
+    }
+}
+
+#[cfg(test)]
+mod shape_recursion_tests {
+    use super::*;
+
+    /// `level` 증가로 표현한 N겹 중첩 그룹 레코드. SCC(level0) 뒤에 SHAPE_COMPONENT
+    /// level 1..=n 을 두면 각 재귀가 한 레벨씩 파고들어 n-깊이 중첩을 만든다. data 는
+    /// 비워도 parse_shape_component_full 이 기본값을 돌려주므로 안전하다.
+    fn nested_group_records(n: usize) -> Vec<Record> {
+        let mut records = vec![Record {
+            tag_id: tags::HWPTAG_SHAPE_COMPONENT_CONTAINER,
+            level: 0,
+            size: 0,
+            data: Vec::new(),
+        }];
+        for lvl in 1..=n {
+            records.push(Record {
+                tag_id: tags::HWPTAG_SHAPE_COMPONENT,
+                level: lvl as u16,
+                size: 0,
+                data: Vec::new(),
+            });
+        }
+        records
+    }
+
+    fn group_nesting_depth(shapes: &[ShapeObject]) -> usize {
+        shapes
+            .iter()
+            .map(|s| match s {
+                ShapeObject::Group(g) => 1 + group_nesting_depth(&g.children),
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn deep_group_nesting_is_bounded_not_overflowed() {
+        // 상한을 넘는 중첩 그룹은 스택을 고갈시키기 전에 유한 트리로 절단돼야 한다.
+        // 가드가 없으면 입력 깊이만큼의 트리가 만들어져(또는 스택 오버플로) depth 가
+        // 상한을 넘어 이 단언이 실패한다(회귀 포착). 넉넉한 스택 전용 스레드에서
+        // 경계를 빌드 프로파일과 무관하게 결정적으로 시험한다. 가드는 depth > MAX
+        // 에서 절단하므로 최대 중첩은 MAX+1 이다.
+        let records = nested_group_records(MAX_HWP5_SHAPE_DEPTH as usize + 100);
+        let depth = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || group_nesting_depth(&parse_container_children(&records, 0)))
+            .expect("파서 스레드 생성 실패")
+            .join()
+            .expect("파서 스레드 패닉");
+        assert!(
+            depth <= MAX_HWP5_SHAPE_DEPTH as usize + 1,
+            "그룹 중첩 depth {depth} 가 상한 {MAX_HWP5_SHAPE_DEPTH}(+1) 을 넘었다 — 깊이 가드 회귀"
+        );
+        assert!(depth > 0, "가드가 전부 버렸다 — 과잉 절단");
+    }
+
+    #[test]
+    fn shallow_group_nesting_is_preserved() {
+        // 상한 안쪽의 정상 중첩은 절단 없이 보존돼야 한다(가드가 과잉 차단 안 함).
+        let records = nested_group_records(8);
+        let depth = group_nesting_depth(&parse_container_children(&records, 0));
+        assert!(
+            (1..=8).contains(&depth),
+            "얕은 중첩 depth {depth} 가 예상 범위(1..=8) 밖 — 가드 과잉 절단 의심"
+        );
     }
 }
