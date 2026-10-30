@@ -13,6 +13,14 @@
 - 이번 점검에서 가져오기, 수동 백업·복원, 삭제 후 복구, PDF 내보내기 전체 흐름을 새 빌드로 다시 실행하지 않았다. 기존 자동 테스트 및 이전 QA 기록이 있지만 최신 실기기 통과로 간주하지 않는다.
 - **공개 출시 판정: 보류.** ARM 실기기에서 릴리즈 설치·핵심 편집/저장/재진입, 내부 테스트 트랙의 AAB 설치/업데이트, 최소 API 24 기기, 실제 사용자 HWPX와 암호화·손상 파일 오류 안내, 업로드 키의 별도 보관을 확인해야 한다.
 
+## 내부 테스트 진입 점검 (2026-10-30)
+
+- 연결된 Android 기기는 Pixel 7 x86_64 에뮬레이터(API 37) 하나다. ARM 실기기 및 최소 API 24 기기는 연결되어 있지 않다. 로컬 SDK에는 API 35/37 이미지가 있으나 API 24 이미지는 없다.
+- AAB 내부에 `arm64-v8a`와 `armeabi-v7a`용 `libapp.so`, `libflutter.so`, `libflutter_rhwp.so`가 모두 포함됨을 확인했다. 이는 실제 ARM 기기 실행 결과가 아니다.
+- Android Studio JBR의 `keytool -printcert -jarfile`에서 현재 AAB 업로드 인증서 SHA-256이 `B6:65:CA:47:69:31:F9:8A:84:10:F7:F9:76:F1:3F:98:09:4A:04:D4:67:D0:A0:B8:0B:F6:02:17:1D:DC:2D:C9`로 기존 기록과 일치했다. Play Console에 이미 등록된 키와의 일치는 계정 접근 전이라 확인하지 못했다.
+- 이 세션에서 브라우저 연결 호스트를 사용할 수 없어 Play Console 앱/트랙 상태를 읽거나 AAB를 업로드할 수 없었다. 내부 테스트 설치·업데이트와 Play 심사 항목은 미검증 상태다.
+- Google Play의 [현재 Target API 요구사항](https://support.google.com/googleplay/android-developer/answer/11926878)에 따르면 2026-08-31부터 신규 Android 앱은 API 36 이상을 대상으로 해야 한다. 현재 릴리즈 APK의 target API 36은 이 항목을 만족한다. 이것만으로 스토어 심사 통과를 보장하지는 않는다.
+
 ## 코드 및 패키지에서 확인한 내용
 
 - [x] 릴리즈 빌드 서명 설정: `android/key.properties` 및 `android/upload-keystore.jks` 사용. 두 파일은 Git에서 제외됨.
