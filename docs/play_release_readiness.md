@@ -9,8 +9,8 @@
 - ARM 릴리즈 APK: `build/app/outputs/flutter-apk/app-release.apk`, 86,994,762 bytes, SHA-256 `f2edb1bbaaae801fac8c3e678b47de0afa880de051b43241199483aac20423d0`; APK v2 서명 확인.
 - 최신 릴리즈 AAB: `build/app/outputs/bundle/release/app-release.aab`, 85,489,537 bytes, SHA-256 `d504ff7bbaa964a2d88688bd92276ae510e83120f7a3eab2059c326b50862e0a`. `jarsigner -verify` 통과. 자체 서명 인증서라 공인 체인·타임스탬프 경고는 있다.
 - 릴리즈 APK 식별 정보: `com.bangceps.docnote`, versionCode 1, versionName 0.1.0, min API 24, target API 36.
-- Pixel 7 x86_64 에뮬레이터의 같은 코드 디버그 빌드에서 긴 HWP 202쪽 마지막 미주와 QA PDF 2쪽 열기를 화면으로 확인했다. 기존 PDF 필기 오버레이도 표시됐다. 이는 ARM 릴리즈 실행 검증을 대신하지 않는다.
-- 이번 점검에서 가져오기, 새 필기·저장, 수동 백업·복원, 삭제·복구, PDF 내보내기 전체 흐름을 새 빌드로 다시 실행하지 않았다. 기존 자동 테스트 및 이전 QA 기록이 있지만 최신 실기기 통과로 간주하지 않는다.
+- Pixel 7 x86_64 에뮬레이터의 같은 코드 디버그 빌드에서 긴 HWP 202쪽 마지막 미주와 QA PDF 2쪽 열기를 화면으로 확인했다. 기존 PDF 필기 오버레이도 표시됐다. 빠른 필기로 새 노트를 만들고 선을 그린 뒤 닫고 다시 열어 획 복원을 확인했다. 이 테스트 노트만 휴지통으로 이동했고 기존 문서는 수정하지 않았다. 해당 구간의 앱 로그에 `E/flutter`, `FATAL EXCEPTION`, `RenderFlex`, `FormatException`은 없었다. 이는 ARM 릴리즈 실행 검증을 대신하지 않는다.
+- 이번 점검에서 가져오기, 수동 백업·복원, 삭제 후 복구, PDF 내보내기 전체 흐름을 새 빌드로 다시 실행하지 않았다. 기존 자동 테스트 및 이전 QA 기록이 있지만 최신 실기기 통과로 간주하지 않는다.
 - **공개 출시 판정: 보류.** ARM 실기기에서 릴리즈 설치·핵심 편집/저장/재진입, 내부 테스트 트랙의 AAB 설치/업데이트, 최소 API 24 기기, 실제 사용자 HWPX와 암호화·손상 파일 오류 안내, 업로드 키의 별도 보관을 확인해야 한다.
 
 ## 코드 및 패키지에서 확인한 내용
