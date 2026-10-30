@@ -6,7 +6,7 @@
 - 작업 브랜치: `upgrade/rhwp-0.8.7`
 - upstream: `edwardkim/rhwp`, tag `v0.8.7`, commit `1a76570e833917d15817415a53c09ad61ab3203f`
 - Flutter 플러그인 공개 API와 생성된 FRB 인터페이스는 유지한다.
-- 원본 사용자 문서는 수정하지 않는다. 검증 완료 전 main에 병합하지 않는다.
+- 원본 사용자 문서는 수정하지 않는다. 기본 연결부는 `bed77d1`로 로컬 main에 반영했으며, 아래 추가 호환성 검사에서 발견한 미주 문제를 후속 수정한다.
 
 ## 연결부 변경
 
@@ -38,7 +38,7 @@
 - HWP 원본 보존/작업본/닫기 확인 Flutter 테스트: 7개 통과
 - Rust 회귀 테스트: 25개 통과, 실제 문서 전용 ignored 1개는 별도로 실행하여 통과
 - 실제 긴 HWP 복사본: 다단 2 → 3 → 1 변경, 본문 텍스트 보존, 저장/재열기 페이지 수 일치, 넓은 표/본문 비겹침 통과
-- 새 엔진의 실제 문서 페이지 수: 원래 197쪽 → 2·3단 196쪽 → 1단 복원 197쪽. 이전 엔진 204쪽과 페이지 배치 결과가 달라졌다. 텍스트 보존 확인과 별개로 실제 화면도 검증한다.
+- 첫 0.8.7 연결 버전의 실제 문서 페이지 수: 원래 197쪽 → 2·3단 196쪽 → 1단 복원 197쪽. 이후 아래 미주 줄 간격 수정으로 202쪽이 되었다. 이전 엔진은 204쪽이었다.
 - 추가 HWP/HWPX 하이퍼링크 재저장 회귀 테스트: 통과
 - 잘못된 표 대상 요청이 네이티브 프로세스를 중단시키지 않고 오류를 반환하는 회귀 테스트: 통과
 - Android x64 debug APK: 빌드 및 Pixel 7 설치 성공
@@ -53,7 +53,58 @@
 - APK: 업그레이드 worktree의 `build/app/outputs/flutter-apk/app-debug.apk`
 - 화면 키보드로 입력한 QA 문자 `q`는 검증용 문서의 작업본에만 저장했다. 원본은 변경하지 않았다.
 - ADB `input text`는 이 편집기에 반영되지 않아 화면 키보드 탭으로 검증했다. 입력 중 임시 표시와 확정 렌더링 전환은 별개이며, 모든 IME 조합/빠른 연속 입력까지 검증한 것은 아니다.
-- 이번 실제 기기 검증은 Pixel 7 x64 에뮬레이터다. ARM 실기기 및 release 빌드 검증은 포함하지 않는다.
+- 이 단계의 기기 검증은 Pixel 7 x64 에뮬레이터였다. ARM release 빌드는 아래 후속 단계에서 확인했다. ARM 실기기 검증은 아직 수행하지 않았다.
 - 새 엔진의 페이지 배치가 이전과 완전히 동일하다고 보장하지 않는다. 긴 HWP의 텍스트 보존 및 다단/표 회귀 테스트와 화면 표본을 확인했으며, 모든 문서 유형의 모든 페이지를 시각 비교한 것은 아니다.
 
 핵심 연결부 및 위 회귀 검증은 통과했다. 출시 전에는 대표 사용자 문서의 페이지 배치와 ARM 실기기 동작을 추가 확인한다.
+
+## 추가 문서 호환성 검사와 미주 수정 (2026-10-29)
+
+에뮬레이터의 서로 다른 HWP 원본 4개를 로컬 QA 폴더로 복사했다. 원본 경로/해시는 로컬 manifest에만 기록하며 문서 내용이나 생성 SVG를 저장소에 포함하지 않는다. 외부에서 작성된 HWPX 원본은 이번 corpus에 없으며, HWP → HWPX 저장/재열기 경로를 검증했다.
+
+| 표본 | 종류 | 수정 전 페이지 | 수정 후 페이지 | HWP/HWPX 재열기 텍스트·페이지 |
+|---|---|---:|---:|---|
+| sample-01 | 표 중심 주간 보고서 | 4 | 4 | 모두 동일 |
+| sample-02 | 표 중심 주간 보고서 | 4 | 4 | 모두 동일 |
+| sample-03 | 짧은 문서 | 1 | 1 | 모두 동일 |
+| sample-04 | 긴 본문과 91개 미주 | 197 | 202 | 모두 동일 |
+
+### 발견 및 수정
+
+- 저장 왕복은 통과했지만, 긴 문서의 191~197쪽에서 본문 TextRun 270개가 물리적 종이 하단을 벗어났다. 192쪽과 마지막 쪽에서 줄 겹침·잘림도 시각적으로 확인했다.
+- 원인: upstream의 `typeset/notes/endnotes/paragraph.rs`가 구분선 없음 + 미주 사이 여백 0을 근거로 문단의 저장된 `line_spacing`을 `-line_height / 10`으로 덮어썼다. 해당 문서는 높이 1200, 간격 720 HWP-unit의 정상적인 줄 정보를 갖고 있었다.
+- 미주 사이 간격과 문단 줄 간격은 별개이므로 이 덮어쓰기를 제거했다. 원본 IR/저장 데이터는 바꾸지 않으며 fit 계산과 렌더링 모두 기존 줄 정보를 보존한다.
+- 수정 후 총 211쪽의 본문 종이 경계 검사에서 밖으로 나가는 TextRun은 **0개**였다. 마지막 쪽의 미주 84~91이 겹치거나 잘리지 않고 표시되는 것을 확인했다.
+- 수정 후 페이지 수는 202쪽이다. 구 엔진의 204쪽과 완전히 같지는 않으므로, 이를 원본 한컴 페이지 배치와의 완전 일치로 해석하지 않는다.
+
+### 테스트와 증거
+
+- `document_compat_qa.rs`: 외부 corpus 경로를 명시해야 실행되는 ignored 테스트 2개. 저장 왕복/표본 SVG 출력과 전체 본문 종이 경계 검사를 분리한다. `cfg(test)`에서만 연결된다.
+- 기본 Rust 회귀 테스트: 25 passed / 3 ignored. corpus 테스트 2개는 별도로 실행하여 모두 통과했다.
+- 표본 페이지 15개 × HWP/HWPX = 30쌍의 저장 전후 렌더 픽셀이 일치했다. 이는 동일 0.8.7 엔진 내 저장 전후 비교이며, 구 엔진과의 픽셀 비교는 아니다.
+- 대표 표 페이지와 긴 문서의 본문/마지막 미주를 직접 이미지로 확인했다. 표본 SVG에는 래스터 그림이 없어, 실제 이미지가 많은 문서의 전체 시각 검증까지 완료한 것은 아니다.
+- 로그: `build/rhwp087-paper-bounds.log`(수정 전 실패), `build/rhwp087-endnote-regression.log`, `build/rhwp087-corpus-fixed.log`.
+- 로컬 결과: `build/qa/rhwp087-fixed/results.json`, `paper-bounds.json`, `pixel-comparison.json`.
+- 시각 비교: `build/qa/rhwp087-roundtrip/sample-04-source-196.png`(수정 전 마지막 쪽), `build/qa/rhwp087-fixed/sample-04-source-201.png`(수정 후 마지막 쪽).
+
+재실행 예:
+
+```powershell
+$env:DOCNOTE_COMPAT_INPUT = 'G:/Bang/DocNote/build/qa/rhwp087-corpus'
+$env:DOCNOTE_COMPAT_OUTPUT = 'G:/Bang/DocNote/build/qa/rhwp087-fixed'
+cargo test --manifest-path third_party/flutter_rhwp/rust/Cargo.toml --lib document_compat_qa -- --ignored --nocapture
+```
+
+입력/출력 폴더는 서로 달라야 하며 먼저 존재해야 한다. 원본 파일은 읽기만 한다.
+
+## Pixel 7 마지막 쪽 런타임 오류 (2026-10-30)
+
+수정된 202쪽 문서를 실제 앱에서 열고 마지막 쪽으로 이동하자 `FormatException: Positive input exceeds the limit of integer 18446744073709551615`가 표시됐다. Rust의 page layer tree에서 미주 가상 렌더 요소가 `section:0/para:18446744073709551615/char:0` 키를 갖고 있었다. 이 값은 Rust의 `usize::MAX` 센티널이며 실제 편집 가능한 문단 번호가 아니다.
+
+Flutter `rhwp_layer_tree.dart`에서 안정 소스 키의 세 정수에 `int.tryParse`를 적용하고, 범위를 넘는 키를 주소 없는 가상 요소로 처리한다. 해당 렌더 요소를 지우지 않으므로 미주 본문은 계속 화면에 표시된다. `rhwp_layer_tree_large_id_test.dart`가 정상 문단과 가상 문단이 섞인 페이지를 재현하며 통과했다.
+
+- Pixel 7 debug APK: 수정 전 실제 앱에서 202쪽 이동 시 예외 재현. 수정 후 같은 202쪽에서 미주 84~91과 본문이 렌더링되고 예외 화면이 나타나지 않았다. 캡처: `build/qa/rhwp087-final-page202.png`. 해당 실행의 앱 로그에서 `FormatException`, `RenderFlex`, `FATAL EXCEPTION`, `E/flutter` 항목이 없었다.
+- Flutter 정적 분석: `flutter analyze --no-pub` 통과.
+- Rust 기본 회귀: 25개 통과, 3개 ignored(현지 문서 입력 필요). corpus 검사 2개 별도 통과.
+- 다단 편집 실제 문서: 202 → 201(2·3단) → 202쪽(1단 복원), 저장/재열기 일치 및 표/본문 비겹침 통과.
+- ARM release APK: 최종 Flutter parser 수정까지 포함해 `flutter build apk --release --no-pub --target-platform android-arm,android-arm64` 성공. `build/app/outputs/flutter-apk/app-release.apk` (86,994,762 bytes), SHA-256 `f2edb1bbaaae801fac8c3e678b47de0afa880de051b43241199483aac20423d0`. `apksigner verify --verbose`에서 v2 서명과 signer 1개를 확인했다. ARM 실기기 실행은 아직 확인하지 못했다.

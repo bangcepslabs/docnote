@@ -77,32 +77,12 @@ impl TypesetEngine {
                 emitted_endnote_count += 1;
                 continue;
             }
-            let mut compact_no_separator_para;
-            let render_en_para = en_para;
-            let compact_no_separator_spacing = endnote_shape
-                .map(|shape| {
-                    !endnote_has_visible_separator(shape)
-                        && endnote_between_notes_margin(shape) == 0
-                })
-                .unwrap_or(false);
-            let en_para = if compact_no_separator_spacing {
-                compact_no_separator_para = en_para.clone();
-                let divisor = 10;
-                for line_seg in &mut compact_no_separator_para.line_segs {
-                    line_seg.line_spacing = -(line_seg.line_height / divisor);
-                }
-                &compact_no_separator_para
-            } else {
-                en_para
-            };
+            // A missing separator / zero inter-note margin does not override
+            // paragraph line spacing. Keep the stored ladder for both fit and
+            // rendering; replacing its spacing with a negative value compresses
+            // page-spanning notes and can place their text outside the paper.
             let en_para_idx = paragraphs.len() + st.endnote_paragraphs.len();
-            let mut en_para_copy = render_en_para.clone();
-            if compact_no_separator_spacing {
-                let divisor = 10;
-                for line_seg in &mut en_para_copy.line_segs {
-                    line_seg.line_spacing = -(line_seg.line_height / divisor);
-                }
-            }
+            let mut en_para_copy = en_para.clone();
             // line_segs vpos를 endnote 시작점 기준으로 오프셋
             for ls in &mut en_para_copy.line_segs {
                 ls.vertical_pos += endnote_start;

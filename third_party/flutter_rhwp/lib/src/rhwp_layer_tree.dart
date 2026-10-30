@@ -1379,10 +1379,19 @@ _StableSourcePosition? _parseStableSourceKey(String? value) {
     return null;
   }
 
+  // Virtual layout nodes can use the unsigned 64-bit sentinel as a paragraph
+  // index. It is not an editable document position and exceeds Dart int.
+  final section = int.tryParse(match.group(1)!);
+  final paragraph = int.tryParse(match.group(2)!);
+  final charStart = int.tryParse(match.group(3)!);
+  if (section == null || paragraph == null || charStart == null) {
+    return null;
+  }
+
   return _StableSourcePosition(
-    section: int.parse(match.group(1)!),
-    paragraph: int.parse(match.group(2)!),
-    charStart: int.parse(match.group(3)!),
+    section: section,
+    paragraph: paragraph,
+    charStart: charStart,
     cellContext: _parseCellTextContext(
       parentParagraph: _parseIntGroup(match, 4),
       path: match.group(5),
